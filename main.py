@@ -20,7 +20,7 @@
 CURRENT PLUGINS:
   ✅ LearningLoop    — records every trade to SQLite, weekly retrain
   ✅ TelegramAlerts  — trade alerts, daily summary, error notifications
-  ⏸  Sentiment      — Claude API news sentiment (Phase 3, not yet active)
+  ✅ SentimentEngine — Claude API news sentiment gate (blocks bad-news BUYs)
 
 RUN:
   python3 main.py
@@ -32,6 +32,9 @@ STOP:
 import sys
 import signal
 import datetime
+from dotenv import load_dotenv
+load_dotenv()
+
 from bot.config        import Config
 from bot.connection    import IBConnection
 from bot.market_hours  import MarketHours
@@ -42,11 +45,11 @@ from bot.logger        import log, banner, separator
 
 # ── Active plugins ────────────────────────────────────────────
 from bot.plugins.learning_loop import LearningLoop
+from bot.plugins.sentiment     import SentimentEngine
 from bot.alerts                import TelegramAlerts
 from bot.watchdog              import Watchdog
 
 # ── Future plugins (uncomment to activate) ────────────────────
-# from bot.plugins.sentiment   import SentimentEngine
 # from bot.plugins.macro_filter import MacroFilter
 # from bot.plugins.ml_override  import MLOverride
 
@@ -72,8 +75,9 @@ class TradingBot:
         self.alerts = TelegramAlerts(self.cfg)
         self.register_plugin(self.alerts)
 
+        self.register_plugin(SentimentEngine(self.cfg, alerts=self.alerts))
+
         # ── Uncomment to activate future plugins ──────────────
-        # self.register_plugin(SentimentEngine(self.cfg))
         # self.register_plugin(MacroFilter(self.cfg))
         # self.register_plugin(MLOverride(self.cfg))
 
