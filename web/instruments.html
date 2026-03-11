@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Instruments Editor</title>
+<style>
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 900;
+}
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2128;
+  --green:#22c55e; --red:#ef4444; --gold:#f5c842;
+  --blue:#38bdf8; --muted:#8b949e; --border:#30363d;
+  --text:#ffffff; --navy:#0f3460;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.8rem; }
+
+/* ── Header ── */
+.header { padding:16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.header h1 { color:var(--gold); font-size:1.3rem; font-weight:700; }
+.header-links { display:flex; gap:12px; }
+.header-links a { color:var(--muted); text-decoration:none; font-size:0.7rem; padding:6px 12px; border:1px solid var(--border); border-radius:4px; }
+.header-links a:hover { color:var(--text); border-color:var(--gold); }
+
+/* ── Toast ── */
+.toast { position:fixed; top:20px; right:20px; padding:12px 20px; border-radius:6px; font-size:0.75rem; font-weight:600; z-index:999; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+.toast.show { opacity:1; }
+.toast.success { background:#052e16; color:var(--green); border:1px solid var(--green); }
+.toast.error   { background:#2d0a0a; color:var(--red);   border:1px solid var(--red); }
+
+/* ── Tabs ── */
+.tabs { display:flex; gap:0; border-bottom:1px solid var(--border); padding:0 24px; margin-top:0; }
+.tab { padding:12px 20px; font-size:0.72rem; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.2s; font-family:'JetBrains Mono',monospace; }
+.tab:hover { color:var(--text); }
+.tab.active { color:var(--gold); border-bottom-color:var(--gold); }
+
+/* ── Content ── */
+.content { padding:24px; display:none; }
+.content.active { display:block; }
+
+/* ── Section ── */
+.section { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin-bottom:20px; overflow:hidden; }
+.section-title { padding:12px 16px; color:var(--gold); border-bottom:1px solid var(--border); letter-spacing:2px; font-size:0.72rem; font-weight:600; display:flex; align-items:center; justify-content:space-between; }
+
+/* ── Table ── */
+table { width:100%; border-collapse:collapse; }
+th { padding:8px 10px; text-align:left; font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--border); font-weight:500; white-space:nowrap; }
+td { padding:6px 8px; border-bottom:1px solid #1c2128; vertical-align:middle; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:#1c2128; }
+
+/* ── Inputs ── */
+input, select {
+  background:var(--bg3); border:1px solid var(--border); color:var(--text);
+  padding:4px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace;
+  font-size:0.72rem; width:100%;
+}
+input:focus, select:focus { outline:none; border-color:var(--gold); }
+input[type="checkbox"] { width:auto; cursor:pointer; accent-color:var(--green); transform:scale(1.2); }
+input[type="number"] { text-align:right; }
+
+/* ── Buttons ── */
+.btn { padding:6px 14px; border:none; border-radius:4px; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:600; transition:all 0.15s; }
+.btn-primary  { background:var(--gold); color:#000; }
+.btn-primary:hover  { background:#ffd700; }
+.btn-success  { background:#052e16; color:var(--green); border:1px solid var(--green); }
+.btn-success:hover  { background:#064e20; }
+.btn-danger   { background:#2d0a0a; color:var(--red); border:1px solid var(--red); }
+.btn-danger:hover   { background:#3d1010; }
+.btn-muted    { background:var(--bg3); color:var(--muted); border:1px solid var(--border); }
+.btn-muted:hover    { color:var(--text); }
+.btn-sm { padding:3px 8px; font-size:0.65rem; }
+
+/* ── Enable toggle ── */
+.toggle { position:relative; display:inline-block; width:36px; height:20px; }
+.toggle input { opacity:0; width:0; height:0; }
+.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#1f2937; border-radius:20px; transition:.3s; }
+.slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background:var(--muted); border-radius:50%; transition:.3s; }
+input:checked + .slider { background:#052e16; }
+input:checked + .slider:before { transform:translateX(16px); background:var(--green); }
+
+/* ── Add form ── */
+.add-form { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:20px; }
+.add-form h3 { color:var(--gold); font-size:0.8rem; margin-bottom:16px; letter-spacing:1px; }
+.form-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+.form-group label { display:block; font-size:0.62rem; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
+.form-row { display:flex; gap:12px; align-items:flex-end; }
+
+/* ── Settings grid ── */
+.settings-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; padding:16px; }
+.setting-item label { display:block; font-size:0.62rem; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px; }
+.setting-item .hint { font-size:0.58rem; color:var(--muted); margin-top:4px; opacity:0.7; }
+
+/* ── Badge ── */
+.badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:0.6rem; font-weight:700; }
+.badge-lse { background:#0c2461; color:var(--blue); }
+.badge-us  { background:#1f2937; color:var(--muted); }
+.badge-cfd { background:#1a1a2e; color:#a78bfa; }
+.badge-gbp { background:#052e16; color:var(--green); }
+
+/* ── Restart banner ── */
+.restart-banner { background:#713f12; border:1px solid #fbbf24; border-radius:6px; padding:12px 16px; margin-bottom:20px; display:none; align-items:center; gap:12px; }
+.restart-banner.show { display:flex; }
+.restart-banner span { color:#fbbf24; font-size:0.72rem; flex:1; }
+
+/* ── Backups ── */
+.backup-list { padding:12px 16px; }
+.backup-item { padding:6px 0; border-bottom:1px solid var(--border); font-size:0.68rem; color:var(--muted); display:flex; justify-content:space-between; }
+.backup-item:last-child { border-bottom:none; }
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+<div class="header">
+  <div>
+    <h1>⚙️ Instruments Editor</h1>
+    <div style="color:var(--muted);font-size:0.65rem;margin-top:4px">Edit instruments.json — changes require bot restart</div>
+  </div>
+  <div class="header-links">
+    <a href="dashboard.html">← Dashboard</a>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('layer1')">Layer 1 — Active Trading</div>
+  <div class="tab" onclick="switchTab('layer2')">Layer 2 — Accumulation</div>
+  <div class="tab" onclick="switchTab('settings')">Global Settings</div>
+  <div class="tab" onclick="switchTab('backups')">Backups</div>
+</div>
+
+<!-- ── RESTART BANNER ── -->
+<div style="padding:0 24px;margin-top:16px">
+  <div class="restart-banner" id="restartBanner">
+    <span>⚠️ You have unsaved changes. Save first, then restart the bot for changes to take effect.</span>
+    <button class="btn btn-primary" onclick="saveAll()">💾 Save Changes</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- LAYER 1 TAB                                   -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="content active" id="tab-layer1">
+
+  <!-- Add new instrument -->
+  <div class="add-form">
+    <h3>➕ ADD NEW INSTRUMENT</h3>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Symbol *</label>
+        <input id="new-symbol" placeholder="e.g. TSLA" style="text-transform:uppercase">
+      </div>
+      <div class="form-group">
+        <label>Name *</label>
+        <input id="new-name" placeholder="e.g. Tesla">
+      </div>
+      <div class="form-group">
+        <label>Flag / Emoji</label>
+        <input id="new-flag" placeholder="🚗" style="font-size:1.2rem">
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="new-sectype">
+          <option value="STK">STK — Stock</option>
+          <option value="CFD">CFD — Contract for Diff</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Exchange</label>
+        <select id="new-exchange">
+          <option value="SMART">SMART (default)</option>
+          <option value="LSE">LSE</option>
+          <option value="NYSE">NYSE</option>
+          <option value="NASDAQ">NASDAQ</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Currency</label>
+        <select id="new-currency">
+          <option value="USD">USD</option>
+          <option value="GBP">GBP</option>
+          <option value="EUR">EUR</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Market (LSE stocks)</label>
+        <select id="new-market">
+          <option value="">-- none --</option>
+          <option value="LSE">LSE</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Quantity</label>
+        <input id="new-qty" type="number" value="5" min="1">
+      </div>
+      <div class="form-group">
+        <label>Loss Limit ($)</label>
+        <input id="new-loss" type="number" value="150" min="50">
+      </div>
+      <div class="form-group">
+        <label>Long Only</label>
+        <select id="new-longonly">
+          <option value="true">Yes (stocks)</option>
+          <option value="false">No (CFDs — can short)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <input id="new-notes" placeholder="Optional notes">
+      </div>
+    </div>
+    <button class="btn btn-success" onclick="addLayer1()">➕ Add Instrument</button>
+  </div>
+
+  <!-- Instruments table -->
+  <div class="section">
+    <div class="section-title">
+      <span>LAYER 1 — ACTIVE TRADING (<span id="l1count">0</span> instruments)</span>
+      <button class="btn btn-primary btn-sm" onclick="saveAll()">💾 Save All</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>On</th><th>Flag</th><th>Symbol</th><th>Name</th>
+          <th>Type</th><th>Exchange</th><th>Currency</th><th>Market</th>
+          <th>Qty</th><th>Loss $</th><th>Long Only</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="layer1-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- LAYER 2 TAB                                   -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="content" id="tab-layer2">
+
+  <div class="add-form">
+    <h3>➕ ADD ACCUMULATION ETF</h3>
+    <div class="form-grid">
+      <div class="form-group"><label>Symbol *</label><input id="l2-symbol" placeholder="e.g. SPY"></div>
+      <div class="form-group"><label>Name *</label><input id="l2-name" placeholder="e.g. S&P 500 ETF"></div>
+      <div class="form-group"><label>Flag</label><input id="l2-flag" placeholder="📊"></div>
+      <div class="form-group"><label>Quantity</label><input id="l2-qty" type="number" value="3" min="1"></div>
+    </div>
+    <button class="btn btn-success" onclick="addLayer2()">➕ Add ETF</button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">
+      <span>LAYER 2 — ACCUMULATION ETFs (<span id="l2count">0</span> ETFs)</span>
+      <button class="btn btn-primary btn-sm" onclick="saveAll()">💾 Save All</button>
+    </div>
+    <table>
+      <thead><tr><th>On</th><th>Flag</th><th>Symbol</th><th>Name</th><th>Exchange</th><th>Currency</th><th>Qty</th><th>Actions</th></tr></thead>
+      <tbody id="layer2-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SETTINGS TAB                                  -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="content" id="tab-settings">
+  <div class="section">
+    <div class="section-title">GLOBAL SETTINGS</div>
+    <div class="settings-grid" id="settings-grid"></div>
+  </div>
+  <div style="padding:0 0 20px 0">
+    <button class="btn btn-primary" onclick="saveAll()">💾 Save Settings</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- BACKUPS TAB                                   -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="content" id="tab-backups">
+  <div class="section">
+    <div class="section-title">AUTOMATIC BACKUPS</div>
+    <div class="backup-list" id="backup-list">Loading...</div>
+  </div>
+  <p style="color:var(--muted);font-size:0.68rem;padding:0 0 20px 0">
+    A backup is created automatically every time you save. Located at ~/trading/backups/
+  </p>
+</div>
+
+
+<script>
+const API = 'http://188.166.150.137:8081';
+let data = null;
+let dirty = false;
+
+// ── Load ─────────────────────────────────────────
+async function loadData() {
+  try {
+    const r = await fetch(API + '/api/instruments');
+    data = await r.json();
+    renderLayer1();
+    renderLayer2();
+    renderSettings();
+    loadBackups();
+  } catch(e) {
+    toast('Cannot connect to API server. Is api_server.py running?', 'error');
+  }
+}
+
+// ── Tabs ─────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
+  document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+  const tabs = ['layer1','layer2','settings','backups'];
+  document.querySelectorAll('.tab')[tabs.indexOf(tab)].classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if(tab === 'backups') loadBackups();
+}
+
+// ── Layer 1 ──────────────────────────────────────
+function renderLayer1() {
+  const instruments = data.layer1_active || [];
+  document.getElementById('l1count').textContent = instruments.length;
+  document.getElementById('layer1-table').innerHTML = instruments.map((inst, i) => `
+    <tr id="l1row-${i}">
+      <td><label class="toggle"><input type="checkbox" ${inst.enabled!==false?'checked':''} onchange="toggleEnabled('layer1_active',${i},this.checked)"><span class="slider"></span></label></td>
+      <td><input value="${inst.flag||''}" style="width:50px;font-size:1rem;text-align:center" onchange="updateField('layer1_active',${i},'flag',this.value)"></td>
+      <td><strong style="color:var(--gold)">${inst.symbol}</strong></td>
+      <td><input value="${inst.name||''}" style="min-width:160px" onchange="updateField('layer1_active',${i},'name',this.value)"></td>
+      <td>
+        <span class="badge ${inst.sec_type==='CFD'?'badge-cfd':'badge-us'}">${inst.sec_type}</span>
+      </td>
+      <td><input value="${inst.exchange||'SMART'}" style="width:80px" onchange="updateField('layer1_active',${i},'exchange',this.value)"></td>
+      <td>
+        <select onchange="updateField('layer1_active',${i},'currency',this.value)" style="width:70px">
+          ${['USD','GBP','EUR'].map(c=>`<option ${inst.currency===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select onchange="updateField('layer1_active',${i},'market',this.value)" style="width:80px">
+          <option value="" ${!inst.market?'selected':''}>--</option>
+          <option value="LSE" ${inst.market==='LSE'?'selected':''}>LSE</option>
+        </select>
+      </td>
+      <td><input type="number" value="${inst.qty||1}" style="width:60px" min="1" onchange="updateField('layer1_active',${i},'qty',+this.value)"></td>
+      <td><input type="number" value="${inst.loss_limit||150}" style="width:70px" min="0" onchange="updateField('layer1_active',${i},'loss_limit',+this.value)"></td>
+      <td>
+        <select onchange="updateField('layer1_active',${i},'long_only',this.value==='true')" style="width:80px">
+          <option value="true" ${inst.long_only!==false?'selected':''}>Long</option>
+          <option value="false" ${inst.long_only===false?'selected':''}>Both</option>
+        </select>
+      </td>
+      <td>
+        <button class="btn btn-danger btn-sm" onclick="removeInstrument('layer1_active',${i})">🗑</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+// ── Layer 2 ──────────────────────────────────────
+function renderLayer2() {
+  const instruments = data.layer2_accumulation || [];
+  document.getElementById('l2count').textContent = instruments.length;
+  document.getElementById('layer2-table').innerHTML = instruments.map((inst, i) => `
+    <tr>
+      <td><label class="toggle"><input type="checkbox" ${inst.enabled!==false?'checked':''} onchange="toggleEnabled('layer2_accumulation',${i},this.checked)"><span class="slider"></span></label></td>
+      <td><input value="${inst.flag||''}" style="width:50px;font-size:1rem;text-align:center" onchange="updateField('layer2_accumulation',${i},'flag',this.value)"></td>
+      <td><strong style="color:var(--gold)">${inst.symbol}</strong></td>
+      <td><input value="${inst.name||''}" style="min-width:160px" onchange="updateField('layer2_accumulation',${i},'name',this.value)"></td>
+      <td><span class="badge badge-us">${inst.exchange||'SMART'}</span></td>
+      <td><span class="badge ${inst.currency==='GBP'?'badge-gbp':'badge-us'}">${inst.currency||'USD'}</span></td>
+      <td><input type="number" value="${inst.qty||3}" style="width:60px" min="1" onchange="updateField('layer2_accumulation',${i},'qty',+this.value)"></td>
+      <td><button class="btn btn-danger btn-sm" onclick="removeInstrument('layer2_accumulation',${i})">🗑</button></td>
+    </tr>
+  `).join('');
+}
+
+// ── Settings ─────────────────────────────────────
+function renderSettings() {
+  const s = data.settings || {};
+  const fields = [
+    { key:'check_interval_mins', label:'Check Interval (mins)', type:'number', hint:'15 = every 15 minutes' },
+    { key:'portfolio_loss_limit', label:'Portfolio Loss Limit ($)', type:'number', hint:'Bot stops at this loss' },
+    { key:'account', label:'IBKR Account', type:'text', hint:'Paper account ID' },
+    { key:'host', label:'IBKR Host', type:'text', hint:'Usually 127.0.0.1' },
+    { key:'port', label:'IBKR Port', type:'number', hint:'4000 = paper trading' },
+    { key:'client_id', label:'Client ID', type:'number', hint:'Usually 1' },
+    { key:'alligator_min_gap_pct', label:'Alligator Min Gap %', type:'number', hint:'0.003 = 0.3%' },
+    { key:'ma200_period', label:'MA Period', type:'number', hint:'200 day moving average' },
+    { key:'williams_r_period', label:'Williams %R Period', type:'number', hint:'14 bars' },
+    { key:'williams_r_mid', label:'Williams %R Midline', type:'number', hint:'-50 = midpoint' },
+    { key:'rsi_period', label:'RSI Period', type:'number', hint:'14 bars' },
+    { key:'rsi_oversold', label:'RSI Oversold', type:'number', hint:'Below 35 = buy signal' },
+    { key:'rsi_overbought', label:'RSI Overbought', type:'number', hint:'Above 70 = sell signal' },
+  ];
+  document.getElementById('settings-grid').innerHTML = fields.map(f => `
+    <div class="setting-item">
+      <label>${f.label}</label>
+      <input type="${f.type}" value="${s[f.key]||''}"
+        step="${f.type==='number'&&s[f.key]<1?'0.001':'1'}"
+        onchange="updateSetting('${f.key}', ${f.type==='number'?'+':''}this.value)">
+      <div class="hint">${f.hint}</div>
+    </div>
+  `).join('');
+}
+
+// ── Backups ───────────────────────────────────────
+async function loadBackups() {
+  try {
+    const r = await fetch(API + '/api/backups');
+    const files = await r.json();
+    document.getElementById('backup-list').innerHTML = files.length
+      ? files.map(f => `<div class="backup-item"><span>${f}</span><span style="color:var(--green)">✓ saved</span></div>`).join('')
+      : '<div style="color:var(--muted);padding:8px 0">No backups yet</div>';
+  } catch(e) {
+    document.getElementById('backup-list').textContent = 'Could not load backups';
+  }
+}
+
+// ── Data mutations ────────────────────────────────
+function updateField(layer, index, field, value) {
+  data[layer][index][field] = value;
+  markDirty();
+}
+
+function updateSetting(key, value) {
+  data.settings[key] = value;
+  markDirty();
+}
+
+function toggleEnabled(layer, index, checked) {
+  data[layer][index].enabled = checked;
+  markDirty();
+}
+
+function removeInstrument(layer, index) {
+  const sym = data[layer][index].symbol;
+  if(!confirm(`Remove ${sym}? This cannot be undone (but a backup will be saved).`)) return;
+  data[layer].splice(index, 1);
+  layer === 'layer1_active' ? renderLayer1() : renderLayer2();
+  markDirty();
+}
+
+function addLayer1() {
+  const symbol  = document.getElementById('new-symbol').value.trim().toUpperCase();
+  const name    = document.getElementById('new-name').value.trim();
+  if(!symbol || !name) { toast('Symbol and Name are required', 'error'); return; }
+
+  const market = document.getElementById('new-market').value;
+  const inst = {
+    symbol, name,
+    flag:      document.getElementById('new-flag').value.trim() || '📈',
+    sec_type:  document.getElementById('new-sectype').value,
+    exchange:  document.getElementById('new-exchange').value,
+    currency:  document.getElementById('new-currency').value,
+    qty:       +document.getElementById('new-qty').value,
+    loss_limit:+document.getElementById('new-loss').value,
+    long_only: document.getElementById('new-longonly').value === 'true',
+    enabled:   true,
+    notes:     document.getElementById('new-notes').value.trim(),
+  };
+  if(market) inst.market = market;
+
+  data.layer1_active.push(inst);
+  renderLayer1();
+  markDirty();
+
+  // Clear form
+  ['new-symbol','new-name','new-flag','new-notes'].forEach(id => document.getElementById(id).value = '');
+  toast(`${symbol} added to Layer 1`, 'success');
+}
+
+function addLayer2() {
+  const symbol = document.getElementById('l2-symbol').value.trim().toUpperCase();
+  const name   = document.getElementById('l2-name').value.trim();
+  if(!symbol || !name) { toast('Symbol and Name are required', 'error'); return; }
+
+  data.layer2_accumulation.push({
+    symbol, name,
+    flag:     document.getElementById('l2-flag').value.trim() || '📊',
+    sec_type: 'STK', exchange: 'SMART', currency: 'USD',
+    qty:      +document.getElementById('l2-qty').value,
+    enabled:  true,
+  });
+  renderLayer2();
+  markDirty();
+  ['l2-symbol','l2-name','l2-flag'].forEach(id => document.getElementById(id).value = '');
+  toast(`${symbol} added to Layer 2`, 'success');
+}
+
+// ── Save ─────────────────────────────────────────
+async function saveAll() {
+  try {
+    const r = await fetch(API + '/api/instruments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await r.json();
+    if(result.ok) {
+      toast('✅ Saved! Restart the bot to apply changes.', 'success');
+      dirty = false;
+      document.getElementById('restartBanner').classList.remove('show');
+    } else {
+      toast('Error: ' + result.message, 'error');
+    }
+  } catch(e) {
+    toast('Save failed — is api_server.py running?', 'error');
+  }
+}
+
+function markDirty() {
+  dirty = true;
+  document.getElementById('restartBanner').classList.add('show');
+}
+
+// ── Toast ─────────────────────────────────────────
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// ── Warn on exit if unsaved ───────────────────────
+window.addEventListener('beforeunload', e => {
+  if(dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// ── Init ─────────────────────────────────────────
+loadData();
+</script>
+</body>
+</html>

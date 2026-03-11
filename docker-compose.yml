@@ -1,0 +1,20 @@
+version: "3"
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: always
+    environment:
+      TWS_USERID: "chandra76"
+      TWS_PASSWORD: "N@r@simh@2026"
+      TRADING_MODE: "paper"
+      READ_ONLY_API: "no"
+      TWS_ACCEPT_INCOMING: "accept"
+      TWOFA_DEVICE: "IBKEY"
+      TWOFA_TIMEOUT_ACTION: "restart"
+      TWS_SETTINGS_PATH: ""  
+    ports:
+      - "127.0.0.1:4001:4001"
+      - "127.0.0.1:4002:4002"
+      - "127.0.0.1:4000:4004"  
+    extra_hosts:
+      - "host.docker.internal:host-gateway"      
