@@ -39,6 +39,11 @@ class WilliamsRResult:
     signal: str   # CROSS_UP | CROSS_DOWN | ABOVE | BELOW | NEUTRAL
 
 @dataclass
+class ADXResult:
+    value: float
+    trend_strength: str  # STRONG | WEAK | NONE
+
+@dataclass
 class IndicatorBundle:
     """All indicators for one instrument at one point in time."""
     price:    float
@@ -46,6 +51,7 @@ class IndicatorBundle:
     ma200:    MA200Result
     wr:       WilliamsRResult
     rsi:      float
+    adx:      ADXResult
 
 
 # ── Indicators class ──────────────────────────────────────────
@@ -77,6 +83,7 @@ class Indicators:
         ma200     = self._ma200(df)
         wr        = self._williams_r(df)
         rsi       = self._rsi(df)
+        adx       = self._adx(df)
 
         return IndicatorBundle(
             price=round(price, 4),
@@ -84,6 +91,7 @@ class Indicators:
             ma200=ma200,
             wr=wr,
             rsi=rsi,
+            adx=adx,
         )
 
     # ── Private: Alligator ────────────────────────────────────
@@ -171,6 +179,41 @@ class Indicators:
             'BELOW'
         )
         return WilliamsRResult(value=curr, signal=signal)
+
+    # ── Private: ADX ──────────────────────────────────────────
+
+    def _adx(self, df: pd.DataFrame) -> ADXResult:
+        period = self.cfg.adx_period if hasattr(self.cfg, 'adx_period') else 14
+        threshold = self.cfg.adx_threshold if hasattr(self.cfg, 'adx_threshold') else 20
+
+        if len(df) < period * 2:
+            return ADXResult(0.0, 'NONE')
+
+        high  = df['high']
+        low   = df['low']
+        close = df['close']
+
+        plus_dm  = high.diff()
+        minus_dm = -low.diff()
+        plus_dm  = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+
+        tr1 = high - low
+        tr2 = (high - close.shift()).abs()
+        tr3 = (low - close.shift()).abs()
+        tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        atr      = tr.rolling(period).mean()
+        plus_di  = 100 * (plus_dm.rolling(period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
+
+        dx  = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).fillna(0)
+        adx = dx.rolling(period).mean()
+
+        val = round(float(adx.iloc[-1]), 2) if not pd.isna(adx.iloc[-1]) else 0.0
+        strength = 'STRONG' if val >= threshold else 'WEAK'
+
+        return ADXResult(value=val, trend_strength=strength)
 
     # ── Private: RSI ──────────────────────────────────────────
 

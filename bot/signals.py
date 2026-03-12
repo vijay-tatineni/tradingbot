@@ -52,6 +52,7 @@ class SignalEngine:
         al  = bundle.alligator
         ma  = bundle.ma200
         wr  = bundle.wr
+        adx = bundle.adx
         p   = bundle.price
 
         # Display string for MA200 column
@@ -70,13 +71,20 @@ class SignalEngine:
 
         # ── Gate 2: All 3 must agree ──────────────────────────
         if bull_score == 3:
+            # ADX filter: weak trend = downgrade confidence
+            if adx.trend_strength == 'WEAK':
+                reason = f"ALL 3 BULL but ADX weak ({adx.value:.1f}) — no trend strength"
+                return SignalResult(0, 'LOW', reason, ma200_str)
             conf   = 'HIGH' if al.state == 'EATING' else 'MEDIUM'
-            reason = f"ALL 3 BULL: Alligator {al.state}, above MA200, WR {wr.value:.1f}"
+            reason = f"ALL 3 BULL: Alligator {al.state}, above MA200, WR {wr.value:.1f}, ADX {adx.value:.1f}"
             return SignalResult(1, conf, reason, ma200_str)
 
         if bear_score == 3:
+            if adx.trend_strength == 'WEAK':
+                reason = f"ALL 3 BEAR but ADX weak ({adx.value:.1f}) — no trend strength"
+                return SignalResult(0, 'LOW', reason, ma200_str)
             conf   = 'HIGH' if al.state == 'EATING' else 'MEDIUM'
-            reason = f"ALL 3 BEAR: Alligator {al.state}, below MA200, WR {wr.value:.1f}"
+            reason = f"ALL 3 BEAR: Alligator {al.state}, below MA200, WR {wr.value:.1f}, ADX {adx.value:.1f}"
             return SignalResult(-1, conf, reason, ma200_str)
 
         # ── Partial signals ───────────────────────────────────

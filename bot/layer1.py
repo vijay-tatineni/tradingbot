@@ -172,6 +172,7 @@ class ActiveTrading:
         log(f"  {symbol:<8} {mkt_str:<6} {price:>10.4f}  "
             f"{bundle.alligator.state:<6} {bundle.alligator.direction:<4}  "
             f"WR:{bundle.wr.value:>6.1f}  RSI:{bundle.rsi:>5.1f}  "
+            f"ADX:{bundle.adx.value:>5.1f}  "
             f"{result.confidence:<6} {self._signal_str(result.signal):<4}  "
             f"pos:{pos_info.qty:.0f}  stop:{stop_level:.2f}  {action}")
 

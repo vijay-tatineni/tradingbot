@@ -1,6 +1,6 @@
 {
   "_readme": "Edit this file to add/remove instruments. Restart the bot to apply changes.",
-  "_version": "2.0",
+  "_version": "2.1",
 
   "settings": {
     "account":               "DUQ141950",
@@ -18,198 +18,279 @@
     "williams_r_overbought": -20,
     "rsi_period":            14,
     "rsi_oversold":          35,
-    "rsi_overbought":        70
+    "rsi_overbought":        70,
+    "adx_period":            14,
+    "adx_threshold":         20
   },
 
   "layer1_active": [
 
     {
-      "symbol": "XAUUSD", "name": "Gold CFD", "flag": "🥇",
+      "symbol": "XAUUSD", "name": "Gold CFD", "flag": "\ud83e\udd47",
       "sec_type": "CFD", "exchange": "SMART", "currency": "USD",
-      "qty": 1, "loss_limit": 300, "long_only": false, "enabled": true,
-      "notes": "24/7 CFD — can go long and short"
+      "qty": 1, "loss_limit": 300, "long_only": false, "enabled": false,
+      "disabled_reason": "no_cfd_market_data_paper_account",
+      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
+      "notes": "24/7 CFD — DISABLED — paper account has no CFD data subscription"
     },
     {
-      "symbol": "XAGUSD", "name": "Silver CFD", "flag": "🥈",
+      "symbol": "XAGUSD", "name": "Silver CFD", "flag": "\ud83e\udd48",
       "sec_type": "CFD", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 200, "long_only": false, "enabled": true,
-      "notes": "24/7 CFD — can go long and short"
+      "qty": 10, "loss_limit": 200, "long_only": false, "enabled": false,
+      "disabled_reason": "no_cfd_market_data_paper_account",
+      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
+      "notes": "24/7 CFD — DISABLED — paper account has no CFD data subscription"
     },
     {
-      "symbol": "SGLN", "name": "iShares Physical Gold", "flag": "🏅",
+      "symbol": "SGLN", "name": "iShares Physical Gold", "flag": "\ud83c\udfc5",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
       "notes": "LSE ETF — physical gold backed"
     },
     {
-      "symbol": "SSLN", "name": "iShares Physical Silver", "flag": "🪙",
+      "symbol": "SSLN", "name": "iShares Physical Silver", "flag": "\ud83e\ude99",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
       "notes": "LSE ETF — physical silver backed"
     },
 
     {
-      "symbol": "ASML", "name": "ASML Holding", "flag": "🔬",
+      "symbol": "ASML", "name": "ASML Holding", "flag": "\ud83d\udd2c",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 1, "loss_limit": 200, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
       "notes": "Dutch semiconductor equipment — trades on NASDAQ as USD ADR. 9% allocation in pie."
     },
     {
-      "symbol": "GOOGL", "name": "Alphabet Class A", "flag": "🔍",
+      "symbol": "GOOGL", "name": "Alphabet Class A", "flag": "\ud83d\udd0d",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
       "notes": "Google parent. 8% allocation in pie."
     },
     {
-      "symbol": "NVDA", "name": "Nvidia", "flag": "💚",
+      "symbol": "NVDA", "name": "Nvidia", "flag": "\ud83d\udc9a",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 5, "loss_limit": 200, "long_only": true, "enabled": true,
-      "notes": "AI semiconductor leader. 8% allocation in pie."
+      "qty": 5, "loss_limit": 200, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "AI semiconductor leader — moved to Layer 2 accumulation."
     },
     {
-      "symbol": "META", "name": "Meta Platforms", "flag": "👁",
+      "symbol": "META", "name": "Meta Platforms", "flag": "\ud83d\udc41",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Facebook/Instagram/WhatsApp — moved to Layer 2 accumulation."
+    },
+    {
+      "symbol": "AMZN", "name": "Amazon", "flag": "\ud83d\udce6",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "E-commerce and AWS cloud — moved to Layer 2 accumulation."
+    },
+    {
+      "symbol": "TSM", "name": "Taiwan Semiconductor", "flag": "\ud83d\udda5",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "World's largest chip foundry — USD ADR. Disabled after backtest."
+    },
+    {
+      "symbol": "AVGO", "name": "Broadcom", "flag": "\ud83d\udce1",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Facebook/Instagram/WhatsApp. 7% allocation in pie."
-    },
-    {
-      "symbol": "AMZN", "name": "Amazon", "flag": "📦",
-      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "E-commerce and AWS cloud. 6% allocation in pie."
-    },
-    {
-      "symbol": "TSM", "name": "Taiwan Semiconductor", "flag": "🖥",
-      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "World's largest chip foundry — USD ADR. 6% allocation in pie."
-    },
-    {
-      "symbol": "AVGO", "name": "Broadcom", "flag": "📡",
-      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
       "notes": "Semiconductor and infrastructure software. 6% allocation in pie."
     },
     {
-      "symbol": "ANET", "name": "Arista Networks", "flag": "🌐",
+      "symbol": "ANET", "name": "Arista Networks", "flag": "\ud83c\udf10",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Cloud networking equipment. 6% allocation in pie."
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Cloud networking equipment. Disabled after backtest."
     },
     {
-      "symbol": "MRVL", "name": "Marvell Technology", "flag": "⚙️",
+      "symbol": "MRVL", "name": "Marvell Technology", "flag": "\u2699\ufe0f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Data infrastructure semiconductors. 5% allocation in pie."
+      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Data infrastructure semiconductors. Disabled after backtest."
     },
     {
-      "symbol": "MU", "name": "Micron Technology", "flag": "💾",
+      "symbol": "MU", "name": "Micron Technology", "flag": "\ud83d\udcbe",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Memory and storage chips. 5% allocation in pie."
+      "qty": 5, "loss_limit": 120, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 20,
+      "notes": "Memory and storage chips. 5% allocation — tighter stops after backtest."
     },
     {
-      "symbol": "CRWD", "name": "Crowdstrike", "flag": "🛡",
+      "symbol": "CRWD", "name": "Crowdstrike", "flag": "\ud83d\udee1",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Cybersecurity platform. 5% allocation in pie."
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Cybersecurity platform. Disabled after backtest."
     },
     {
-      "symbol": "SU", "name": "Schneider Electric", "flag": "⚡",
+      "symbol": "SU", "name": "Schneider Electric", "flag": "\u26a1",
       "sec_type": "STK", "exchange": "SMART", "currency": "EUR",
       "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "French energy management — Euronext Paris. May need exchange set to SBF if SMART fails."
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "French energy management — Euronext Paris."
     },
     {
-      "symbol": "CEG", "name": "Constellation Energy", "flag": "☢️",
+      "symbol": "CEG", "name": "Constellation Energy", "flag": "\u2622\ufe0f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Nuclear power generation. 5% allocation in pie."
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Nuclear power generation. Disabled after backtest."
     },
     {
-      "symbol": "SCCO", "name": "Southern Copper", "flag": "🪙",
+      "symbol": "SCCO", "name": "Southern Copper", "flag": "\ud83e\ude99",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Copper mining — Americas. 4% allocation in pie."
+      "qty": 3, "loss_limit": 120, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+      "notes": "Copper mining — Americas. Tighter stops after backtest optimisation."
     },
     {
-      "symbol": "VRT", "name": "Vertiv Holdings", "flag": "🔋",
+      "symbol": "VRT", "name": "Vertiv Holdings", "flag": "\ud83d\udd0b",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
       "notes": "Data centre power infrastructure. 4% allocation in pie."
     },
     {
-      "symbol": "ANTO", "name": "Antofagasta", "flag": "⛏",
+      "symbol": "ANTO", "name": "Antofagasta", "flag": "\u26cf",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
-      "qty": 10, "loss_limit": 100, "long_only": true, "enabled": true,
-      "notes": "Chilean copper miner — LSE listed. 3% allocation in pie."
+      "qty": 10, "loss_limit": 80, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+      "notes": "Chilean copper miner — LSE. Tighter stops after backtest optimisation."
     },
     {
-      "symbol": "FCX", "name": "Freeport-McMoRan", "flag": "🏔",
+      "symbol": "FCX", "name": "Freeport-McMoRan", "flag": "\ud83c\udfd4",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "Copper and gold mining. 3% allocation in pie."
+      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "Copper and gold mining. Disabled after backtest."
     },
     {
-      "symbol": "PLTR", "name": "Palantir", "flag": "🤖",
+      "symbol": "PLTR", "name": "Palantir", "flag": "\ud83e\udd16",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "AI data analytics platform. 3% allocation in pie."
+      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "AI data analytics platform. Disabled after backtest."
     },
     {
-      "symbol": "NBIS", "name": "Nebius Group NV", "flag": "🚀",
+      "symbol": "NBIS", "name": "Nebius Group NV", "flag": "\ud83d\ude80",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 100, "long_only": true, "enabled": true,
-      "notes": "AI cloud infrastructure — NASDAQ. 2% allocation in pie."
+      "qty": 10, "loss_limit": 100, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "AI cloud infrastructure — NASDAQ. Disabled after backtest."
     },
 
     {
-      "symbol": "CVX", "name": "Chevron", "flag": "⛽",
+      "symbol": "CVX", "name": "Chevron", "flag": "\u26fd",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
       "notes": "US energy major"
     },
     {
-      "symbol": "AAPL", "name": "Apple", "flag": "🍎",
+      "symbol": "AAPL", "name": "Apple", "flag": "\ud83c\udf4e",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "US tech — defensive hold"
+      "qty": 8, "loss_limit": 120, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+      "notes": "US tech — defensive hold. Tighter stops after backtest optimisation."
     },
     {
-      "symbol": "MSFT", "name": "Microsoft", "flag": "🪟",
+      "symbol": "MSFT", "name": "Microsoft", "flag": "\ud83e\ude9f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
-      "notes": "US tech — AI/cloud"
+      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": false,
+      "disabled_reason": "backtest_poor_performer",
+      "notes": "US tech — AI/cloud. Moved to Layer 2 accumulation."
     },
     {
-      "symbol": "BARC", "name": "Barclays", "flag": "🏦",
+      "symbol": "BARC", "name": "Barclays", "flag": "\ud83c\udfe6",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
-      "qty": 500, "loss_limit": 100, "long_only": true, "enabled": true,
-      "notes": "UK bank — LSE"
+      "qty": 400, "loss_limit": 80, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+      "notes": "UK bank — LSE. Reduced qty and tighter stops after backtest."
     },
     {
-      "symbol": "SHEL", "name": "Shell", "flag": "🛢",
+      "symbol": "SHEL", "name": "Shell", "flag": "\ud83d\udee2",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
-      "qty": 50, "loss_limit": 100, "long_only": true, "enabled": true,
-      "notes": "UK energy — LSE"
+      "qty": 40, "loss_limit": 80, "long_only": true, "enabled": true,
+      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+      "notes": "UK energy — LSE. Reduced qty and tighter stops after backtest."
+    }
+  ],
+
+  "layer3_silver": [
+    {
+      "symbol": "SSLN", "name": "iShares Physical Silver", "flag": "\ud83e\ude99",
+      "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
+      "qty": 164, "enabled": true,
+      "notes": "Layer 3 Silver Scalper — intraday momentum on LSE"
     }
   ],
 
   "layer2_accumulation": [
     {
-      "symbol": "SMH", "name": "VanEck Semiconductor ETF", "flag": "💾",
+      "symbol": "SMH", "name": "VanEck Semiconductor ETF", "flag": "\ud83d\udcbe",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "enabled": true
     },
     {
-      "symbol": "QQQ", "name": "Invesco NASDAQ-100 ETF", "flag": "📊",
+      "symbol": "QQQ", "name": "Invesco NASDAQ-100 ETF", "flag": "\ud83d\udcca",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "enabled": true
     },
     {
-      "symbol": "GLD", "name": "Gold ETF", "flag": "🏅",
+      "symbol": "GLD", "name": "Gold ETF", "flag": "\ud83c\udfc5",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "enabled": true
+    },
+    {
+      "symbol": "NVDA", "name": "Nvidia", "flag": "\ud83d\udc9a",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 2, "enabled": true,
+      "notes": "Moved from Layer 1 — accumulate on dips"
+    },
+    {
+      "symbol": "META", "name": "Meta Platforms", "flag": "\ud83d\udc41",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 1, "enabled": true,
+      "notes": "Moved from Layer 1 — accumulate on dips"
+    },
+    {
+      "symbol": "AMZN", "name": "Amazon", "flag": "\ud83d\udce6",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 2, "enabled": true,
+      "notes": "Moved from Layer 1 — accumulate on dips"
+    },
+    {
+      "symbol": "MSFT", "name": "Microsoft", "flag": "\ud83e\ude9f",
+      "sec_type": "STK", "exchange": "SMART", "currency": "USD",
+      "qty": 2, "enabled": true,
+      "notes": "Moved from Layer 1 — accumulate on dips"
     }
   ]
 }

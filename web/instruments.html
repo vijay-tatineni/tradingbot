@@ -226,9 +226,9 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
     <table>
       <thead>
         <tr>
-          <th>On</th><th>Flag</th><th>Symbol</th><th>Name</th>
+          <th>On</th><th>Status</th><th>Flag</th><th>Symbol</th><th>Name</th>
           <th>Type</th><th>Exchange</th><th>Currency</th><th>Market</th>
-          <th>Qty</th><th>Loss $</th><th>Long Only</th>
+          <th>Qty</th><th>Loss $</th><th>Long Only</th><th>Reason</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -325,9 +325,13 @@ function switchTab(tab) {
 function renderLayer1() {
   const instruments = data.layer1_active || [];
   document.getElementById('l1count').textContent = instruments.length;
-  document.getElementById('layer1-table').innerHTML = instruments.map((inst, i) => `
-    <tr id="l1row-${i}">
+  document.getElementById('layer1-table').innerHTML = instruments.map((inst, i) => {
+    const statusColor = inst.enabled === false ? '#ef4444' : 'var(--green)';
+    const statusLabel = inst.enabled === false ? 'OFF' : 'ON';
+    return `
+    <tr id="l1row-${i}" style="${inst.enabled===false?'opacity:0.5':''}">
       <td><label class="toggle"><input type="checkbox" ${inst.enabled!==false?'checked':''} onchange="toggleEnabled('layer1_active',${i},this.checked)"><span class="slider"></span></label></td>
+      <td style="text-align:center"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${statusColor};margin-right:4px"></span><span style="font-size:0.6rem;color:${statusColor}">${statusLabel}</span></td>
       <td><input value="${inst.flag||''}" style="width:50px;font-size:1rem;text-align:center" onchange="updateField('layer1_active',${i},'flag',this.value)"></td>
       <td><strong style="color:var(--gold)">${inst.symbol}</strong></td>
       <td><input value="${inst.name||''}" style="min-width:160px" onchange="updateField('layer1_active',${i},'name',this.value)"></td>
@@ -354,11 +358,12 @@ function renderLayer1() {
           <option value="false" ${inst.long_only===false?'selected':''}>Both</option>
         </select>
       </td>
+      <td style="font-size:0.6rem;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${inst.disabled_reason||''}">${inst.disabled_reason||'--'}</td>
       <td>
         <button class="btn btn-danger btn-sm" onclick="removeInstrument('layer1_active',${i})">🗑</button>
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
 }
 
 // ── Layer 2 ──────────────────────────────────────
@@ -434,6 +439,11 @@ function updateSetting(key, value) {
 
 function toggleEnabled(layer, index, checked) {
   data[layer][index].enabled = checked;
+  if(checked) {
+    delete data[layer][index].disabled_reason;
+  }
+  if(layer === 'layer1_active') renderLayer1();
+  else renderLayer2();
   markDirty();
 }
 
