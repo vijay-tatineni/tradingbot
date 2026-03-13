@@ -7,9 +7,11 @@ To change any setting — edit instruments.json and restart. No code changes nee
 import json
 import os
 import sys
+from pathlib import Path
 from bot.logger import log
 
-CONFIG_FILE = os.path.expanduser('~/trading/instruments.json')
+BASE_DIR = Path(__file__).parent.parent
+CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 
 
 class Config:

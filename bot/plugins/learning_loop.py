@@ -16,10 +16,12 @@ FIXED in v7.0:
 import sqlite3
 import datetime
 import os
+from pathlib import Path
 from bot.plugins.base_plugin import BasePlugin
 from bot.logger import log
 
-DB_FILE = os.path.expanduser('~/trading/learning_loop.db')
+BASE_DIR = Path(__file__).parent.parent.parent
+DB_FILE = str(BASE_DIR / 'learning_loop.db')
 
 
 class LearningLoop(BasePlugin):

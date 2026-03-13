@@ -1,11 +1,11 @@
 """
-bot/layer1.py  — v7.0
+bot/layer1.py  — v7.1
 Layer 1 — Active Trading with smart exits and re-entry.
 
-v7.0 changes:
-  - All exit paths now call post_trade (loss limit, signal reversal)
-  - Syncs existing IBKR positions with tracker on first run
-  - Passes proper exit_reason to learning loop
+v7.1 changes:
+  - Tracker reconciliation with IBKR every cycle
+  - OrderManager wired to Telegram alerts for fill failures
+  - ADX shown in log output
 """
 
 import datetime
@@ -23,7 +23,8 @@ from bot.logger           import log, separator
 
 class ActiveTrading:
 
-    def __init__(self, cfg: Config, ib_conn: IBConnection, plugins: list = None):
+    def __init__(self, cfg: Config, ib_conn: IBConnection,
+                 plugins: list = None, alerts=None):
         self.cfg       = cfg
         self.ib_conn   = ib_conn
         self.plugins   = plugins or []
@@ -34,6 +35,10 @@ class ActiveTrading:
         self.portfolio = Portfolio(ib_conn, cfg)
         self.orders    = OrderManager(ib_conn, cfg)
         self.tracker   = PositionTracker(cfg)
+
+        # Wire up Telegram alerts to OrderManager for fill failure alerts
+        if alerts:
+            self.orders.alerts = alerts
 
         self.signal_rows : list  = []
         self.total_pnl   : float = 0.0
@@ -49,6 +54,9 @@ class ActiveTrading:
             self._sync_existing_positions()
             self._synced = True
 
+        # Reconcile tracker with IBKR every cycle
+        self._reconcile_with_ibkr()
+
         if self.portfolio.is_emergency_stop(self.total_pnl):
             log(f"EMERGENCY STOP: P&L ${self.total_pnl:.2f} hit loss limit!", "ERROR")
             self._close_all()
@@ -59,6 +67,45 @@ class ActiveTrading:
             row = self._process_instrument(inst)
             self.signal_rows.append(row)
             self.ib_conn.sleep(1)
+
+    def _reconcile_with_ibkr(self) -> None:
+        """
+        Compare local tracker state with live IBKR positions.
+        Add anything IBKR has that we don't track.
+        Remove anything we track that IBKR doesn't have.
+        """
+        # Build set of symbols we're actively trading
+        active_symbols = {inst['symbol'] for inst in self.cfg.active_instruments}
+
+        # Get all live IBKR positions
+        ibkr_positions = {}
+        for p in self.portfolio.get_all_positions():
+            sym = p.contract.symbol
+            if sym in active_symbols and p.position != 0:
+                ibkr_positions[sym] = p
+
+        # Check for positions IBKR has that tracker doesn't
+        for sym, p in ibkr_positions.items():
+            if sym not in self.tracker.open:
+                currency = getattr(p.contract, 'currency', 'USD')
+                # Find the instrument config for trail_stop_pct
+                inst = next((i for i in self.cfg.active_instruments
+                             if i['symbol'] == sym), None)
+                trail_pct = inst.get('trail_stop_pct', 2.0) if inst else 2.0
+                self.tracker.init_existing(
+                    sym, p.avgCost, p.position, trail_pct, currency
+                )
+                log(f"[Reconcile] Added missing position: {sym} "
+                    f"qty={p.position}", "WARN")
+
+        # Check for positions tracker has that IBKR doesn't
+        stale = [sym for sym in list(self.tracker.open)
+                 if sym in active_symbols and sym not in ibkr_positions]
+        for sym in stale:
+            log(f"[Reconcile] Removing stale tracker entry: {sym} "
+                f"(no IBKR position)", "WARN")
+            self.tracker.open.pop(sym, None)
+            self.tracker._delete_open(sym)
 
     def _process_instrument(self, inst: dict) -> dict:
         symbol   = inst['symbol']
@@ -99,12 +146,15 @@ class ActiveTrading:
             # Per-instrument hard loss limit
             if pos_info.unreal_pnl < -loss_limit:
                 log(f"  LOSS LIMIT hit {symbol}: ${pos_info.unreal_pnl:.2f}", "WARN")
-                self.orders.close(inst, pos)
-                exit_reason = f"LOSS_LIMIT -${abs(pos_info.unreal_pnl):.0f}"
-                self.tracker.on_close(symbol, price, exit_reason, reentry_cooldown)
-                action = f"CLOSED ({exit_reason})"
-                for p in self.plugins:
-                    p.post_trade(inst, 0, action, price)
+                filled = self.orders.close(inst, pos)
+                if filled:
+                    exit_reason = f"LOSS_LIMIT -${abs(pos_info.unreal_pnl):.0f}"
+                    self.tracker.on_close(symbol, price, exit_reason, reentry_cooldown)
+                    action = f"CLOSED ({exit_reason})"
+                    for p in self.plugins:
+                        p.post_trade(inst, 0, action, price)
+                else:
+                    action = "CLOSE FAILED (loss limit)"
 
             else:
                 # Check take profit / trailing stop
@@ -113,20 +163,24 @@ class ActiveTrading:
                     inst.get('currency', 'USD')
                 )
                 if smart_exit:
-                    self.orders.close(inst, pos)
-                    self.tracker.on_close(symbol, price, smart_exit, reentry_cooldown)
-                    action = f"CLOSED ({smart_exit})"
-                    for p in self.plugins:
-                        p.post_trade(inst, 0, action, price)
+                    filled = self.orders.close(inst, pos)
+                    if filled:
+                        self.tracker.on_close(symbol, price, smart_exit, reentry_cooldown)
+                        action = f"CLOSED ({smart_exit})"
+                        for p in self.plugins:
+                            p.post_trade(inst, 0, action, price)
+                    else:
+                        action = "CLOSE FAILED (smart exit)"
 
                 # Signal reversal (short-able CFDs only)
                 elif result.signal == -1 and not inst.get('long_only', True):
                     allowed = all(p.pre_trade(inst, -1, result.confidence) for p in self.plugins)
                     if allowed:
                         action = self.orders.handle_signal(inst, result.signal, result.confidence, pos)
-                        self.tracker.on_close(symbol, price, 'SIGNAL_REVERSED', reentry_cooldown)
-                        for p in self.plugins:
-                            p.post_trade(inst, -1, action, price)
+                        if 'FAILED' not in action:
+                            self.tracker.on_close(symbol, price, 'SIGNAL_REVERSED', reentry_cooldown)
+                            for p in self.plugins:
+                                p.post_trade(inst, -1, action, price)
 
         else:
             # No position — check for re-entry or fresh entry
@@ -140,13 +194,16 @@ class ActiveTrading:
                 if should_reenter:
                     allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                     if allowed:
-                        self.orders.place(inst['contract'], 'BUY', inst['qty'], inst['name'])
-                        self.tracker.on_open(symbol, price, inst['qty'], trail_stop_pct, inst.get('currency','USD'))
-                        self.tracker.clear_watch(symbol)
-                        action = f"RE-ENTRY [{result.confidence}]"
-                        for p in self.plugins:
-                            p.post_trade(inst, 1, action, price)
-                        pos_info = self.portfolio.get_position_info(symbol, price)
+                        filled = self.orders.place(inst['contract'], 'BUY', inst['qty'], inst['name'])
+                        if filled:
+                            self.tracker.on_open(symbol, price, inst['qty'], trail_stop_pct, inst.get('currency','USD'))
+                            self.tracker.clear_watch(symbol)
+                            action = f"RE-ENTRY [{result.confidence}]"
+                            for p in self.plugins:
+                                p.post_trade(inst, 1, action, price)
+                            pos_info = self.portfolio.get_position_info(symbol, price)
+                        else:
+                            action = "RE-ENTRY FAILED"
                 else:
                     action = f"WATCHING: {re_reason}"
 
@@ -240,11 +297,35 @@ class ActiveTrading:
         }
 
     def _close_all(self) -> None:
+        """Emergency close all positions, update tracker, alert."""
+        closed_symbols = []
         for inst in self.cfg.active_instruments:
-            if 'contract' in inst:
-                pos = self.portfolio.get_position(inst['symbol'])
-                if pos != 0:
-                    self.orders.close(inst, pos)
+            if 'contract' not in inst:
+                continue
+            symbol = inst['symbol']
+            pos = self.portfolio.get_position(symbol)
+            if pos != 0:
+                filled = self.orders.close(inst, pos)
+                if filled:
+                    # Update tracker for each closed position
+                    price = self.tracker.open[symbol].current_price if symbol in self.tracker.open else 0
+                    self.tracker.on_close(symbol, price, 'EMERGENCY_STOP', 0)
+                    closed_symbols.append(symbol)
+
+        # Clear all watching states
+        for sym in list(self.tracker.watching):
+            self.tracker.clear_watch(sym)
+
+        # Send emergency Telegram alert
+        if self.orders.alerts and closed_symbols:
+            self.orders.alerts.send(
+                f"🚨 <b>EMERGENCY STOP</b>\n"
+                f"P&L hit -${self.cfg.portfolio_loss_limit}\n"
+                f"Closed: {', '.join(closed_symbols)}\n"
+                f"All watching states cleared"
+            )
+
+        log(f"Emergency stop complete — closed {len(closed_symbols)} positions")
 
     def _sync_existing_positions(self) -> None:
         """Register any IBKR positions not already tracked (e.g. first run)."""

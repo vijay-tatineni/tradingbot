@@ -11,11 +11,13 @@ import json
 import os
 import shutil
 import datetime
+from pathlib import Path
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-CONFIG_FILE = os.path.expanduser('~/trading/instruments.json')
-BACKUP_DIR  = os.path.expanduser('~/trading/backups')
+BASE_DIR    = Path(__file__).parent
+CONFIG_FILE = str(BASE_DIR / 'instruments.json')
+BACKUP_DIR  = str(BASE_DIR / 'backups')
 
 app = Flask(__name__)
 CORS(app)  # allow requests from dashboard page

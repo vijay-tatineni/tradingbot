@@ -30,8 +30,11 @@ STOP:
 """
 
 import sys
+import os
+import json
 import signal
 import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -40,8 +43,11 @@ from bot.connection    import IBConnection
 from bot.market_hours  import MarketHours
 from bot.layer1        import ActiveTrading
 from bot.layer2        import Accumulation
+from bot.layer3_silver import SilverScalper
 from bot.dashboard     import Dashboard
 from bot.logger        import log, banner, separator
+
+BASE_DIR = Path(__file__).parent
 
 # ── Active plugins ────────────────────────────────────────────
 from bot.plugins.learning_loop import LearningLoop
@@ -82,8 +88,9 @@ class TradingBot:
         # self.register_plugin(MLOverride(self.cfg))
 
         # ── Pass plugins to layer1 ────────────────────────────
-        self.l1   = ActiveTrading(self.cfg, self.ib, self.plugins)
+        self.l1   = ActiveTrading(self.cfg, self.ib, self.plugins, alerts=self.alerts)
         self.l2   = Accumulation(self.cfg, self.ib)
+        self.l3   = SilverScalper(self.cfg, self.ib, alerts=self.alerts)
         self.dash = Dashboard(self.cfg)
 
         # ── Watchdog: alert if bot appears stuck ──────────────
@@ -114,6 +121,8 @@ class TradingBot:
         self.cfg.active_instruments = self.ib.qualify_contracts(self.cfg.active_instruments)
         log("Qualifying Layer 2 contracts...")
         self.cfg.accum_instruments  = self.ib.qualify_contracts(self.cfg.accum_instruments)
+        log("Qualifying Layer 3 contracts...")
+        self.l3.qualify(self.ib)
 
         # Notify plugins bot has started
         for plugin in self.plugins:
@@ -140,6 +149,9 @@ class TradingBot:
                 # ── Layer 2: Accumulation (every 6 cycles) ────
                 if cycle % 6 == 1:
                     self.l2.run()
+
+                # ── Layer 3: Silver Scalper (every cycle, LSE hours) ─
+                self.l3.run()
 
                 # ── Dashboard update ──────────────────────────
                 self.dash.update(
@@ -185,7 +197,67 @@ class TradingBot:
         sys.exit(0)
 
 
+def validate_environment() -> None:
+    """
+    Pre-flight checks before starting the bot.
+    Exits with clear message if anything is wrong.
+    """
+    errors = []
+
+    # 1. instruments.json exists and is valid JSON
+    config_path = BASE_DIR / 'instruments.json'
+    if not config_path.exists():
+        errors.append(f"instruments.json not found at {config_path}")
+    else:
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+            if 'settings' not in data or 'layer1_active' not in data:
+                errors.append("instruments.json missing 'settings' or 'layer1_active' keys")
+        except json.JSONDecodeError as e:
+            errors.append(f"instruments.json has invalid JSON: {e}")
+
+    # 2. Check env vars (warn, don't fail — bot works without Telegram)
+    if not os.environ.get('TELEGRAM_BOT_TOKEN'):
+        log("WARNING: TELEGRAM_BOT_TOKEN not set — Telegram alerts disabled", "WARN")
+    if not os.environ.get('TELEGRAM_CHAT_ID'):
+        log("WARNING: TELEGRAM_CHAT_ID not set — Telegram alerts disabled", "WARN")
+
+    # 3. Web directory is writable
+    web_dir = BASE_DIR / 'web'
+    if web_dir.exists() and not os.access(web_dir, os.W_OK):
+        errors.append(f"Web directory not writable: {web_dir}")
+
+    # 4. Database directory is accessible
+    for db_name in ['positions.db', 'learning_loop.db', 'layer3_silver.db']:
+        db_path = BASE_DIR / db_name
+        if db_path.exists() and not os.access(db_path, os.W_OK):
+            errors.append(f"Database not writable: {db_path}")
+
+    # 5. IBKR connectivity (tested later during Config/IBConnection init)
+    #    Just check the port config is sensible
+    try:
+        with open(config_path) as f:
+            s = json.load(f).get('settings', {})
+        port = s.get('port', 0)
+        if port not in (4001, 4002, 7496, 7497, 4000):
+            log(f"WARNING: Unusual IBKR port {port} — "
+                f"expected 4001/4002 (Gateway) or 7496/7497 (TWS)", "WARN")
+    except Exception:
+        pass
+
+    if errors:
+        print("\n=== STARTUP VALIDATION FAILED ===")
+        for e in errors:
+            print(f"  ERROR: {e}")
+        print("\nFix the above issues and try again.")
+        sys.exit(1)
+
+    log("Startup validation passed")
+
+
 # ── Entry point ───────────────────────────────────────────────
 if __name__ == '__main__':
+    validate_environment()
     bot = TradingBot()
     bot.run()

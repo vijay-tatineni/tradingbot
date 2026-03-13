@@ -15,11 +15,13 @@ FIXED in v7.0:
 import sqlite3
 import datetime
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 from bot.logger import log
 
-DB_FILE = os.path.expanduser('~/trading/positions.db')
+BASE_DIR = Path(__file__).parent.parent
+DB_FILE = str(BASE_DIR / 'positions.db')
 
 
 @dataclass

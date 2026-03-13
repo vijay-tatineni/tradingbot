@@ -5,8 +5,10 @@ Centralised logging — writes to stdout and ~/trading/portfolio_bot.log
 
 import datetime
 import os
+from pathlib import Path
 
-LOG_FILE = os.path.expanduser('~/trading/portfolio_bot.log')
+BASE_DIR = Path(__file__).parent.parent
+LOG_FILE = str(BASE_DIR / 'portfolio_bot.log')
 
 def log(msg: str, level: str = "INFO") -> None:
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
