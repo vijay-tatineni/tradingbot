@@ -70,12 +70,20 @@ class Accumulation:
         overbought = rsi > self.cfg.rsi_overbought and wr > self.cfg.williams_r_overbought
 
         if oversold and pos == 0:
-            self.orders.place(inst['contract'], 'BUY', inst['qty'], inst['name'])
-            action = f"BOUGHT DIP [RSI {rsi:.1f}]"
+            result = self.orders.place(inst['contract'], 'BUY', inst['qty'], inst['name'])
+            if result:
+                action = f"BOUGHT DIP [RSI {rsi:.1f}]"
+                pos = self.portfolio.get_position(symbol)  # refresh after fill
+            else:
+                action = "BUY FAILED"
         elif overbought and pos > 0:
             sell_qty = max(1, pos // 2)
-            self.orders.place(inst['contract'], 'SELL', sell_qty, inst['name'])
-            action = f"SOLD 50% [RSI {rsi:.1f}]"
+            result = self.orders.place(inst['contract'], 'SELL', sell_qty, inst['name'])
+            if result:
+                action = f"SOLD 50% [RSI {rsi:.1f}]"
+                pos = self.portfolio.get_position(symbol)  # refresh after fill
+            else:
+                action = "SELL FAILED"
 
         log(f"  {symbol:<6} price:{price:>8.2f}  RSI:{rsi:>5.1f}  WR:{wr:>6.1f}  "
             f"pos:{pos:.0f}  {action}")

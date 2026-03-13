@@ -208,12 +208,18 @@ async function load() {{
         }}).join('')
       : '<span class="muted">No open positions</span>';
 
-    document.getElementById('layer1').innerHTML = d.signals.map(s => {{
+    // Sort: open positions first (by P&L% desc), then flat (alphabetical)
+    const openPos = d.signals.filter(s => s.pos !== 0).sort((a,b) => (b.pnl_pct||0) - (a.pnl_pct||0));
+    const flatPos = d.signals.filter(s => s.pos === 0).sort((a,b) => a.symbol.localeCompare(b.symbol));
+    const sorted  = [...openPos, ...flatPos];
+
+    function renderRow(s, isOpen) {{
       const mktClass  = s.market==='24/7' ? 'badge-247' : s.market==='OPEN' ? 'badge-open' : 'badge-closed';
       const confClass = s.confidence==='HIGH' ? 'badge-high' : s.confidence==='MEDIUM' ? 'badge-med' : 'badge-low';
       const sigClass  = s.signal==='BUY' ? 'badge-buy' : s.signal==='SELL' ? 'badge-sell' : 'badge-hold';
       const wrColor   = s.wr >= -50 ? 'green' : 'red';
       const rsiColor  = s.rsi > 70 ? 'red' : s.rsi < 35 ? 'green' : '';
+      const dot       = isOpen ? '<span style="color:#22c55e;font-size:0.55rem;margin-right:4px">●</span>' : '';
 
       const entryStr = s.avg_cost > 0
         ? `<span class="entry-price">${{s.currency==='GBP'?'£':'$'}}${{s.avg_cost.toLocaleString()}}</span>`
@@ -235,7 +241,7 @@ async function load() {{
 
       return `<tr>
         <td>
-          <div class="asset-name">${{s.flag}} ${{s.symbol}}</div>
+          <div class="asset-name">${{dot}}${{s.flag}} ${{s.symbol}}</div>
           <div class="asset-sub">${{s.name}}</div>
         </td>
         <td><span class="badge ${{mktClass}}">${{s.market}}</span></td>
@@ -256,7 +262,14 @@ async function load() {{
           ${{s.reason ? '<br><span class="reason">'+s.reason+'</span>' : ''}}
         </td>
       </tr>`;
-    }}).join('');
+    }}
+
+    let rows = openPos.map(s => renderRow(s, true));
+    if (openPos.length > 0 && flatPos.length > 0) {{
+      rows.push('<tr class="divider-row"><td colspan="15" style="padding:0;border-bottom:2px solid #30363d"></td></tr>');
+    }}
+    rows = rows.concat(flatPos.map(s => renderRow(s, false)));
+    document.getElementById('layer1').innerHTML = rows.join('');
 
     document.getElementById('layer2').innerHTML = d.accum.map(e => {{
       const rsiColor = e.rsi > 70 ? 'red' : e.rsi < 35 ? 'green' : '';

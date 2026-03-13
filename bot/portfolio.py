@@ -53,8 +53,18 @@ class Portfolio:
                     currency = getattr(p.contract, 'currency', 'USD')
                     # IBKR returns avgCost in GBP pounds; LSE prices in pence
                     avg_cost = round(p.avgCost * 100, 4) if currency == 'GBP' else round(p.avgCost, 4)
-                    unreal   = round((current_price - avg_cost) * abs(qty), 2) if avg_cost > 0 and current_price > 0 else 0
-                    pct      = round(((current_price - avg_cost) / avg_cost) * 100, 2) if avg_cost > 0 else 0
+                    # Correct P&L for both long and short positions
+                    if avg_cost > 0 and current_price > 0:
+                        if qty > 0:  # long
+                            unreal = round((current_price - avg_cost) * qty, 2)
+                            pct    = round(((current_price - avg_cost) / avg_cost) * 100, 2)
+                        elif qty < 0:  # short
+                            unreal = round((avg_cost - current_price) * abs(qty), 2)
+                            pct    = round(((avg_cost - current_price) / avg_cost) * 100, 2)
+                        else:
+                            unreal, pct = 0, 0
+                    else:
+                        unreal, pct = 0, 0
                     return PositionInfo(
                         symbol=symbol, qty=qty, avg_cost=avg_cost,
                         currency=currency, price=current_price,
@@ -66,14 +76,50 @@ class Portfolio:
         return PositionInfo(symbol=symbol, qty=0, avg_cost=0, currency='USD')
 
     def get_total_pnl(self) -> float:
-        """Return total unrealised P&L across all positions."""
+        """
+        Return total unrealised P&L across all positions in all currencies.
+        Converts GBP and EUR to USD using live IBKR FX rates.
+        Falls back to hardcoded rates if FX lookup fails.
+        """
         try:
+            pnl_by_currency = {}
             for v in self.ib.accountValues(self.cfg.account):
-                if v.tag == 'UnrealizedPnL' and v.currency == 'USD':
-                    return float(v.value)
+                if v.tag == 'UnrealizedPnL' and v.currency:
+                    pnl_by_currency[v.currency] = float(v.value)
+
+            if not pnl_by_currency:
+                return 0.0
+
+            usd_total = pnl_by_currency.get('USD', 0.0)
+
+            # Convert non-USD P&L to USD
+            for currency, pnl in pnl_by_currency.items():
+                if currency == 'USD' or currency == 'BASE' or pnl == 0:
+                    continue
+                fx_rate = self._get_fx_rate(currency)
+                usd_total += pnl * fx_rate
+
+            return round(usd_total, 2)
         except Exception as e:
             log(f"  P&L error: {e}", "WARN")
         return 0.0
+
+    def _get_fx_rate(self, currency: str) -> float:
+        """Get FX rate to convert currency to USD. Returns 1.0 for USD."""
+        if currency == 'USD':
+            return 1.0
+        # Fallback rates (approximate) if IBKR lookup fails
+        fallback = {'GBP': 1.27, 'EUR': 1.08, 'CHF': 1.12, 'JPY': 0.0067}
+        try:
+            for v in self.ib.accountValues(self.cfg.account):
+                # IBKR provides ExchangeRate tag per currency
+                if v.tag == 'ExchangeRate' and v.currency == currency:
+                    rate = float(v.value)
+                    if rate > 0:
+                        return rate
+        except Exception:
+            pass
+        return fallback.get(currency, 1.0)
 
     def get_all_positions(self) -> list:
         """Return all open positions as raw IBKR position objects."""

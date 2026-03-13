@@ -12,15 +12,29 @@ import os
 import shutil
 import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+load_dotenv(Path(__file__).parent / '.env')
 
 BASE_DIR    = Path(__file__).parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 BACKUP_DIR  = str(BASE_DIR / 'backups')
+API_TOKEN   = os.getenv('API_TOKEN', '')
 
 app = Flask(__name__)
-CORS(app)  # allow requests from dashboard page
+CORS(app, origins=['http://188.166.150.137:8080', 'http://127.0.0.1:8080'])
+
+
+@app.before_request
+def check_auth():
+    """Require X-API-Token header on all requests."""
+    if not API_TOKEN:
+        return  # no token configured = auth disabled (dev mode)
+    token = request.headers.get('X-API-Token', '')
+    if token != API_TOKEN:
+        return jsonify({'error': 'Unauthorized'}), 401
 
 
 def load():
@@ -89,6 +103,8 @@ def list_backups():
 
 
 if __name__ == '__main__':
-    print(f"API server running on http://0.0.0.0:8081")
+    host = '127.0.0.1'
+    print(f"API server running on http://{host}:8081")
     print(f"Config file: {CONFIG_FILE}")
-    app.run(host='0.0.0.0', port=8081, debug=False)
+    print(f"Auth: {'enabled' if API_TOKEN else 'DISABLED (set API_TOKEN in .env)'}")
+    app.run(host=host, port=8081, debug=False)

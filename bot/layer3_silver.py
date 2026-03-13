@@ -38,6 +38,7 @@ import sqlite3
 import datetime
 import os
 from pathlib import Path
+import pytz
 from bot.config       import Config
 from bot.connection   import IBConnection
 from bot.market_hours import MarketHours
@@ -54,8 +55,9 @@ TRAIL_STOP_PCT     = 0.2    # % below entry/peak for trail stop
 COOLDOWN_MINS      = 5      # minutes to wait after a sell
 MAX_TRADES_PER_DAY = 5      # max round-trip trades per day
 DAILY_LOSS_LIMIT   = 50.0   # £50 — stop trading for the day
-FORCE_SELL_HOUR    = 16
-FORCE_SELL_MIN     = 15     # force sell at 16:15 UTC
+FORCE_SELL_HOUR    = 16     # London local time (handles BST automatically)
+FORCE_SELL_MIN     = 15     # force sell at 16:15 London time
+LONDON_TZ          = pytz.timezone('Europe/London')
 SYMBOL             = 'SSLN'
 
 
@@ -116,13 +118,14 @@ class SilverScalper:
             return
 
         now = datetime.datetime.now(datetime.timezone.utc)
+        now_london = now.astimezone(LONDON_TZ)
 
         # Only trade during LSE hours
         if not self.hours.lse_open():
             return
 
-        # ── Session reset at 08:00 UTC each day ─────────────
-        today = now.strftime('%Y-%m-%d')
+        # ── Session reset at 08:00 London time each day ────
+        today = now_london.strftime('%Y-%m-%d')
         if today != self._state['date']:
             self._reset_session(today)
 
@@ -144,8 +147,8 @@ class SilverScalper:
             self._state['day_high'] = price
             changed = True
 
-        # ── Force sell at 16:15 UTC ──────────────────────────
-        if now.hour == FORCE_SELL_HOUR and now.minute >= FORCE_SELL_MIN:
+        # ── Force sell at 16:15 London time (handles BST) ────
+        if now_london.hour == FORCE_SELL_HOUR and now_london.minute >= FORCE_SELL_MIN:
             if self._state['status'] == 'IN_POSITION':
                 self._sell(price, "FORCE_CLOSE_EOD")
             elif changed:

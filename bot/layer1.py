@@ -1,10 +1,11 @@
 """
-bot/layer1.py  — v7.1
+bot/layer1.py  — v7.2
 Layer 1 — Active Trading with smart exits and re-entry.
 
-v7.1 changes:
+v7.2 changes:
+  - Uses actual broker fill prices for tracker and learning loop
+  - Handles FillResult tuples from orders.handle_signal()
   - Tracker reconciliation with IBKR every cycle
-  - OrderManager wired to Telegram alerts for fill failures
   - ADX shown in log output
 """
 
@@ -16,7 +17,7 @@ from bot.data             import DataFeed
 from bot.indicators       import Indicators
 from bot.signals          import SignalEngine
 from bot.portfolio        import Portfolio
-from bot.orders           import OrderManager
+from bot.orders           import OrderManager, FillResult
 from bot.position_tracker import PositionTracker
 from bot.logger           import log, separator
 
@@ -74,21 +75,17 @@ class ActiveTrading:
         Add anything IBKR has that we don't track.
         Remove anything we track that IBKR doesn't have.
         """
-        # Build set of symbols we're actively trading
         active_symbols = {inst['symbol'] for inst in self.cfg.active_instruments}
 
-        # Get all live IBKR positions
         ibkr_positions = {}
         for p in self.portfolio.get_all_positions():
             sym = p.contract.symbol
             if sym in active_symbols and p.position != 0:
                 ibkr_positions[sym] = p
 
-        # Check for positions IBKR has that tracker doesn't
         for sym, p in ibkr_positions.items():
             if sym not in self.tracker.open:
                 currency = getattr(p.contract, 'currency', 'USD')
-                # Find the instrument config for trail_stop_pct
                 inst = next((i for i in self.cfg.active_instruments
                              if i['symbol'] == sym), None)
                 trail_pct = inst.get('trail_stop_pct', 2.0) if inst else 2.0
@@ -98,7 +95,6 @@ class ActiveTrading:
                 log(f"[Reconcile] Added missing position: {sym} "
                     f"qty={p.position}", "WARN")
 
-        # Check for positions tracker has that IBKR doesn't
         stale = [sym for sym in list(self.tracker.open)
                  if sym in active_symbols and sym not in ibkr_positions]
         for sym in stale:
@@ -146,13 +142,14 @@ class ActiveTrading:
             # Per-instrument hard loss limit
             if pos_info.unreal_pnl < -loss_limit:
                 log(f"  LOSS LIMIT hit {symbol}: ${pos_info.unreal_pnl:.2f}", "WARN")
-                filled = self.orders.close(inst, pos)
-                if filled:
+                fill_result = self.orders.close(inst, pos)
+                if fill_result:
+                    exit_price = fill_result.fill_price or price
                     exit_reason = f"LOSS_LIMIT -${abs(pos_info.unreal_pnl):.0f}"
-                    self.tracker.on_close(symbol, price, exit_reason, reentry_cooldown)
+                    self.tracker.on_close(symbol, exit_price, exit_reason, reentry_cooldown)
                     action = f"CLOSED ({exit_reason})"
                     for p in self.plugins:
-                        p.post_trade(inst, 0, action, price)
+                        p.post_trade(inst, 0, action, exit_price)
                 else:
                     action = "CLOSE FAILED (loss limit)"
 
@@ -163,12 +160,13 @@ class ActiveTrading:
                     inst.get('currency', 'USD')
                 )
                 if smart_exit:
-                    filled = self.orders.close(inst, pos)
-                    if filled:
-                        self.tracker.on_close(symbol, price, smart_exit, reentry_cooldown)
+                    fill_result = self.orders.close(inst, pos)
+                    if fill_result:
+                        exit_price = fill_result.fill_price or price
+                        self.tracker.on_close(symbol, exit_price, smart_exit, reentry_cooldown)
                         action = f"CLOSED ({smart_exit})"
                         for p in self.plugins:
-                            p.post_trade(inst, 0, action, price)
+                            p.post_trade(inst, 0, action, exit_price)
                     else:
                         action = "CLOSE FAILED (smart exit)"
 
@@ -176,17 +174,18 @@ class ActiveTrading:
                 elif result.signal == -1 and not inst.get('long_only', True):
                     allowed = all(p.pre_trade(inst, -1, result.confidence) for p in self.plugins)
                     if allowed:
-                        action = self.orders.handle_signal(inst, result.signal, result.confidence, pos)
+                        action, fill_result = self.orders.handle_signal(
+                            inst, result.signal, result.confidence, pos)
                         if 'FAILED' not in action:
-                            self.tracker.on_close(symbol, price, 'SIGNAL_REVERSED', reentry_cooldown)
+                            exit_price = fill_result.fill_price or price
+                            self.tracker.on_close(symbol, exit_price, 'SIGNAL_REVERSED', reentry_cooldown)
                             for p in self.plugins:
-                                p.post_trade(inst, -1, action, price)
+                                p.post_trade(inst, -1, action, exit_price)
 
         else:
             # No position — check for re-entry or fresh entry
 
             if self.tracker.is_watching(symbol):
-                # Re-entry: price must have recovered from its post-exit low
                 signal_valid = (result.signal == 1 and result.confidence in ('HIGH', 'MEDIUM'))
                 should_reenter, re_reason = self.tracker.check_reentry(
                     symbol, price, signal_valid, reentry_recovery_pct
@@ -194,13 +193,17 @@ class ActiveTrading:
                 if should_reenter:
                     allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                     if allowed:
-                        filled = self.orders.place(inst['contract'], 'BUY', inst['qty'], inst['name'])
-                        if filled:
-                            self.tracker.on_open(symbol, price, inst['qty'], trail_stop_pct, inst.get('currency','USD'))
+                        fill_result = self.orders.place(
+                            inst['contract'], 'BUY', inst['qty'], inst['name'])
+                        if fill_result:
+                            fill_price = fill_result.fill_price or price
+                            fill_qty = fill_result.filled_qty or inst['qty']
+                            self.tracker.on_open(symbol, fill_price, fill_qty,
+                                                 trail_stop_pct, inst.get('currency','USD'))
                             self.tracker.clear_watch(symbol)
                             action = f"RE-ENTRY [{result.confidence}]"
                             for p in self.plugins:
-                                p.post_trade(inst, 1, action, price)
+                                p.post_trade(inst, 1, action, fill_price)
                             pos_info = self.portfolio.get_position_info(symbol, price)
                         else:
                             action = "RE-ENTRY FAILED"
@@ -211,11 +214,15 @@ class ActiveTrading:
                 # Fresh entry
                 allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                 if allowed:
-                    action = self.orders.handle_signal(inst, result.signal, result.confidence, pos)
-                    if 'BOUGHT' in action:
-                        self.tracker.on_open(symbol, price, inst['qty'], trail_stop_pct, inst.get('currency','USD'))
+                    action, fill_result = self.orders.handle_signal(
+                        inst, result.signal, result.confidence, pos)
+                    if 'BOUGHT' in action and fill_result:
+                        fill_price = fill_result.fill_price or price
+                        fill_qty = fill_result.filled_qty or inst['qty']
+                        self.tracker.on_open(symbol, fill_price, fill_qty,
+                                             trail_stop_pct, inst.get('currency','USD'))
                         for p in self.plugins:
-                            p.post_trade(inst, 1, action, price)
+                            p.post_trade(inst, 1, action, fill_price)
                         pos_info = self.portfolio.get_position_info(symbol, price)
                 else:
                     action = "BLOCKED by plugin"
@@ -305,11 +312,12 @@ class ActiveTrading:
             symbol = inst['symbol']
             pos = self.portfolio.get_position(symbol)
             if pos != 0:
-                filled = self.orders.close(inst, pos)
-                if filled:
-                    # Update tracker for each closed position
-                    price = self.tracker.open[symbol].current_price if symbol in self.tracker.open else 0
-                    self.tracker.on_close(symbol, price, 'EMERGENCY_STOP', 0)
+                fill_result = self.orders.close(inst, pos)
+                if fill_result:
+                    exit_price = fill_result.fill_price if fill_result.fill_price else 0
+                    if symbol in self.tracker.open:
+                        exit_price = exit_price or self.tracker.open[symbol].current_price
+                    self.tracker.on_close(symbol, exit_price, 'EMERGENCY_STOP', 0)
                     closed_symbols.append(symbol)
 
         # Clear all watching states
