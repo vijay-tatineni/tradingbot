@@ -1,10 +1,10 @@
 """
 bot/layer2.py
-Layer 2 — Accumulation ETFs (RSI dip buying).
+Layer 2 — Accumulation ETFs (RSI + Williams %R dip buying).
 
-Runs every 6th cycle (~90 minutes at 15 min intervals).
-Buys ETFs when RSI < oversold AND Williams%R < oversold.
-Sells 50% when RSI > overbought AND Williams%R > overbought.
+Runs every 6th cycle from main loop.
+Buys ETFs when RSI < oversold AND Williams %R < oversold.
+Sells 50% when RSI > overbought AND Williams %R > overbought.
 """
 
 from bot.config      import Config

@@ -1,6 +1,6 @@
 """
 bot/logger.py
-Centralised logging — writes to stdout and ~/trading/portfolio_bot.log
+Centralised logging — writes to stdout and portfolio_bot.log (relative to project root).
 """
 
 import datetime

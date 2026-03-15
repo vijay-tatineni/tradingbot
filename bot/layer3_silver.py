@@ -5,33 +5,11 @@ Layer 3 — Silver Scalper (SSLN, iShares Physical Silver, LSE, GBP).
 Intraday momentum scalper. Runs every cycle (1 minute) during LSE hours only.
 ALL state is persisted in SQLite — survives crashes and restarts.
 
-ENTRY:
-  - Track rolling day low (resets at 08:00 UTC)
-  - Buy 164 shares when price rises 0.3% from day low
-  - Only if no position currently open
-
-EXIT (Trail Stop):
-  - Initial trail stop at 0.2% below entry price
-  - Ratchet trail stop up as price rises (never down)
-  - Sell immediately when price drops through trail stop
-
-RE-ENTRY:
-  - 5 minute cooldown after any sell
-  - Track new low after sell
-  - Buy again when price rises 0.3% from new low
-  - Maximum 5 trades per day
-  - Stop trading for the day if down £50
-
-RISK:
-  - Force sell at 16:15 UTC (never hold overnight)
-  - Telegram alert on every buy and sell
-  - Log every trade to SQLite
-
-STATE PERSISTENCE:
-  - silver_scalper_state table holds full scalper state
-  - Written on every price update
-  - Read on startup to restore exact position (trail stop, day low, etc.)
-  - If bot crashes at 10am and restarts at 10:05am, picks up exactly
+Entry:   Buy when price bounces 0.3% from session day low.
+Exit:    Trail stop at 0.2% below peak (ratchets up, never down).
+Re-entry: 5min cooldown, new bounce from post-sell low, max 5 trades/day.
+Risk:    Force sell at 16:15 London time (handles BST). Daily £50 loss cap.
+State:   Full persistence in SQLite — survives restarts mid-session.
 """
 
 import sqlite3

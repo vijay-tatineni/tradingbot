@@ -44,6 +44,15 @@ class DataFeed:
                 log(f"  Insufficient data for {contract.symbol} ({len(bars) if bars else 0} bars)", "WARN")
                 return None
 
+            # Check bar freshness — last bar should be within 2 trading days
+            last_bar_date = bars[-1].date
+            if hasattr(last_bar_date, 'date'):
+                last_bar_date = last_bar_date.date()
+            days_stale = (pd.Timestamp.now().date() - pd.Timestamp(last_bar_date).date()).days
+            if days_stale > 4:  # allow weekends + 2 trading days
+                log(f"  Stale data for {contract.symbol}: last bar {last_bar_date} ({days_stale}d old)", "WARN")
+                return None
+
             return pd.DataFrame([{
                 'date':   b.date,
                 'open':   b.open,
@@ -53,6 +62,12 @@ class DataFeed:
                 'volume': b.volume,
             } for b in bars])
 
+        except (ConnectionError, OSError, TimeoutError) as e:
+            log(f"  Data connection error {contract.symbol}: {e}", "WARN")
+            return None
+        except ValueError as e:
+            log(f"  Data value error {contract.symbol}: {e}", "WARN")
+            return None
         except Exception as e:
             log(f"  Data error {contract.symbol}: {e}", "WARN")
             return None

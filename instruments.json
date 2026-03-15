@@ -9,7 +9,7 @@
     "client_id":             1,
     "check_interval_mins":   1,
     "portfolio_loss_limit":  1000,
-    "web_dir":               "~/trading/web",
+    "web_dir":               "web",
     "alligator_min_gap_pct": 0.003,
     "ma200_period":          200,
     "williams_r_period":     14,

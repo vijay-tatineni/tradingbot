@@ -39,7 +39,13 @@ class Config:
         self.portfolio_loss_limit : float = s['portfolio_loss_limit']
 
         # ── Web dashboard ─────────────────────────────────────
-        self.web_dir : str = os.path.expanduser(s['web_dir'])
+        web_raw = s.get('web_dir', 'web')
+        if web_raw.startswith('~'):
+            self.web_dir : str = os.path.expanduser(web_raw)
+        elif os.path.isabs(web_raw):
+            self.web_dir : str = web_raw
+        else:
+            self.web_dir : str = str(BASE_DIR / web_raw)
 
         # ── Alligator ─────────────────────────────────────────
         self.alligator_min_gap_pct : float = s['alligator_min_gap_pct']

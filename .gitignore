@@ -13,12 +13,14 @@ venv/
 
 # Environment / secrets
 .env
-.env.*
-.env.example
+.env.local
 users.json
 
 # Dashboard runtime data
 web/data.json
+
+# Backups
+backups/
 
 # IDE
 .vscode/
@@ -28,5 +30,6 @@ web/data.json
 .DS_Store
 Thumbs.db
 
-# Old backups
+# Old archives
 trading_v6/
+*.zip

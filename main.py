@@ -1,32 +1,24 @@
 """
-╔══════════════════════════════════════════════════════════════╗
-║  Trading Bot v7.0 — main.py                                ║
-║  The ONLY file you need to edit to change bot behaviour.    ║
-║                                                             ║
-║  v7.0 changes:                                              ║
-║    - SQLite DB for position state (trail stops survive)     ║
-║    - GBP pence/pounds fix                                   ║
-║    - Telegram alerts (bot/alerts.py)                        ║
-║    - Watchdog health monitor (bot/watchdog.py)              ║
-║    - Learning loop exit recording fixed                     ║
-║                                                             ║
-║  To add a new plugin (e.g. AI sentiment, macro filter):     ║
-║    1. Create bot/plugins/my_plugin.py                       ║
-║    2. Import it below                                       ║
-║    3. Call bot.register_plugin(MyPlugin(cfg))               ║
-║    That's it. No other files change.                        ║
-╚══════════════════════════════════════════════════════════════╝
+Trading Bot v7.2 — main.py
 
-CURRENT PLUGINS:
-  ✅ LearningLoop    — records every trade to SQLite, weekly retrain
-  ✅ TelegramAlerts  — trade alerts, daily summary, error notifications
-  ✅ SentimentEngine — Claude API news sentiment gate (blocks bad-news BUYs)
+Main entry point and orchestrator. Owns the main loop, plugin registry,
+watchdog, weekend sleep, and graceful shutdown handling.
 
-RUN:
-  python3 main.py
+All trading logic lives in bot/layer1.py (active), bot/layer2.py (accum),
+and bot/layer3_silver.py (scalper). Config loaded from instruments.json.
 
-STOP:
-  Ctrl+C  (bot closes gracefully, positions remain open on IBKR)
+To add a new plugin:
+  1. Create bot/plugins/my_plugin.py (extend BasePlugin)
+  2. Import it below
+  3. Call bot.register_plugin(MyPlugin(cfg))
+
+Plugins:
+  LearningLoop    — records every trade to SQLite, time-based weekly retrain
+  TelegramAlerts  — trade alerts, daily summary (deduped), error notifications
+  SentimentEngine — Claude API news sentiment gate (blocks bad-news BUYs)
+
+Run:   python3 main.py
+Stop:  Ctrl+C (positions remain open on IBKR)
 """
 
 import sys
@@ -67,7 +59,7 @@ class TradingBot:
     All trading logic lives in layer1.py, layer2.py and their dependencies.
     """
 
-    VERSION = "7.0"
+    VERSION = "7.2"
 
     def __init__(self):
         self.cfg     = Config()

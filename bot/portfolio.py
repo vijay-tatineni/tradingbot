@@ -37,6 +37,8 @@ class Portfolio:
             for p in self.ib.positions(self.cfg.account):
                 if p.contract.symbol == symbol:
                     return p.position
+        except (ConnectionError, OSError) as e:
+            log(f"  Position connection error {symbol}: {e}", "WARN")
         except Exception as e:
             log(f"  Position error {symbol}: {e}", "WARN")
         return 0

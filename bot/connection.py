@@ -33,8 +33,11 @@ class IBConnection:
                 )
                 log(f"Connected: {self.ib.isConnected()}  |  Account: {self.cfg.account}")
                 return
-            except Exception as e:
+            except (ConnectionRefusedError, OSError, TimeoutError) as e:
                 log(f"Connection failed: {e} — retrying in 30s...", "WARN")
+                time.sleep(30)
+            except Exception as e:
+                log(f"Connection error: {e} — retrying in 30s...", "WARN")
                 time.sleep(30)
 
     def reconnect(self) -> None:
