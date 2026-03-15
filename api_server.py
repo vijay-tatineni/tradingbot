@@ -43,7 +43,7 @@ if not JWT_SECRET:
 JWT_EXPIRY_HOURS = 24
 
 app = Flask(__name__)
-CORS(app, origins=['http://188.166.150.137:8080', 'http://127.0.0.1:8080'])
+CORS(app, origins=['http://188.166.150.137:8082', 'http://127.0.0.1:8082'])
 
 # Rate limiter — keyed by IP
 limiter = Limiter(get_remote_address, app=app, default_limits=[],
@@ -92,6 +92,11 @@ def require_auth(f):
 
 
 # ── Auth routes ───────────────────────────────────────
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'})
+
 
 @app.route('/api/login', methods=['POST'])
 @limiter.limit('5 per minute')
