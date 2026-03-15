@@ -88,7 +88,7 @@ function getRedirectTarget() {
   return 'dashboard.html';
 }
 
-// If already logged in with valid token, redirect
+// If already logged in with valid token, ensure cookie is set and redirect
 (async function checkExisting() {
   const token = localStorage.getItem('jwt_token');
   if (!token) return;
@@ -96,8 +96,17 @@ function getRedirectTarget() {
     const r = await fetch(API + '/api/verify', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (r.ok) window.location.href = getRedirectTarget();
-  } catch(e) { /* ignore */ }
+    if (r.ok) {
+      // Ensure cookie exists (nginx auth_request reads it)
+      document.cookie = 'jwt_token=' + token + '; path=/; max-age=86400; SameSite=Lax';
+      window.location.href = getRedirectTarget();
+    } else {
+      // Token expired/invalid — clear stale credentials
+      localStorage.removeItem('jwt_token');
+      localStorage.removeItem('jwt_user');
+      document.cookie = 'jwt_token=; path=/; max-age=0';
+    }
+  } catch(e) { /* ignore — let user log in manually */ }
 })();
 
 async function handleLogin(e) {
