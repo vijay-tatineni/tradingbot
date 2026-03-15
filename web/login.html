@@ -74,9 +74,7 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
     <button type="submit" class="btn-login" id="loginBtn">Log In</button>
   </form>
 
-  <div class="footer">
-    <a href="dashboard.html">View Dashboard</a>
-  </div>
+  <div class="footer"></div>
 </div>
 
 <script>
@@ -124,6 +122,7 @@ async function handleLogin(e) {
     if (r.ok && data.token) {
       localStorage.setItem('jwt_token', data.token);
       localStorage.setItem('jwt_user', data.username);
+      document.cookie = 'jwt_token=' + data.token + '; path=/; max-age=86400; SameSite=Lax';
       window.location.href = getRedirectTarget();
     } else {
       errEl.textContent = data.error || 'Login failed';

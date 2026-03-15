@@ -327,6 +327,7 @@ function apiHeaders(extra = {}) {
 function logout() {
   localStorage.removeItem('jwt_token');
   localStorage.removeItem('jwt_user');
+  document.cookie = 'jwt_token=; path=/; max-age=0';
   window.location.href = 'login.html';
 }
 

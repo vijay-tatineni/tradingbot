@@ -125,6 +125,30 @@ def verify():
     return jsonify({'ok': True})
 
 
+@app.route('/api/auth/verify', methods=['GET'])
+def auth_verify():
+    """
+    nginx auth_request subrequest endpoint.
+    Checks JWT from Authorization header OR jwt_token cookie.
+    Returns 200 (allow) or 401 (deny).
+    """
+    token = None
+    # Try Authorization header first
+    header = request.headers.get('Authorization', '')
+    if header.startswith('Bearer '):
+        token = header[7:]
+    # Fall back to cookie (set by login page JS)
+    if not token:
+        token = request.cookies.get('jwt_token', '')
+    if not token:
+        return '', 401
+    try:
+        jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        return '', 200
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return '', 401
+
+
 # ── Config helpers ────────────────────────────────────
 
 def load():
