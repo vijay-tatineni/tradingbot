@@ -34,6 +34,7 @@ class PositionState:
     trail_stop:    float = 0.0
     qty:           float = 0.0
     currency:      str   = 'USD'
+    side:          str   = 'LONG'
 
 
 @dataclass
@@ -82,9 +83,15 @@ class PositionTracker:
                 current_price REAL,
                 trail_stop    REAL,
                 qty           REAL,
-                currency      TEXT
+                currency      TEXT,
+                side          TEXT
             )
         """)
+        # Migration: add side column if missing (existing DBs)
+        try:
+            conn.execute("ALTER TABLE open_positions ADD COLUMN side TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS watch_positions (
                 symbol            TEXT PRIMARY KEY,
@@ -111,9 +118,10 @@ class PositionTracker:
                 entry_time=row['entry_time'], peak_price=row['peak_price'],
                 current_price=row['current_price'], trail_stop=row['trail_stop'],
                 qty=row['qty'], currency=row['currency'],
+                side=row['side'] or 'LONG',
             )
             self.open[state.symbol] = state
-            log(f"[Tracker] Restored: {state.symbol} entry={state.entry_price:.4f} "
+            log(f"[Tracker] Restored: {state.symbol} {state.side} entry={state.entry_price:.4f} "
                 f"stop={state.trail_stop:.4f} peak={state.peak_price:.4f}")
 
         for row in conn.execute("SELECT * FROM watch_positions"):
@@ -139,11 +147,11 @@ class PositionTracker:
         conn.execute("""
             INSERT OR REPLACE INTO open_positions
             (symbol, entry_price, entry_time, peak_price,
-             current_price, trail_stop, qty, currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             current_price, trail_stop, qty, currency, side)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (state.symbol, state.entry_price, state.entry_time,
               state.peak_price, state.current_price, state.trail_stop,
-              state.qty, state.currency))
+              state.qty, state.currency, state.side))
         conn.commit()
         conn.close()
 
@@ -176,18 +184,23 @@ class PositionTracker:
     # ── Open position management ──────────────────
 
     def on_open(self, symbol: str, entry_price: float, qty: float,
-                trail_stop_pct: float, currency: str = 'USD') -> None:
+                trail_stop_pct: float, currency: str = 'USD',
+                side: str = 'LONG') -> None:
         """
         Call when a new position is opened.
         entry_price must be in market quote units (pence for LSE).
+        For SHORT positions, trail stop is placed ABOVE entry.
         """
-        stop = entry_price * (1 - trail_stop_pct / 100)
+        if side == 'SHORT':
+            stop = entry_price * (1 + trail_stop_pct / 100)
+        else:
+            stop = entry_price * (1 - trail_stop_pct / 100)
         now  = datetime.datetime.utcnow().isoformat()
 
         state = PositionState(
             symbol=symbol, entry_price=entry_price, entry_time=now,
             peak_price=entry_price, current_price=entry_price,
-            qty=qty, trail_stop=stop, currency=currency,
+            qty=qty, trail_stop=stop, currency=currency, side=side,
         )
         self.open[symbol] = state
         self._save_open(symbol)
@@ -196,7 +209,7 @@ class PositionTracker:
             self.watching.pop(symbol)
             self._delete_watch(symbol)
 
-        log(f"[Tracker] OPEN {symbol} @ {entry_price:.4f} {currency}  "
+        log(f"[Tracker] OPEN {side} {symbol} @ {entry_price:.4f} {currency}  "
             f"trail stop: {stop:.4f}")
 
     def init_existing(self, symbol: str, ibkr_avg_cost: float,
@@ -205,11 +218,13 @@ class PositionTracker:
         """
         Register a position that existed before the bot started.
         ibkr_avg_cost comes from IBKR (pounds for GBP) — converted here.
+        Detects LONG/SHORT from qty sign.
         """
         if symbol not in self.open:
             entry = ibkr_avg_cost_to_market(ibkr_avg_cost, currency)
-            self.on_open(symbol, entry, qty, trail_stop_pct, currency)
-            log(f"[Tracker] Registered existing: {symbol} @ "
+            side = 'SHORT' if qty < 0 else 'LONG'
+            self.on_open(symbol, entry, qty, trail_stop_pct, currency, side=side)
+            log(f"[Tracker] Registered existing: {symbol} {side} @ "
                 f"{entry:.4f} {currency}")
 
     def update(self, symbol: str, price: float,
@@ -217,20 +232,32 @@ class PositionTracker:
         """
         Update peak price and trail stop.
         Price is market price (already in pence for LSE).
-        Trail stop moves UP only, never down.
+        LONG:  trail stop moves UP only (tracks highest price).
+        SHORT: trail stop moves DOWN only (tracks lowest price).
         """
         if symbol not in self.open:
             return
         state = self.open[symbol]
         state.current_price = price
 
-        if price > state.peak_price:
-            state.peak_price = price
-            new_stop = price * (1 - trail_stop_pct / 100)
-            if new_stop > state.trail_stop:
-                state.trail_stop = new_stop
-                log(f"[Tracker] {symbol} new peak {price:.4f}  "
-                    f"trail stop raised to {state.trail_stop:.4f}")
+        if state.side == 'SHORT':
+            # For shorts, peak_price tracks the lowest price seen
+            if price < state.peak_price:
+                state.peak_price = price
+                new_stop = price * (1 + trail_stop_pct / 100)
+                if new_stop < state.trail_stop:
+                    state.trail_stop = new_stop
+                    log(f"[Tracker] {symbol} SHORT new low {price:.4f}  "
+                        f"trail stop lowered to {state.trail_stop:.4f}")
+        else:
+            # LONG: existing logic
+            if price > state.peak_price:
+                state.peak_price = price
+                new_stop = price * (1 - trail_stop_pct / 100)
+                if new_stop > state.trail_stop:
+                    state.trail_stop = new_stop
+                    log(f"[Tracker] {symbol} new peak {price:.4f}  "
+                        f"trail stop raised to {state.trail_stop:.4f}")
 
         self._save_open(symbol)
 
@@ -240,6 +267,7 @@ class PositionTracker:
         """
         Returns exit reason if position should be closed, else None.
         Price is in market quote units — matches entry_price.
+        Handles both LONG and SHORT positions.
         """
         if symbol not in self.open:
             return None
@@ -247,23 +275,43 @@ class PositionTracker:
         state = self.open[symbol]
         entry = state.entry_price
 
-        # Take profit
-        if take_profit_pct > 0:
-            target = entry * (1 + take_profit_pct / 100)
-            if price >= target:
-                gain_pct = ((price - entry) / entry) * 100
-                log(f"[Tracker] TAKE PROFIT {symbol}  "
-                    f"price {price:.4f} >= target {target:.4f}  "
-                    f"gain: +{gain_pct:.2f}%")
-                return f"TAKE_PROFIT +{gain_pct:.1f}%"
+        if state.side == 'SHORT':
+            # Take profit for SHORT: price falls below target
+            if take_profit_pct > 0:
+                target = entry * (1 - take_profit_pct / 100)
+                if price <= target:
+                    gain_pct = ((entry - price) / entry) * 100
+                    log(f"[Tracker] TAKE PROFIT SHORT {symbol}  "
+                        f"price {price:.4f} <= target {target:.4f}  "
+                        f"gain: +{gain_pct:.2f}%")
+                    return f"TAKE_PROFIT +{gain_pct:.1f}%"
 
-        # Trailing stop
-        if trail_stop_pct > 0 and price <= state.trail_stop:
-            pnl_pct = ((price - entry) / entry) * 100
-            log(f"[Tracker] TRAIL STOP {symbol}  "
-                f"price {price:.4f} <= stop {state.trail_stop:.4f}  "
-                f"P&L: {pnl_pct:+.2f}%")
-            return f"TRAIL_STOP {pnl_pct:+.1f}%"
+            # Trailing stop for SHORT: price rises above stop
+            if trail_stop_pct > 0 and price >= state.trail_stop:
+                pnl_pct = ((entry - price) / entry) * 100
+                log(f"[Tracker] TRAIL STOP SHORT {symbol}  "
+                    f"price {price:.4f} >= stop {state.trail_stop:.4f}  "
+                    f"P&L: {pnl_pct:+.2f}%")
+                return f"TRAIL_STOP {pnl_pct:+.1f}%"
+        else:
+            # LONG: existing logic
+            # Take profit
+            if take_profit_pct > 0:
+                target = entry * (1 + take_profit_pct / 100)
+                if price >= target:
+                    gain_pct = ((price - entry) / entry) * 100
+                    log(f"[Tracker] TAKE PROFIT {symbol}  "
+                        f"price {price:.4f} >= target {target:.4f}  "
+                        f"gain: +{gain_pct:.2f}%")
+                    return f"TAKE_PROFIT +{gain_pct:.1f}%"
+
+            # Trailing stop
+            if trail_stop_pct > 0 and price <= state.trail_stop:
+                pnl_pct = ((price - entry) / entry) * 100
+                log(f"[Tracker] TRAIL STOP {symbol}  "
+                    f"price {price:.4f} <= stop {state.trail_stop:.4f}  "
+                    f"P&L: {pnl_pct:+.2f}%")
+                return f"TRAIL_STOP {pnl_pct:+.1f}%"
 
         return None
 

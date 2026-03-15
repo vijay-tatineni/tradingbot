@@ -169,6 +169,10 @@ class Indicators:
         low_min  = df['low'].rolling(period).min()
         wr       = -100 * (high_max - df['close']) / (high_max - low_min)
 
+        # Handle zero denominator (high_max == low_min → flat price)
+        wr = wr.replace([np.inf, -np.inf], -50.0)
+        wr = wr.fillna(-50.0)
+
         curr = round(float(wr.iloc[-1]), 2)
         prev = round(float(wr.iloc[-2]), 2)
 
@@ -204,10 +208,16 @@ class Indicators:
         tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
         atr      = tr.rolling(period).mean()
-        plus_di  = 100 * (plus_dm.rolling(period).mean() / atr)
-        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
 
-        dx  = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).fillna(0)
+        # Handle zero ATR (no price movement)
+        if atr.iloc[-1] == 0 or pd.isna(atr.iloc[-1]):
+            return ADXResult(0.0, 'NONE')
+
+        plus_di  = 100 * (plus_dm.rolling(period).mean() / atr).fillna(0)
+        minus_di = 100 * (minus_dm.rolling(period).mean() / atr).fillna(0)
+
+        di_sum = plus_di + minus_di
+        dx = (100 * (plus_di - minus_di).abs() / di_sum).replace([np.inf, -np.inf], 0).fillna(0)
         adx = dx.rolling(period).mean()
 
         val = round(float(adx.iloc[-1]), 2) if not pd.isna(adx.iloc[-1]) else 0.0
@@ -225,5 +235,14 @@ class Indicators:
         gain  = delta.where(delta > 0, 0.0).rolling(period).mean()
         loss  = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
         rs    = gain / loss
+
+        # Handle all-same-price: gain=0, loss=0 → rs=NaN → RSI=50
+        rs = rs.replace([np.inf, -np.inf], 0)
+        rs = rs.fillna(0)
+
         rsi   = 100 - (100 / (1 + rs))
-        return round(float(rsi.iloc[-1]), 2)
+
+        val = float(rsi.iloc[-1])
+        if pd.isna(val) or np.isinf(val):
+            return 50.0
+        return round(val, 2)

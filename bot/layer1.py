@@ -228,6 +228,24 @@ class ActiveTrading:
                 else:
                     action = "BLOCKED by plugin"
 
+            elif result.signal == -1 and not inst.get('long_only', True):
+                # Fresh short from flat
+                allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
+                if allowed:
+                    action, fill_result = self.orders.handle_signal(
+                        inst, result.signal, result.confidence, pos)
+                    if 'SHORTED' in action and fill_result:
+                        fill_price = fill_result.fill_price or price
+                        fill_qty = fill_result.filled_qty or inst['qty']
+                        self.tracker.on_open(symbol, fill_price, -fill_qty,
+                                             trail_stop_pct, inst.get('currency','USD'),
+                                             side='SHORT')
+                        for p in self.plugins:
+                            p.post_trade(inst, -1, action, fill_price)
+                        pos_info = self.portfolio.get_position_info(symbol, price)
+                else:
+                    action = "BLOCKED by plugin"
+
         # Refresh position info after any trades
         pos_info   = self.portfolio.get_position_info(symbol, price)
         stop_level = self.tracker.get_stop_level(symbol)

@@ -6,6 +6,7 @@ Uses pytz for proper DST handling (BST/GMT for LSE, EDT/EST for US).
 
 import datetime
 import pytz
+import holidays
 
 
 class MarketHours:
@@ -34,6 +35,39 @@ class MarketHours:
     EUR_OPEN  = (9, 0)
     EUR_CLOSE = (17, 30)
 
+    # Holiday calendars
+    UK_HOLIDAYS = holidays.UK()
+    US_HOLIDAYS = holidays.US()
+    FR_HOLIDAYS = holidays.France()
+
+    def __init__(self):
+        self._holiday_name: str = ''
+
+    def is_holiday(self, inst: dict) -> tuple[bool, str]:
+        """Check if today is a holiday for this instrument's market.
+
+        Returns (is_holiday, holiday_name) using the local date for
+        the relevant market timezone.
+        """
+        now_utc = datetime.datetime.now(pytz.utc)
+        market   = inst.get('market', '')
+        currency = inst.get('currency', 'USD')
+
+        if market == 'LSE' or currency == 'GBP':
+            local_date = now_utc.astimezone(self.LONDON_TZ).date()
+            name = self.UK_HOLIDAYS.get(local_date, '')
+            return (bool(name), name)
+
+        if currency == 'EUR':
+            local_date = now_utc.astimezone(self.PARIS_TZ).date()
+            name = self.FR_HOLIDAYS.get(local_date, '')
+            return (bool(name), name)
+
+        # Default: US
+        local_date = now_utc.astimezone(self.NEW_YORK_TZ).date()
+        name = self.US_HOLIDAYS.get(local_date, '')
+        return (bool(name), name)
+
     def is_open(self, inst: dict) -> bool:
         """Return True if this instrument's market is currently open."""
         if inst['sec_type'] == 'CFD':
@@ -47,17 +81,33 @@ class MarketHours:
         market   = inst.get('market', '')
         currency = inst.get('currency', 'USD')
 
+        # Holiday check using local dates for each market
         if market == 'LSE' or currency == 'GBP':
+            local_date = now_utc.astimezone(self.LONDON_TZ).date()
+            hol_name = self.UK_HOLIDAYS.get(local_date, '')
+            if hol_name:
+                self._holiday_name = hol_name
+                return False
             london = now_utc.astimezone(self.LONDON_TZ)
             h, m = london.hour, london.minute
             return self.LSE_OPEN <= (h, m) < self.LSE_CLOSE
 
         if currency == 'EUR':
+            local_date = now_utc.astimezone(self.PARIS_TZ).date()
+            hol_name = self.FR_HOLIDAYS.get(local_date, '')
+            if hol_name:
+                self._holiday_name = hol_name
+                return False
             paris = now_utc.astimezone(self.PARIS_TZ)
             h, m = paris.hour, paris.minute
             return self.EUR_OPEN <= (h, m) < self.EUR_CLOSE
 
         # Default: US SMART hours in New York time
+        local_date = now_utc.astimezone(self.NEW_YORK_TZ).date()
+        hol_name = self.US_HOLIDAYS.get(local_date, '')
+        if hol_name:
+            self._holiday_name = hol_name
+            return False
         ny = now_utc.astimezone(self.NEW_YORK_TZ)
         h, m = ny.hour, ny.minute
         return self.US_OPEN <= (h, m) < self.US_CLOSE

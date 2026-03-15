@@ -9,3 +9,4 @@ anthropic>=0.18.0,<1.0.0
 pytz>=2023.3
 bcrypt>=4.1.0,<5.0.0
 PyJWT>=2.8.0,<3.0.0
+holidays>=0.46
