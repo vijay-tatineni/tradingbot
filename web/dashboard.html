@@ -62,9 +62,28 @@ tr:hover td { background:#1c2128; }
 .pos-item { display:flex; gap:8px; align-items:baseline; font-size:0.7rem; }
 .pos-sym { color:var(--gold); font-weight:700; min-width:65px; }
 .pos-detail { color:var(--muted); font-size:0.63rem; }
+
+/* ── Nav Bar ── */
+.navbar { display:flex; align-items:center; padding:10px 24px; background:var(--bg2); border-bottom:1px solid var(--border); gap:8px; }
+.navbar a, .navbar span { font-size:0.72rem; text-decoration:none; padding:6px 14px; border-radius:4px; font-family:'JetBrains Mono',monospace; }
+.navbar a { color:var(--muted); border:1px solid transparent; }
+.navbar a:hover { color:var(--text); border-color:var(--border); }
+.navbar a.active { color:var(--gold); border:1px solid var(--gold); }
+.nav-spacer { flex:1; }
+.nav-user { color:var(--green); font-size:0.65rem; padding:6px 0; }
+.nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; }
+.nav-logout:hover { background:#2d0a0a !important; }
 </style>
 </head>
 <body>
+
+<nav class="navbar">
+  <a href="dashboard.html" class="active">Dashboard</a>
+  <a href="instruments.html">Instruments Editor</a>
+  <div class="nav-spacer"></div>
+  <span class="nav-user" id="navUser"></span>
+  <a href="#" class="nav-logout" onclick="logout()">Logout</a>
+</nav>
 
 <div class="header">
   <h1>⚡ Trading Bot Dashboard</h1>
@@ -118,6 +137,30 @@ tr:hover td { background:#1c2128; }
 </div>
 
 <script>
+const API = 'http://188.166.150.137:8082';
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  window.location.href = 'login.html';
+}
+
+// Auth check: redirect to login if no valid token
+(async function checkAuth() {
+  const token = localStorage.getItem('jwt_token');
+  if (!token) { window.location.href = 'login.html?redirect=dashboard'; return; }
+  try {
+    const r = await fetch(API + '/api/verify', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) { window.location.href = 'login.html?redirect=dashboard'; return; }
+  } catch(e) {
+    // If API is unreachable, allow viewing (data.json is static)
+  }
+  const user = localStorage.getItem('jwt_user');
+  if (user) document.getElementById('navUser').textContent = 'Logged in as: ' + user;
+})();
+
 async function load() {
   try {
     const r = await fetch('data.json?t=' + Date.now());

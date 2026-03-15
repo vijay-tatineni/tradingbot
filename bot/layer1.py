@@ -76,11 +76,12 @@ class ActiveTrading:
         Remove anything we track that IBKR doesn't have.
         """
         active_symbols = {inst['symbol'] for inst in self.cfg.active_instruments}
+        unmanaged = set(getattr(self.cfg, 'unmanaged_positions', []))
 
         ibkr_positions = {}
         for p in self.portfolio.get_all_positions():
             sym = p.contract.symbol
-            if sym in active_symbols and p.position != 0:
+            if sym in active_symbols and sym not in unmanaged and p.position != 0:
                 ibkr_positions[sym] = p
 
         for sym, p in ibkr_positions.items():
@@ -304,21 +305,47 @@ class ActiveTrading:
         }
 
     def _close_all(self) -> None:
-        """Emergency close all positions, update tracker, alert."""
+        """
+        Emergency close ALL positions across all layers (L1, L2, L3).
+        Uses IBKR live positions directly so nothing is missed.
+        """
         closed_symbols = []
-        for inst in self.cfg.active_instruments:
-            if 'contract' not in inst:
+
+        # Close every position IBKR reports — not just Layer 1 instruments
+        all_positions = self.portfolio.get_all_positions()
+        for p in all_positions:
+            if p.position == 0:
                 continue
-            symbol = inst['symbol']
-            pos = self.portfolio.get_position(symbol)
-            if pos != 0:
-                fill_result = self.orders.close(inst, pos)
-                if fill_result:
-                    exit_price = fill_result.fill_price if fill_result.fill_price else 0
-                    if symbol in self.tracker.open:
-                        exit_price = exit_price or self.tracker.open[symbol].current_price
+            symbol = p.contract.symbol
+
+            # Skip unmanaged positions (e.g. ghost XAUUSD)
+            unmanaged = set(getattr(self.cfg, 'unmanaged_positions', []))
+            if symbol in unmanaged:
+                log(f"  [Emergency] Skipping unmanaged: {symbol}")
+                continue
+
+            # Try to find the instrument config for this symbol (any layer)
+            inst = self._find_instrument(symbol)
+            if inst and 'contract' in inst:
+                fill_result = self.orders.close(inst, p.position)
+            else:
+                # No config found — build a minimal close using the IBKR contract
+                try:
+                    side = 'SELL' if p.position > 0 else 'BUY'
+                    qty = abs(p.position)
+                    fill_result = self.orders.place(
+                        p.contract, side, qty, symbol
+                    )
+                except Exception as e:
+                    log(f"  [Emergency] Failed to close {symbol}: {e}", "ERROR")
+                    fill_result = None
+
+            if fill_result:
+                exit_price = getattr(fill_result, 'fill_price', 0) or 0
+                if symbol in self.tracker.open:
+                    exit_price = exit_price or self.tracker.open[symbol].current_price
                     self.tracker.on_close(symbol, exit_price, 'EMERGENCY_STOP', 0)
-                    closed_symbols.append(symbol)
+                closed_symbols.append(symbol)
 
         # Clear all watching states
         for sym in list(self.tracker.watching):
@@ -334,6 +361,20 @@ class ActiveTrading:
             )
 
         log(f"Emergency stop complete — closed {len(closed_symbols)} positions")
+
+    def _find_instrument(self, symbol: str) -> dict | None:
+        """Find instrument config across all layers by symbol."""
+        for inst in self.cfg.active_instruments:
+            if inst.get('symbol') == symbol:
+                return inst
+        for inst in self.cfg.accum_instruments:
+            if inst.get('symbol') == symbol:
+                return inst
+        # Check Layer 3 silver instruments
+        for inst in self.cfg._raw.get('layer3_silver', []):
+            if inst.get('symbol') == symbol:
+                return inst
+        return None
 
     def _sync_existing_positions(self) -> None:
         """Register any IBKR positions not already tracked (e.g. first run)."""

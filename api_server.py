@@ -152,11 +152,61 @@ def get_instruments():
 @require_auth
 def save_instruments():
     data = request.get_json()
+
+    # ── Validate config structure before saving ──────────────
+    errors = validate_config(data)
+    if errors:
+        return jsonify({'ok': False, 'message': 'Validation failed',
+                        'errors': errors}), 400
+
     try:
         save(data)
         return jsonify({'ok': True, 'message': 'Saved successfully'})
     except Exception as e:
         return jsonify({'ok': False, 'message': str(e)}), 500
+
+
+def validate_config(data: dict) -> list:
+    """
+    Validate the full instruments.json structure.
+    Returns a list of error strings (empty = valid).
+    """
+    errors = []
+
+    if not isinstance(data, dict):
+        return ['Config must be a JSON object']
+
+    # ── settings section ─────────────────────────────────────
+    if 'settings' not in data:
+        errors.append("Missing 'settings' section")
+    elif not isinstance(data['settings'], dict):
+        errors.append("'settings' must be a JSON object")
+    else:
+        required_settings = [
+            'host', 'port', 'client_id', 'account',
+            'check_interval_mins', 'portfolio_loss_limit', 'web_dir',
+        ]
+        for key in required_settings:
+            if key not in data['settings']:
+                errors.append(f"Missing required setting: '{key}'")
+
+    # ── layer1_active section ────────────────────────────────
+    if 'layer1_active' not in data:
+        errors.append("Missing 'layer1_active' section")
+    elif not isinstance(data['layer1_active'], list):
+        errors.append("'layer1_active' must be a list")
+    else:
+        required_inst_fields = ['symbol', 'name', 'sec_type', 'exchange', 'currency', 'qty']
+        for i, inst in enumerate(data['layer1_active']):
+            if not isinstance(inst, dict):
+                errors.append(f"layer1_active[{i}] must be a JSON object")
+                continue
+            for field in required_inst_fields:
+                if field not in inst:
+                    sym = inst.get('symbol', f'index {i}')
+                    errors.append(f"layer1_active '{sym}' missing required field: '{field}'")
+
+    return errors
 
 
 @app.route('/api/instruments/layer1', methods=['POST'])

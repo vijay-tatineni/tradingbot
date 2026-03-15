@@ -27,8 +27,9 @@ class TelegramAlerts(BasePlugin):
         self.token    = os.environ.get('TELEGRAM_BOT_TOKEN', '')
         self.chat_id  = os.environ.get('TELEGRAM_CHAT_ID', '')
         self.enabled  = bool(self.token and self.chat_id)
-        self.trade_count = 0
-        self.daily_pnl   = 0.0
+        self.trade_count       = 0
+        self.daily_pnl         = 0.0
+        self._last_summary_date = None  # tracks last daily summary date to avoid dupes
 
     # ── Plugin lifecycle hooks ──────────────────────
 
@@ -65,10 +66,12 @@ class TelegramAlerts(BasePlugin):
     def on_cycle_end(self, cycle: int, signal_rows: list,
                      total_pnl: float) -> None:
         self.daily_pnl = total_pnl
-        # Daily summary at ~17:00 UTC
+        # Daily summary at ~17:00 UTC — send only once per day
         now = datetime.datetime.now(datetime.timezone.utc)
-        if now.hour == 17 and now.minute < (self.cfg.check_interval_mins + 1):
+        today = now.strftime('%Y-%m-%d')
+        if now.hour == 17 and self._last_summary_date != today:
             self._send_daily_summary(signal_rows, total_pnl)
+            self._last_summary_date = today
 
     def on_shutdown(self) -> None:
         if self.enabled:

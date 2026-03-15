@@ -134,6 +134,13 @@ class TradingBot:
         cycle = 0
 
         while True:
+            # ── Weekend sleep — no markets open ─────────────
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if now.weekday() >= 5:  # Saturday=5, Sunday=6
+                log("Weekend — markets closed, sleeping 1 hour")
+                self.ib.sleep(3600)
+                continue
+
             cycle += 1
             separator(f"CYCLE #{cycle}  ·  "
                       f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

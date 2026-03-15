@@ -62,6 +62,9 @@ class Config:
         self.adx_period    : int   = s.get('adx_period', 14)
         self.adx_threshold : float = s.get('adx_threshold', 20)
 
+        # ── Unmanaged positions (excluded from P&L / emergency stop) ──
+        self.unmanaged_positions : list = s.get('unmanaged_positions', [])
+
         # ── Instruments ───────────────────────────────────────
         self.active_instruments : list = [
             i for i in self._raw['layer1_active']

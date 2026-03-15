@@ -13,8 +13,9 @@ class MarketHours:
     Determines whether a market is currently open.
     Uses actual exchange timezones so DST shifts are handled automatically.
 
-    LSE: 08:00-16:30 Europe/London
-    US:  09:30-16:00 America/New_York
+    LSE: 08:00-16:30 Europe/London  (handles GMT/BST)
+    US:  09:30-16:00 America/New_York (handles EST/EDT)
+    EUR: 09:00-17:30 Europe/Paris   (handles CET/CEST)
     """
 
     LONDON_TZ   = pytz.timezone('Europe/London')
@@ -28,9 +29,10 @@ class MarketHours:
     US_OPEN  = (9, 30)
     US_CLOSE = (16, 0)
 
-    # EUR hours in London time (approximation — most EU exchanges 08:00-16:30 CET)
-    EUR_OPEN  = (8, 0)
-    EUR_CLOSE = (16, 30)
+    # EUR hours in CET (Europe/Paris) local time — XETRA/Euronext 09:00-17:30
+    PARIS_TZ  = pytz.timezone('Europe/Paris')
+    EUR_OPEN  = (9, 0)
+    EUR_CLOSE = (17, 30)
 
     def is_open(self, inst: dict) -> bool:
         """Return True if this instrument's market is currently open."""
@@ -51,8 +53,8 @@ class MarketHours:
             return self.LSE_OPEN <= (h, m) < self.LSE_CLOSE
 
         if currency == 'EUR':
-            london = now_utc.astimezone(self.LONDON_TZ)
-            h, m = london.hour, london.minute
+            paris = now_utc.astimezone(self.PARIS_TZ)
+            h, m = paris.hour, paris.minute
             return self.EUR_OPEN <= (h, m) < self.EUR_CLOSE
 
         # Default: US SMART hours in New York time

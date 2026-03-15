@@ -20,7 +20,8 @@
     "rsi_oversold":          35,
     "rsi_overbought":        70,
     "adx_period":            14,
-    "adx_threshold":         20
+    "adx_threshold":         20,
+    "unmanaged_positions":   ["XAUUSD"]
   },
 
   "layer1_active": [

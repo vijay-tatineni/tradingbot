@@ -31,6 +31,7 @@ class LearningLoop(BasePlugin):
     def __init__(self, cfg):
         self.cfg = cfg
         self.db  = DB_FILE
+        self._last_retrain_time = datetime.datetime.utcnow()
         self._init_db()
 
     # ── Lifecycle hooks ───────────────────────────────────────
@@ -55,12 +56,14 @@ class LearningLoop(BasePlugin):
 
     def on_cycle_end(self, cycle: int, signal_rows: list,
                      total_pnl: float) -> None:
-        """Backup exit check + weekly retrain trigger."""
+        """Backup exit check + weekly retrain trigger (time-based)."""
         self._check_exits(signal_rows)
 
-        # Weekly retrain trigger (every 672 cycles at 15min = 7 days)
-        if cycle % 672 == 0:
+        # Weekly retrain trigger — time-based (every 7 days regardless of cycle interval)
+        elapsed = datetime.datetime.utcnow() - self._last_retrain_time
+        if elapsed > datetime.timedelta(days=7):
             self._retrain()
+            self._last_retrain_time = datetime.datetime.utcnow()
 
     # ── Entry recording ───────────────────────────────────────
 

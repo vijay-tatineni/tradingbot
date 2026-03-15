@@ -58,7 +58,7 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 
 <div class="login-box">
   <h1>Trading Bot</h1>
-  <div class="sub">Instruments Editor — Login Required</div>
+  <div class="sub">Login Required</div>
 
   <div class="error-msg" id="error"></div>
 
@@ -82,6 +82,14 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 <script>
 const API = 'http://188.166.150.137:8082';
 
+function getRedirectTarget() {
+  const params = new URLSearchParams(window.location.search);
+  const redirect = params.get('redirect');
+  if (redirect === 'instruments') return 'instruments.html';
+  if (redirect === 'dashboard') return 'dashboard.html';
+  return 'dashboard.html';
+}
+
 // If already logged in with valid token, redirect
 (async function checkExisting() {
   const token = localStorage.getItem('jwt_token');
@@ -90,7 +98,7 @@ const API = 'http://188.166.150.137:8082';
     const r = await fetch(API + '/api/verify', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (r.ok) window.location.href = 'instruments.html';
+    if (r.ok) window.location.href = getRedirectTarget();
   } catch(e) { /* ignore */ }
 })();
 
@@ -116,7 +124,7 @@ async function handleLogin(e) {
     if (r.ok && data.token) {
       localStorage.setItem('jwt_token', data.token);
       localStorage.setItem('jwt_user', data.username);
-      window.location.href = 'instruments.html';
+      window.location.href = getRedirectTarget();
     } else {
       errEl.textContent = data.error || 'Login failed';
       errEl.classList.add('show');
