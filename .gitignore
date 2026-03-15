@@ -15,6 +15,7 @@ venv/
 .env
 .env.*
 .env.example
+users.json
 
 # Dashboard runtime data
 web/data.json

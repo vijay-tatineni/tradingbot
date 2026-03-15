@@ -123,7 +123,9 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
     <div style="color:var(--muted);font-size:0.65rem;margin-top:4px">Edit instruments.json — changes require bot restart</div>
   </div>
   <div class="header-links">
+    <span id="userBadge" style="color:var(--green);font-size:0.65rem;padding:6px 0"></span>
     <a href="dashboard.html">← Dashboard</a>
+    <a href="#" onclick="logout()" style="color:var(--red);border-color:var(--red)">Logout</a>
   </div>
 </div>
 
@@ -294,21 +296,36 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
 
 <script>
 const API = 'http://188.166.150.137:8081';
-const API_TOKEN = localStorage.getItem('api_token') || '';
+const JWT_TOKEN = localStorage.getItem('jwt_token') || '';
 let data = null;
 let dirty = false;
 
+// Redirect to login if no token
+if (!JWT_TOKEN) window.location.href = 'login.html';
+
+// Show logged-in user
+(function() {
+  const user = localStorage.getItem('jwt_user');
+  if (user) document.getElementById('userBadge').textContent = user;
+})();
+
 function apiHeaders(extra = {}) {
   const h = { ...extra };
-  if (API_TOKEN) h['X-API-Token'] = API_TOKEN;
+  if (JWT_TOKEN) h['Authorization'] = 'Bearer ' + JWT_TOKEN;
   return h;
+}
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  window.location.href = 'login.html';
 }
 
 // ── Load ─────────────────────────────────────────
 async function loadData() {
   try {
     const r = await fetch(API + '/api/instruments', { headers: apiHeaders() });
-    if (r.status === 401) { promptToken(); return; }
+    if (r.status === 401) { logout(); return; }
     data = await r.json();
     renderLayer1();
     renderLayer2();
@@ -518,7 +535,7 @@ async function saveAll() {
       headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(data),
     });
-    if (r.status === 401) { promptToken(); return; }
+    if (r.status === 401) { logout(); return; }
     const result = await r.json();
     if(result.ok) {
       toast('✅ Saved! Restart the bot to apply changes.', 'success');
@@ -550,16 +567,7 @@ window.addEventListener('beforeunload', e => {
   if(dirty) { e.preventDefault(); e.returnValue = ''; }
 });
 
-// ── Auth prompt ──────────────────────────────────
-function promptToken() {
-  const t = prompt('API token required. Enter your API_TOKEN:');
-  if (t) {
-    localStorage.setItem('api_token', t);
-    location.reload();
-  } else {
-    toast('Authentication required', 'error');
-  }
-}
+// ── Auth: logout redirects to login page ─────────
 
 // ── Init ─────────────────────────────────────────
 loadData();

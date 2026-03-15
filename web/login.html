@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Login — Trading Bot</title>
+<style>
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 900;
+}
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2128;
+  --green:#22c55e; --red:#ef4444; --gold:#f5c842;
+  --blue:#38bdf8; --muted:#8b949e; --border:#30363d;
+  --text:#ffffff;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; display:flex; justify-content:center; align-items:center; min-height:100vh; }
+
+.login-box {
+  background:var(--bg2); border:1px solid var(--border); border-radius:12px;
+  padding:40px; width:380px; max-width:90vw;
+}
+.login-box h1 { color:var(--gold); font-size:1.3rem; font-weight:700; text-align:center; margin-bottom:8px; }
+.login-box .sub { color:var(--muted); font-size:0.68rem; text-align:center; margin-bottom:28px; }
+
+.form-group { margin-bottom:16px; }
+.form-group label { display:block; font-size:0.65rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
+.form-group input {
+  width:100%; padding:10px 12px; background:var(--bg3); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.82rem;
+}
+.form-group input:focus { outline:none; border-color:var(--gold); }
+
+.btn-login {
+  width:100%; padding:12px; background:var(--gold); color:#000; border:none;
+  border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:0.82rem;
+  font-weight:700; cursor:pointer; margin-top:8px; transition:background 0.15s;
+}
+.btn-login:hover { background:#ffd700; }
+.btn-login:disabled { opacity:0.5; cursor:not-allowed; }
+
+.error-msg {
+  background:#2d0a0a; color:var(--red); border:1px solid var(--red);
+  border-radius:6px; padding:10px 12px; font-size:0.72rem; margin-bottom:16px;
+  display:none; text-align:center;
+}
+.error-msg.show { display:block; }
+
+.footer { margin-top:24px; text-align:center; }
+.footer a { color:var(--muted); font-size:0.65rem; text-decoration:none; }
+.footer a:hover { color:var(--text); }
+</style>
+</head>
+<body>
+
+<div class="login-box">
+  <h1>Trading Bot</h1>
+  <div class="sub">Instruments Editor — Login Required</div>
+
+  <div class="error-msg" id="error"></div>
+
+  <form id="loginForm" onsubmit="handleLogin(event)">
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn-login" id="loginBtn">Log In</button>
+  </form>
+
+  <div class="footer">
+    <a href="dashboard.html">View Dashboard</a>
+  </div>
+</div>
+
+<script>
+const API = 'http://188.166.150.137:8081';
+
+// If already logged in with valid token, redirect
+(async function checkExisting() {
+  const token = localStorage.getItem('jwt_token');
+  if (!token) return;
+  try {
+    const r = await fetch(API + '/api/verify', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (r.ok) window.location.href = 'instruments.html';
+  } catch(e) { /* ignore */ }
+})();
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  const errEl = document.getElementById('error');
+  errEl.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = 'Logging in...';
+
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  try {
+    const r = await fetch(API + '/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await r.json();
+
+    if (r.ok && data.token) {
+      localStorage.setItem('jwt_token', data.token);
+      localStorage.setItem('jwt_user', data.username);
+      window.location.href = 'instruments.html';
+    } else {
+      errEl.textContent = data.error || 'Login failed';
+      errEl.classList.add('show');
+    }
+  } catch(err) {
+    errEl.textContent = 'Cannot connect to API server';
+    errEl.classList.add('show');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Log In';
+}
+</script>
+</body>
+</html>
