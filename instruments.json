@@ -1,6 +1,6 @@
 {
   "_readme": "Edit this file to add/remove instruments. Restart the bot to apply changes.",
-  "_version": "2.1",
+  "_version": "3.0",
 
   "settings": {
     "account":               "DUQ141950",
@@ -48,199 +48,223 @@
       "symbol": "SGLN", "name": "iShares Physical Gold", "flag": "\ud83c\udfc5",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "timeframe": "4hr",
+      "trail_stop_pct": 2.0, "take_profit_pct": 15.0,
       "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
-      "notes": "LSE ETF — physical gold backed"
+      "notes": "LSE ETF — physical gold. 2yr backtest: +$18,850 PF 2.76 on 4hr bars"
     },
     {
       "symbol": "SSLN", "name": "iShares Physical Silver", "flag": "\ud83e\ude99",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 10, "loss_limit": 150, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.0, "take_profit_pct": 4.0,
+      "timeframe": "daily",
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 10,
-      "notes": "LSE ETF — physical silver backed"
+      "notes": "LSE ETF — physical silver. 2yr backtest: +$30,385 PF 10.63 on daily bars"
     },
 
     {
       "symbol": "ASML", "name": "ASML Holding", "flag": "\ud83d\udd2c",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 1, "loss_limit": 200, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "timeframe": "daily",
+      "trail_stop_pct": 4.0, "take_profit_pct": 12.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "Dutch semiconductor equipment — trades on NASDAQ as USD ADR. 9% allocation in pie."
+      "notes": "Dutch semiconductor equipment. 2yr backtest: +$290 PF 5.43 on daily bars"
     },
     {
       "symbol": "GOOGL", "name": "Alphabet Class A", "flag": "\ud83d\udd0d",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "daily",
       "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "Google parent. 8% allocation in pie."
+      "notes": "Google parent. 2yr backtest: +$287 PF 12.80 on daily bars"
     },
     {
       "symbol": "NVDA", "name": "Nvidia", "flag": "\ud83d\udc9a",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 200, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
+      "disabled_reason": "backtest_poor_performer_2yr",
       "notes": "AI semiconductor leader — moved to Layer 2 accumulation."
     },
     {
       "symbol": "META", "name": "Meta Platforms", "flag": "\ud83d\udc41",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
+      "disabled_reason": "backtest_poor_performer_2yr",
       "notes": "Facebook/Instagram/WhatsApp — moved to Layer 2 accumulation."
     },
     {
       "symbol": "AMZN", "name": "Amazon", "flag": "\ud83d\udce6",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "E-commerce and AWS cloud — moved to Layer 2 accumulation."
+      "disabled_reason": "backtest_poor_performer_2yr",
+      "notes": "E-commerce and AWS cloud — marginal P&L, stays in Layer 2."
     },
     {
       "symbol": "TSM", "name": "Taiwan Semiconductor", "flag": "\ud83d\udda5",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "World's largest chip foundry — USD ADR. Disabled after backtest."
+      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "World's largest chip foundry. RE-ENABLED: 2yr backtest +$383 PF 12.23 daily, +$310 4hr"
     },
     {
       "symbol": "AVGO", "name": "Broadcom", "flag": "\ud83d\udce1",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
+      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
       "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "Semiconductor and infrastructure software. 6% allocation in pie."
+      "notes": "Semiconductor and infrastructure software. 2yr backtest: +$256 PF 3.12 on 4hr bars"
     },
     {
       "symbol": "ANET", "name": "Arista Networks", "flag": "\ud83c\udf10",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "Cloud networking equipment. Disabled after backtest."
+      "disabled_reason": "backtest_poor_performer_2yr",
+      "notes": "Cloud networking. 2yr backtest: ~$0 P&L — no edge."
     },
     {
       "symbol": "MRVL", "name": "Marvell Technology", "flag": "\u2699\ufe0f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "Data infrastructure semiconductors. Disabled after backtest."
+      "disabled_reason": "backtest_poor_performer_2yr",
+      "notes": "Data infrastructure semiconductors. 2yr backtest: -$6 — no edge."
     },
     {
       "symbol": "MU", "name": "Micron Technology", "flag": "\ud83d\udcbe",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 120, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
       "trail_stop_pct": 1.5, "take_profit_pct": 4.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 20,
-      "notes": "Memory and storage chips. 5% allocation — tighter stops after backtest."
+      "notes": "Memory and storage chips. 2yr backtest: +$569 PF 3.96 on 4hr bars"
     },
     {
       "symbol": "CRWD", "name": "Crowdstrike", "flag": "\ud83d\udee1",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "Cybersecurity platform. Disabled after backtest."
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
+      "trail_stop_pct": 2.0, "take_profit_pct": 8.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "Cybersecurity platform. RE-ENABLED: 2yr backtest +$224 PF 2.18 on 4hr bars"
     },
     {
       "symbol": "SU", "name": "Schneider Electric", "flag": "\u26a1",
       "sec_type": "STK", "exchange": "SMART", "currency": "EUR",
       "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "timeframe": "4hr",
+      "trail_stop_pct": 4.0, "take_profit_pct": 12.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "French energy management — Euronext Paris."
+      "notes": "French energy management. 2yr backtest: +$138 PF 2.18 on 4hr bars"
     },
     {
       "symbol": "CEG", "name": "Constellation Energy", "flag": "\u2622\ufe0f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "Nuclear power generation. Disabled after backtest."
+      "qty": 2, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
+      "trail_stop_pct": 2.0, "take_profit_pct": 8.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "Nuclear power generation. RE-ENABLED: 2yr backtest +$265 PF 2.26 on 4hr bars"
     },
     {
       "symbol": "SCCO", "name": "Southern Copper", "flag": "\ud83e\ude99",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 3, "loss_limit": 120, "long_only": true, "enabled": true,
+      "timeframe": "daily",
       "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
-      "notes": "Copper mining — Americas. Tighter stops after backtest optimisation."
+      "notes": "Copper mining — Americas. 2yr backtest: +$155 PF 2.48 78.6% win rate on daily bars"
     },
     {
       "symbol": "VRT", "name": "Vertiv Holdings", "flag": "\ud83d\udd0b",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
       "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "Data centre power infrastructure. 4% allocation in pie."
+      "notes": "Data centre power infrastructure. 2yr backtest: +$443 PF 2.43 on 4hr bars"
     },
     {
       "symbol": "ANTO", "name": "Antofagasta", "flag": "\u26cf",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 10, "loss_limit": 80, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "timeframe": "4hr",
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
-      "notes": "Chilean copper miner — LSE. Tighter stops after backtest optimisation."
+      "notes": "Chilean copper miner — LSE. 2yr backtest: +$9,202 PF 2.69 on 4hr bars"
     },
     {
       "symbol": "FCX", "name": "Freeport-McMoRan", "flag": "\ud83c\udfd4",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 10, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "Copper and gold mining. Disabled after backtest."
+      "disabled_reason": "backtest_poor_performer_2yr",
+      "notes": "Copper and gold mining. 2yr backtest: marginal — no edge."
     },
     {
       "symbol": "PLTR", "name": "Palantir", "flag": "\ud83e\udd16",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 10, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "AI data analytics platform. Disabled after backtest."
+      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
+      "trail_stop_pct": 2.0, "take_profit_pct": 8.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "AI data analytics. RE-ENABLED: 2yr backtest +$426 PF 1.90 on 4hr bars"
     },
     {
       "symbol": "NBIS", "name": "Nebius Group NV", "flag": "\ud83d\ude80",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 10, "loss_limit": 100, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "AI cloud infrastructure — NASDAQ. Disabled after backtest."
+      "disabled_reason": "backtest_poor_performer_2yr",
+      "notes": "AI cloud infrastructure. 2yr backtest: marginal 4hr, good daily but low trades."
     },
 
     {
       "symbol": "CVX", "name": "Chevron", "flag": "\u26fd",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 5, "loss_limit": 150, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+      "timeframe": "daily",
+      "trail_stop_pct": 2.0, "take_profit_pct": 15.0,
       "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
-      "notes": "US energy major"
+      "notes": "US energy major. 2yr backtest: +$88 PF 1.80 on daily bars"
     },
     {
       "symbol": "AAPL", "name": "Apple", "flag": "\ud83c\udf4e",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 8, "loss_limit": 120, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
       "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
-      "notes": "US tech — defensive hold. Tighter stops after backtest optimisation."
+      "notes": "US tech — defensive hold. 2yr backtest: +$120 PF 1.35 on 4hr bars"
     },
     {
       "symbol": "MSFT", "name": "Microsoft", "flag": "\ud83e\ude9f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
-      "qty": 5, "loss_limit": 150, "long_only": true, "enabled": false,
-      "disabled_reason": "backtest_poor_performer",
-      "notes": "US tech — AI/cloud. Moved to Layer 2 accumulation."
+      "qty": 3, "loss_limit": 150, "long_only": true, "enabled": true,
+      "timeframe": "4hr",
+      "trail_stop_pct": 2.0, "take_profit_pct": 8.0,
+      "reentry_recovery_pct": 1.0, "reentry_cooldown_mins": 20,
+      "notes": "US tech — AI/cloud. RE-ENABLED: 2yr backtest +$547 PF 2.68 on 4hr bars"
     },
     {
       "symbol": "BARC", "name": "Barclays", "flag": "\ud83c\udfe6",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 400, "loss_limit": 80, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "timeframe": "4hr",
+      "trail_stop_pct": 4.0, "take_profit_pct": 12.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
-      "notes": "UK bank — LSE. Reduced qty and tighter stops after backtest."
+      "notes": "UK bank — LSE. 2yr backtest: +$36,340 PF 2.85 on 4hr bars (BEST OVERALL)"
     },
     {
       "symbol": "SHEL", "name": "Shell", "flag": "\ud83d\udee2",
       "sec_type": "STK", "exchange": "SMART", "currency": "GBP", "market": "LSE",
       "qty": 40, "loss_limit": 80, "long_only": true, "enabled": true,
-      "trail_stop_pct": 1.2, "take_profit_pct": 4.0,
+      "timeframe": "4hr",
+      "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
       "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
-      "notes": "UK energy — LSE. Reduced qty and tighter stops after backtest."
+      "notes": "UK energy — LSE. 2yr backtest: +$31,072 PF 3.17 on 4hr bars"
     }
   ],
 
@@ -291,7 +315,7 @@
       "symbol": "MSFT", "name": "Microsoft", "flag": "\ud83e\ude9f",
       "sec_type": "STK", "exchange": "SMART", "currency": "USD",
       "qty": 2, "enabled": true,
-      "notes": "Moved from Layer 1 — accumulate on dips"
+      "notes": "Also in Layer 1 — accumulate on dips in Layer 2"
     }
   ]
 }

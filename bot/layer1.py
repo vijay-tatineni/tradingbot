@@ -112,7 +112,10 @@ class ActiveTrading:
         if not mkt_open:
             return self._closed_row(inst, mkt_str)
 
-        df = self.feed.get(inst['contract'])
+        # Determine bar size from instrument timeframe setting
+        timeframe = inst.get('timeframe', 'daily')
+        bar_size = '4 hours' if timeframe == '4hr' else '1 day'
+        df = self.feed.get(inst['contract'], bar_size=bar_size)
         if df is None:
             return self._closed_row(inst, mkt_str)
 

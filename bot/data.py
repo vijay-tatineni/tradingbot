@@ -17,14 +17,16 @@ class DataFeed:
     def __init__(self, ib_conn):
         self.ib = ib_conn.ib
 
-    def get(self, contract, days: int = 300) -> pd.DataFrame | None:
+    def get(self, contract, days: int = 300,
+            bar_size: str = '1 day') -> pd.DataFrame | None:
         """
-        Fetch daily OHLCV bars for the given contract.
+        Fetch OHLCV bars for the given contract.
 
         Args:
             contract : qualified IBKR contract object
             days     : number of calendar days of history to fetch
                        (300 needed to calculate 200-period MA)
+            bar_size : IBKR bar size — '1 day' or '4 hours'
 
         Returns:
             pd.DataFrame with columns: date, open, high, low, close, volume
@@ -36,7 +38,7 @@ class DataFeed:
                 contract,
                 endDateTime='',
                 durationStr=f'{days} D',
-                barSizeSetting='1 day',
+                barSizeSetting=bar_size,
                 whatToShow=what_to_show,
                 useRTH=True
             )
