@@ -129,10 +129,12 @@ class TradingBot:
             # ── Weekend sleep — no markets open ─────────────
             now = datetime.datetime.now(datetime.timezone.utc)
             if now.weekday() >= 5:  # Saturday=5, Sunday=6
+                self.watchdog.set_sleep_mode(True)
                 log("Weekend — markets closed, sleeping 1 hour")
                 self.ib.sleep(3600)
                 continue
 
+            self.watchdog.set_sleep_mode(False)
             cycle += 1
             separator(f"CYCLE #{cycle}  ·  "
                       f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

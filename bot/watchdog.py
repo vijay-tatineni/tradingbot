@@ -11,6 +11,8 @@ from bot.logger import log
 
 class Watchdog:
 
+    SLEEP_STALE_MINS = 90  # longer threshold during weekend/sleep
+
     def __init__(self, alerts=None, max_stale_mins: int = 10):
         """
         Args:
@@ -23,6 +25,7 @@ class Watchdog:
         self.last_cycle     = 0
         self._running       = False
         self._thread        = None
+        self._sleep_mode    = False
 
     def start(self) -> None:
         """Start the watchdog background thread."""
@@ -37,6 +40,14 @@ class Watchdog:
         self.last_heartbeat = datetime.datetime.utcnow()
         self.last_cycle     = cycle
 
+    def set_sleep_mode(self, sleeping: bool) -> None:
+        """Enable/disable sleep mode (weekend, holidays). Resets heartbeat."""
+        self._sleep_mode = sleeping
+        self.last_heartbeat = datetime.datetime.utcnow()
+        if sleeping:
+            log("[Watchdog] Sleep mode ON — threshold raised to "
+                f"{self.SLEEP_STALE_MINS} min")
+
     def stop(self) -> None:
         self._running = False
 
@@ -47,10 +58,14 @@ class Watchdog:
             elapsed = (datetime.datetime.utcnow()
                        - self.last_heartbeat).total_seconds() / 60
 
-            if elapsed > self.max_stale_mins:
+            threshold = self.SLEEP_STALE_MINS if self._sleep_mode else self.max_stale_mins
+
+            if elapsed > threshold:
+                mode = "sleep" if self._sleep_mode else "trading"
                 msg = (f"🚨 Watchdog: Bot appears stuck!\n"
                        f"Last heartbeat: {elapsed:.0f} min ago\n"
-                       f"Last cycle: #{self.last_cycle}")
+                       f"Last cycle: #{self.last_cycle}\n"
+                       f"Mode: {mode}")
                 log(msg, "ERROR")
                 if self.alerts:
                     self.alerts.send(msg)
