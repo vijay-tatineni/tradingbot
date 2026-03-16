@@ -65,6 +65,10 @@ class Portfolio:
                             pct    = round(((avg_cost - current_price) / avg_cost) * 100, 2)
                         else:
                             unreal, pct = 0, 0
+                        # GBP: avg_cost and price are both in pence, so P&L is
+                        # in pence too — convert to pounds for display
+                        if currency == 'GBP':
+                            unreal = round(unreal / 100, 2)
                     else:
                         unreal, pct = 0, 0
                     return PositionInfo(
@@ -82,7 +86,7 @@ class Portfolio:
         Return total unrealised P&L across all positions in all currencies.
         Converts GBP and EUR to USD using live IBKR FX rates.
         Falls back to hardcoded rates if FX lookup fails.
-        Subtracts P&L from unmanaged positions (e.g. ghost XAUUSD).
+        Unmanaged positions (e.g. XAUUSD) are included in the total.
         """
         try:
             pnl_by_currency = {}
@@ -102,24 +106,10 @@ class Portfolio:
                 fx_rate = self._get_fx_rate(currency)
                 usd_total += pnl * fx_rate
 
-            # Subtract unmanaged positions so they don't affect emergency stop
-            unmanaged = getattr(self.cfg, 'unmanaged_positions', [])
-            if unmanaged:
-                for p in self.ib.positions(self.cfg.account):
-                    if p.contract.symbol in unmanaged and p.position != 0:
-                        # Estimate P&L from position data
-                        try:
-                            ticker = self.ib.reqMktData(p.contract, '', False, False)
-                            self.ib.sleep(1)
-                            price = ticker.marketPrice()
-                            self.ib.cancelMktData(p.contract)
-                            if price and price > 0:
-                                pnl = (price - p.avgCost) * p.position
-                                usd_total -= pnl
-                                log(f"  [Unmanaged] {p.contract.symbol}: "
-                                    f"excluded ${pnl:+.2f} from total P&L")
-                        except Exception:
-                            pass
+            # Note: unmanaged positions (e.g. XAUUSD) are included in
+            # account-level P&L but excluded from reconciliation and
+            # emergency stop close-all.  We skip market data requests
+            # for them to avoid IBKR error 321 on CFDs without data.
 
             return round(usd_total, 2)
         except Exception as e:
