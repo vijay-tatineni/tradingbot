@@ -62,13 +62,13 @@ tr:hover td { background:#1c2128; }
 .pos-item { display:flex; gap:8px; align-items:baseline; font-size:0.7rem; }
 .pos-sym { color:var(--gold); font-weight:700; min-width:65px; }
 .pos-detail { color:var(--muted); font-size:0.63rem; }
-
 /* ── Nav Bar ── */
 .navbar { display:flex; align-items:center; padding:10px 24px; background:var(--bg2); border-bottom:1px solid var(--border); gap:8px; }
 .navbar a, .navbar span { font-size:0.72rem; text-decoration:none; padding:6px 14px; border-radius:4px; font-family:'JetBrains Mono',monospace; }
 .navbar a { color:var(--muted); border:1px solid transparent; }
 .navbar a:hover { color:var(--text); border-color:var(--border); }
 .navbar a.active { color:var(--gold); border:1px solid var(--gold); }
+.nav-logo { color:var(--gold); font-weight:700; font-size:0.82rem; margin-right:8px; }
 .nav-spacer { flex:1; }
 .nav-user { color:var(--green); font-size:0.65rem; padding:6px 0; }
 .nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; }
@@ -78,6 +78,7 @@ tr:hover td { background:#1c2128; }
 <body>
 
 <nav class="navbar">
+  <span class="nav-logo">⚡ CogniflowAI</span>
   <a href="dashboard.html" class="active">Dashboard</a>
   <a href="instruments.html">Instruments Editor</a>
   <div class="nav-spacer"></div>
@@ -137,6 +138,10 @@ tr:hover td { background:#1c2128; }
 </div>
 
 <script>
+// Auth check
+const JWT_TOKEN = localStorage.getItem('jwt_token') || '';
+if (!JWT_TOKEN) window.location.href = 'login.html';
+
 // Show logged-in user
 (function() {
   const user = localStorage.getItem('jwt_user');
@@ -144,10 +149,11 @@ tr:hover td { background:#1c2128; }
 })();
 
 function logout() {
+  sessionStorage.removeItem('jwt_token');
   localStorage.removeItem('jwt_token');
   localStorage.removeItem('jwt_user');
   document.cookie = 'jwt_token=; path=/; max-age=0';
-  window.location.href = 'login.html';
+  window.location.href = '/login.html';
 }
 
 async function load() {

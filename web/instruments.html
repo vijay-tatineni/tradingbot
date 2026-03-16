@@ -25,6 +25,7 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 .navbar a { color:var(--muted); border:1px solid transparent; }
 .navbar a:hover { color:var(--text); border-color:var(--border); }
 .navbar a.active { color:var(--gold); border:1px solid var(--gold); }
+.nav-logo { color:var(--gold); font-weight:700; font-size:0.82rem; margin-right:8px; }
 .nav-spacer { flex:1; }
 .nav-user { color:var(--green); font-size:0.65rem; padding:6px 0; }
 .nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; }
@@ -126,6 +127,7 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
 <div class="toast" id="toast"></div>
 
 <nav class="navbar">
+  <span class="nav-logo">⚡ CogniflowAI</span>
   <a href="dashboard.html">Dashboard</a>
   <a href="instruments.html" class="active">Instruments Editor</a>
   <div class="nav-spacer"></div>
@@ -325,10 +327,11 @@ function apiHeaders(extra = {}) {
 }
 
 function logout() {
+  sessionStorage.removeItem('jwt_token');
   localStorage.removeItem('jwt_token');
   localStorage.removeItem('jwt_user');
   document.cookie = 'jwt_token=; path=/; max-age=0';
-  window.location.href = 'login.html';
+  window.location.href = '/login.html';
 }
 
 // ── Load ─────────────────────────────────────────
