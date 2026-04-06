@@ -78,8 +78,8 @@ class LearningLoop(BasePlugin):
             INSERT INTO trades
             (timestamp, symbol, name, action, entry_price, qty,
              alligator_state, alligator_dir, ma200_trend,
-             wr_value, wr_signal, rsi_value, confidence, open)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             wr_value, wr_signal, rsi_value, confidence, open, currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         """, (
             datetime.datetime.utcnow().isoformat(),
             inst['symbol'],
@@ -94,6 +94,7 @@ class LearningLoop(BasePlugin):
             bundle.wr.signal,
             bundle.rsi,
             inst.get('_last_confidence', 'UNKNOWN'),
+            inst.get('currency', 'USD'),
         ))
         conn.commit()
         conn.close()
@@ -106,10 +107,16 @@ class LearningLoop(BasePlugin):
     def _record_exit(self, symbol: str, exit_price: float,
                      action: str) -> None:
         """Close the most recent open trade for this symbol."""
+        # Guard: never record garbage exit prices
+        if exit_price is None or exit_price <= 0:
+            log(f"[LearningLoop] REFUSING to record trade with "
+                f"exit_price={exit_price} for {symbol}", "ERROR")
+            return
+
         conn   = sqlite3.connect(self.db)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, entry_price, qty, action, timestamp "
+            "SELECT id, entry_price, qty, action, timestamp, currency "
             "FROM trades WHERE symbol=? AND open=1 "
             "ORDER BY id DESC LIMIT 1",
             (symbol,)
@@ -119,13 +126,18 @@ class LearningLoop(BasePlugin):
             conn.close()
             return
 
-        trade_id, entry_price_db, qty, trade_action, entry_ts = row
+        trade_id, entry_price_db, qty, trade_action, entry_ts, currency = row
+        currency = currency or 'USD'
 
         # Calculate P&L
         if trade_action == 'BUY':
             pnl = (exit_price - entry_price_db) * qty
         else:
             pnl = (entry_price_db - exit_price) * qty
+
+        # GBP: prices are in pence, convert P&L to pounds
+        if currency == 'GBP':
+            pnl = pnl / 100
 
         outcome = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'SCRATCH'
 
@@ -161,7 +173,7 @@ class LearningLoop(BasePlugin):
         conn   = sqlite3.connect(self.db)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, symbol, entry_price, qty, action, timestamp "
+            "SELECT id, symbol, entry_price, qty, action, timestamp, currency "
             "FROM trades WHERE open=1"
         )
         open_trades = cursor.fetchall()
@@ -169,7 +181,8 @@ class LearningLoop(BasePlugin):
         # Build map: symbol → current position qty
         positions_now = {r['symbol']: r.get('pos', 0) for r in signal_rows}
 
-        for trade_id, symbol, entry_price, qty, action, entry_ts in open_trades:
+        for trade_id, symbol, entry_price, qty, action, entry_ts, currency in open_trades:
+            currency = currency or 'USD'
             current_pos = positions_now.get(symbol)
             if current_pos is None:
                 continue  # symbol not in signal_rows (e.g. market closed), skip
@@ -181,10 +194,20 @@ class LearningLoop(BasePlugin):
                 (r['price'] for r in signal_rows if r['symbol'] == symbol),
                 entry_price
             )
+            # Guard: never record garbage exit prices
+            if exit_price is None or exit_price <= 0:
+                log(f"[LearningLoop] Backup exit skipped: {symbol} "
+                    f"exit_price={exit_price}", "ERROR")
+                continue
+
             if action == 'BUY':
                 pnl = (exit_price - entry_price) * qty
             else:
                 pnl = (entry_price - exit_price) * qty
+
+            # GBP: prices are in pence, convert P&L to pounds
+            if currency == 'GBP':
+                pnl = pnl / 100
 
             outcome = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'SCRATCH'
 
@@ -260,8 +283,14 @@ class LearningLoop(BasePlugin):
                 rsi_value       REAL,
                 confidence      TEXT,
                 exit_reason     TEXT,
-                open            INTEGER DEFAULT 1
+                open            INTEGER DEFAULT 1,
+                currency        TEXT DEFAULT 'USD'
             )
         """)
+        # Add currency column to existing databases
+        try:
+            conn.execute("ALTER TABLE trades ADD COLUMN currency TEXT DEFAULT 'USD'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
         conn.close()

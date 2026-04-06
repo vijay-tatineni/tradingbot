@@ -14,7 +14,7 @@
   --bg:#0d1117; --bg2:#161b22; --bg3:#1c2128;
   --green:#22c55e; --red:#ef4444; --gold:#f5c842;
   --blue:#38bdf8; --muted:#8b949e; --border:#30363d;
-  --text:#ffffff; --navy:#0f3460;
+  --text:#ffffff; --amber:#f59e0b;
 }
 * { box-sizing:border-box; margin:0; padding:0; }
 body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.8rem; }
@@ -31,48 +31,86 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 .nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; }
 .nav-logout:hover { background:#2d0a0a !important; }
 
-/* ── Header ── */
-.header { padding:16px 24px; border-bottom:1px solid var(--border); }
-.header h1 { color:var(--gold); font-size:1.3rem; font-weight:700; }
-
 /* ── Toast ── */
 .toast { position:fixed; top:20px; right:20px; padding:12px 20px; border-radius:6px; font-size:0.75rem; font-weight:600; z-index:999; opacity:0; transition:opacity 0.3s; pointer-events:none; }
 .toast.show { opacity:1; }
 .toast.success { background:#052e16; color:var(--green); border:1px solid var(--green); }
 .toast.error   { background:#2d0a0a; color:var(--red);   border:1px solid var(--red); }
 
-/* ── Tabs ── */
-.tabs { display:flex; gap:0; border-bottom:1px solid var(--border); padding:0 24px; margin-top:0; }
-.tab { padding:12px 20px; font-size:0.72rem; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; transition:all 0.2s; font-family:'JetBrains Mono',monospace; }
-.tab:hover { color:var(--text); }
-.tab.active { color:var(--gold); border-bottom-color:var(--gold); }
+/* ── WF Status Bar ── */
+.wf-status { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:16px 24px; padding:16px; }
+.wf-status h3 { color:var(--gold); font-size:0.78rem; margin-bottom:8px; }
+.wf-stats { display:flex; gap:20px; font-size:0.72rem; color:var(--muted); flex-wrap:wrap; }
+.wf-stats .stat { padding:4px 10px; border-radius:4px; background:var(--bg3); }
+.wf-stats .stat-green { color:var(--green); }
+.wf-stats .stat-amber { color:var(--amber); }
+.wf-stats .stat-red { color:var(--red); }
+.wf-actions { margin-top:12px; display:flex; gap:8px; }
 
-/* ── Content ── */
-.content { padding:24px; display:none; }
-.content.active { display:block; }
+/* ── Save Bar (sticky) ── */
+.save-bar { position:sticky; top:0; z-index:50; background:var(--bg2); border-bottom:1px solid var(--amber); padding:10px 24px; display:none; align-items:center; gap:12px; }
+.save-bar.show { display:flex; }
+.save-bar span { color:var(--amber); font-size:0.72rem; flex:1; }
 
-/* ── Section ── */
-.section { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin-bottom:20px; overflow:hidden; }
-.section-title { padding:12px 16px; color:var(--gold); border-bottom:1px solid var(--border); letter-spacing:2px; font-size:0.72rem; font-weight:600; display:flex; align-items:center; justify-content:space-between; }
+/* ── Global Defaults Panel ── */
+.global-panel { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:0 24px 16px; overflow:hidden; }
+.global-header { padding:12px 16px; color:var(--gold); font-size:0.72rem; font-weight:600; cursor:pointer; display:flex; justify-content:space-between; border-bottom:1px solid var(--border); }
+.global-body { padding:16px; display:none; }
+.global-body.show { display:block; }
+.global-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+.global-grid label { display:block; font-size:0.6rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+.global-grid input { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; width:100%; text-align:right; }
+.global-grid input:focus { outline:none; border-color:var(--gold); }
+.override-count { font-size:0.62rem; color:var(--muted); margin-top:8px; }
 
-/* ── Table ── */
-table { width:100%; border-collapse:collapse; }
-th { padding:8px 10px; text-align:left; font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--border); font-weight:500; white-space:nowrap; }
-td { padding:6px 8px; border-bottom:1px solid #1c2128; vertical-align:middle; }
-tr:last-child td { border-bottom:none; }
-tr:hover td { background:#1c2128; }
+/* ── Instrument Card ── */
+.inst-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:0 24px 8px; overflow:hidden; transition:all 0.2s; }
+.inst-card.modified { border-color:var(--amber); }
+.inst-card.border-amber { border-left:3px solid var(--amber); }
+.inst-card.border-red { border-left:3px solid var(--red); }
 
-/* ── Inputs ── */
-input, select {
-  background:var(--bg3); border:1px solid var(--border); color:var(--text);
-  padding:4px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace;
-  font-size:0.72rem; width:100%;
-}
-input:focus, select:focus { outline:none; border-color:var(--gold); }
-input[type="checkbox"] { width:auto; cursor:pointer; accent-color:var(--green); transform:scale(1.2); }
-input[type="number"] { text-align:right; }
+.inst-header { padding:10px 16px; display:flex; align-items:center; gap:12px; cursor:pointer; font-size:0.72rem; }
+.inst-header:hover { background:var(--bg3); }
+.inst-sym { color:var(--gold); font-weight:700; min-width:50px; }
+.inst-name { color:var(--muted); min-width:140px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.inst-tf { font-size:0.6rem; color:var(--blue); background:var(--bg3); padding:2px 6px; border-radius:3px; }
+.inst-cur { font-size:0.6rem; padding:2px 6px; border-radius:3px; }
+.inst-cur-gbp { background:#052e16; color:var(--green); }
+.inst-cur-usd { background:var(--bg3); color:var(--muted); }
+.inst-cur-eur { background:#1a1a2e; color:#a78bfa; }
+.inst-vals { display:flex; gap:8px; font-size:0.65rem; color:var(--muted); }
+.inst-vals span { background:var(--bg3); padding:2px 6px; border-radius:3px; }
+.inst-verdict { font-size:0.62rem; font-weight:700; padding:2px 8px; border-radius:3px; }
+.verdict-robust { background:#052e16; color:var(--green); }
+.verdict-marginal { background:#422006; color:var(--amber); }
+.verdict-no_edge { background:#2d0a0a; color:var(--red); }
+.verdict-overfit { background:#2d0a0a; color:var(--red); }
+.inst-spacer { flex:1; }
+.inst-toggle { display:flex; align-items:center; }
 
-/* ── Buttons ── */
+/* Toggle */
+.toggle { position:relative; display:inline-block; width:36px; height:20px; }
+.toggle input { opacity:0; width:0; height:0; }
+.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#1f2937; border-radius:20px; transition:.3s; }
+.slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background:var(--muted); border-radius:50%; transition:.3s; }
+input:checked + .slider { background:#052e16; }
+input:checked + .slider:before { transform:translateX(16px); background:var(--green); }
+
+/* ── Expanded detail ── */
+.inst-detail { display:none; border-top:1px solid var(--border); padding:16px; }
+.inst-detail.show { display:block; }
+.detail-grid { display:grid; grid-template-columns:1fr 1fr auto; gap:24px; }
+.detail-col h4 { color:var(--gold); font-size:0.68rem; letter-spacing:1px; text-transform:uppercase; margin-bottom:12px; }
+.detail-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.detail-row label { font-size:0.62rem; color:var(--muted); min-width:100px; text-transform:uppercase; }
+.detail-row input { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; width:80px; text-align:right; }
+.detail-row input:focus { outline:none; border-color:var(--gold); }
+.detail-hint { font-size:0.58rem; color:var(--muted); opacity:0.7; }
+.detail-hint.custom { color:var(--amber); }
+.reset-btn { font-size:0.58rem; color:var(--muted); cursor:pointer; background:none; border:none; font-family:'JetBrains Mono',monospace; }
+.reset-btn:hover { color:var(--red); }
+
+/* Buttons */
 .btn { padding:6px 14px; border:none; border-radius:4px; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:0.7rem; font-weight:600; transition:all 0.15s; }
 .btn-primary  { background:var(--gold); color:#000; }
 .btn-primary:hover  { background:#ffd700; }
@@ -82,237 +120,147 @@ input[type="number"] { text-align:right; }
 .btn-danger:hover   { background:#3d1010; }
 .btn-muted    { background:var(--bg3); color:var(--muted); border:1px solid var(--border); }
 .btn-muted:hover    { color:var(--text); }
+.btn-blue     { background:#0c2461; color:var(--blue); border:1px solid var(--blue); }
+.btn-blue:hover     { background:#103280; }
 .btn-sm { padding:3px 8px; font-size:0.65rem; }
 
-/* ── Enable toggle ── */
-.toggle { position:relative; display:inline-block; width:36px; height:20px; }
-.toggle input { opacity:0; width:0; height:0; }
-.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#1f2937; border-radius:20px; transition:.3s; }
-.slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background:var(--muted); border-radius:50%; transition:.3s; }
-input:checked + .slider { background:#052e16; }
-input:checked + .slider:before { transform:translateX(16px); background:var(--green); }
+/* ── Test Result ── */
+.test-result { margin-top:12px; padding:10px; border-radius:6px; font-size:0.68rem; }
+.test-result.better { background:#052e16; border:1px solid var(--green); color:var(--green); }
+.test-result.worse { background:#2d0a0a; border:1px solid var(--red); color:var(--red); }
+.test-result.similar { background:var(--bg3); border:1px solid var(--border); color:var(--muted); }
+.test-result .actions { margin-top:8px; display:flex; gap:8px; }
 
-/* ── Add form ── */
-.add-form { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:20px; }
-.add-form h3 { color:var(--gold); font-size:0.8rem; margin-bottom:16px; letter-spacing:1px; }
-.form-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
-.form-group label { display:block; font-size:0.62rem; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
-.form-row { display:flex; gap:12px; align-items:flex-end; }
+/* ── Action buttons column ── */
+.action-col { display:flex; flex-direction:column; gap:6px; min-width:100px; }
+.action-col .btn { width:100%; text-align:center; }
 
-/* ── Settings grid ── */
-.settings-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; padding:16px; }
-.setting-item label { display:block; font-size:0.62rem; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px; }
-.setting-item .hint { font-size:0.58rem; color:var(--muted); margin-top:4px; opacity:0.7; }
+/* ── Optimise progress ── */
+.optimise-progress { width:100%; margin:12px 0; padding:12px 16px; border:0.5px solid var(--border); border-radius:8px; background:var(--bg2); }
+.progress-header { display:flex; justify-content:space-between; font-size:0.72rem; color:var(--muted); margin-bottom:4px; }
+.progress-phase { font-size:0.65rem; color:var(--muted); margin-bottom:6px; }
+.progress-bar-track { width:100%; height:8px; background:var(--bg3); border-radius:4px; overflow:hidden; }
+.progress-bar-fill { height:100%; border-radius:4px; transition:width 0.5s ease; }
+.progress-bar-fill.phase1 { background:#EF9F27; }
+.progress-bar-fill.phase2 { background:#97C459; }
+.progress-pct { font-size:0.6rem; color:var(--muted); margin-top:4px; text-align:right; }
 
-/* ── Badge ── */
-.badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:0.6rem; font-weight:700; }
-.badge-lse { background:#0c2461; color:var(--blue); }
-.badge-us  { background:#1f2937; color:var(--muted); }
-.badge-cfd { background:#1a1a2e; color:#a78bfa; }
-.badge-gbp { background:#052e16; color:var(--green); }
+/* ── Test progress ── */
+.test-progress { margin:12px 0; padding:8px 16px; border:0.5px solid var(--border); border-radius:8px; background:var(--bg2); }
+.test-progress .progress-bar-track { height:4px; }
+.test-progress .progress-bar-fill { background:var(--blue); animation:indeterminate 1.5s ease-in-out infinite; }
+@keyframes indeterminate { 0% { width:0%; margin-left:0; } 50% { width:40%; margin-left:30%; } 100% { width:0%; margin-left:100%; } }
 
-/* ── Restart banner ── */
-.restart-banner { background:#713f12; border:1px solid #fbbf24; border-radius:6px; padding:12px 16px; margin-bottom:20px; display:none; align-items:center; gap:12px; }
-.restart-banner.show { display:flex; }
-.restart-banner span { color:#fbbf24; font-size:0.72rem; flex:1; }
+/* ── Test result box ── */
+.test-result-box { margin:12px 0; border:0.5px solid var(--border); border-radius:8px; overflow:hidden; }
+.test-result-header { display:flex; justify-content:space-between; align-items:center; padding:8px 16px; background:var(--bg2); font-size:0.72rem; font-weight:500; }
+.test-result-body { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border); }
+.test-col { padding:12px 16px; background:var(--bg); }
+.test-col-title { font-size:0.6rem; color:var(--muted); text-transform:uppercase; margin-bottom:8px; }
+.test-stat { font-size:0.72rem; color:var(--text); margin-bottom:4px; }
+.test-result-footer { padding:8px 16px; background:var(--bg2); font-size:0.65rem; display:flex; align-items:center; gap:12px; }
+.verdict-badge { font-size:0.6rem; padding:2px 8px; border-radius:4px; }
+.verdict-badge.better { background:#1a3a0a; color:#97C459; }
+.verdict-badge.worse { background:#3a0a0a; color:#ef4444; }
+.verdict-badge.similar { background:#3a2a0a; color:#f5c842; }
+.discount-green { color:#97C459; }
+.discount-amber { color:#f59e0b; }
+.discount-red { color:#ef4444; }
 
-/* ── Backups ── */
-.backup-list { padding:12px 16px; }
-.backup-item { padding:6px 0; border-bottom:1px solid var(--border); font-size:0.68rem; color:var(--muted); display:flex; justify-content:space-between; }
-.backup-item:last-child { border-bottom:none; }
+/* ── Spinner ── */
+@keyframes spin { to { transform:rotate(360deg); } }
+.spinner { display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--blue); border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:6px; }
+.btn:disabled { opacity:0.5; cursor:not-allowed; }
+
+/* ── Warning badges ── */
+.warn-badge { font-size:0.58rem; color:var(--amber); margin-left:8px; }
+.edge-badge { font-size:0.58rem; color:var(--amber); margin-left:8px; }
+
+/* ── Confirm dialog ── */
+.dialog-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:100; display:none; align-items:center; justify-content:center; }
+.dialog-overlay.show { display:flex; }
+.dialog { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:24px; max-width:500px; width:90%; max-height:80vh; overflow-y:auto; }
+.dialog h3 { color:var(--gold); margin-bottom:16px; }
+.dialog .changes-list { font-size:0.68rem; color:var(--muted); margin-bottom:16px; }
+.dialog .changes-list li { margin-bottom:4px; }
+.dialog .actions { display:flex; gap:8px; justify-content:flex-end; }
+
+/* ── Note banner ── */
+.note-banner { margin:8px 24px; padding:8px 16px; background:var(--bg3); border-radius:6px; font-size:0.62rem; color:var(--muted); border-left:3px solid var(--blue); }
 </style>
 </head>
 <body>
 
 <div class="toast" id="toast"></div>
+<div class="dialog-overlay" id="confirmDialog">
+  <div class="dialog">
+    <h3>Confirm Changes</h3>
+    <div class="changes-list" id="changesList"></div>
+    <div class="actions">
+      <button class="btn btn-muted" onclick="closeDialog()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmSave()">Save Changes</button>
+    </div>
+  </div>
+</div>
 
 <nav class="navbar">
-  <span class="nav-logo">⚡ CogniflowAI</span>
+  <span class="nav-logo">CogniflowAI</span>
   <a href="dashboard.html">Dashboard</a>
   <a href="instruments.html" class="active">Instruments Editor</a>
+  <a href="tests.html">Tests</a>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser"></span>
   <a href="#" class="nav-logout" onclick="logout()">Logout</a>
 </nav>
 
-<div class="header">
-  <h1>⚙️ Instruments Editor</h1>
-  <div style="color:var(--muted);font-size:0.65rem;margin-top:4px">Edit instruments.json — changes require bot restart</div>
+<!-- Save Bar (sticky) -->
+<div class="save-bar" id="saveBar">
+  <span id="saveBarText">Unsaved changes: 0 instruments modified</span>
+  <button class="btn btn-primary" onclick="showConfirmDialog()">Save Changes</button>
+  <button class="btn btn-danger" onclick="discardAll()">Discard All</button>
 </div>
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('layer1')">Layer 1 — Active Trading</div>
-  <div class="tab" onclick="switchTab('layer2')">Layer 2 — Accumulation</div>
-  <div class="tab" onclick="switchTab('settings')">Global Settings</div>
-  <div class="tab" onclick="switchTab('backups')">Backups</div>
-</div>
-
-<!-- ── RESTART BANNER ── -->
-<div style="padding:0 24px;margin-top:16px">
-  <div class="restart-banner" id="restartBanner">
-    <span>⚠️ You have unsaved changes. Save first, then restart the bot for changes to take effect.</span>
-    <button class="btn btn-primary" onclick="saveAll()">💾 Save Changes</button>
+<!-- WF Status -->
+<div class="wf-status" id="wfStatus">
+  <h3>Walk-Forward Status <span id="wfDate" style="font-weight:400;color:var(--muted);font-size:0.68rem"></span></h3>
+  <div class="wf-stats" id="wfStats">Loading...</div>
+  <div class="wf-actions">
+    <button class="btn btn-blue btn-sm" onclick="applyAllWF()">Apply All WF Params</button>
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════════ -->
-<!-- LAYER 1 TAB                                   -->
-<!-- ══════════════════════════════════════════════ -->
-<div class="content active" id="tab-layer1">
-
-  <!-- Add new instrument -->
-  <div class="add-form">
-    <h3>➕ ADD NEW INSTRUMENT</h3>
-    <div class="form-grid">
-      <div class="form-group">
-        <label>Symbol *</label>
-        <input id="new-symbol" placeholder="e.g. TSLA" style="text-transform:uppercase">
-      </div>
-      <div class="form-group">
-        <label>Name *</label>
-        <input id="new-name" placeholder="e.g. Tesla">
-      </div>
-      <div class="form-group">
-        <label>Flag / Emoji</label>
-        <input id="new-flag" placeholder="🚗" style="font-size:1.2rem">
-      </div>
-      <div class="form-group">
-        <label>Type</label>
-        <select id="new-sectype">
-          <option value="STK">STK — Stock</option>
-          <option value="CFD">CFD — Contract for Diff</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Exchange</label>
-        <select id="new-exchange">
-          <option value="SMART">SMART (default)</option>
-          <option value="LSE">LSE</option>
-          <option value="NYSE">NYSE</option>
-          <option value="NASDAQ">NASDAQ</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Currency</label>
-        <select id="new-currency">
-          <option value="USD">USD</option>
-          <option value="GBP">GBP</option>
-          <option value="EUR">EUR</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Market (LSE stocks)</label>
-        <select id="new-market">
-          <option value="">-- none --</option>
-          <option value="LSE">LSE</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Quantity</label>
-        <input id="new-qty" type="number" value="5" min="1">
-      </div>
-      <div class="form-group">
-        <label>Loss Limit ($)</label>
-        <input id="new-loss" type="number" value="150" min="50">
-      </div>
-      <div class="form-group">
-        <label>Long Only</label>
-        <select id="new-longonly">
-          <option value="true">Yes (stocks)</option>
-          <option value="false">No (CFDs — can short)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Notes</label>
-        <input id="new-notes" placeholder="Optional notes">
-      </div>
-    </div>
-    <button class="btn btn-success" onclick="addLayer1()">➕ Add Instrument</button>
+<!-- Global Indicator Defaults -->
+<div class="global-panel">
+  <div class="global-header" onclick="toggleGlobalPanel()">
+    <span>Global Indicator Defaults</span>
+    <span id="globalToggle">Expand</span>
   </div>
-
-  <!-- Instruments table -->
-  <div class="section">
-    <div class="section-title">
-      <span>LAYER 1 — ACTIVE TRADING (<span id="l1count">0</span> instruments)</span>
-      <button class="btn btn-primary btn-sm" onclick="saveAll()">💾 Save All</button>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>On</th><th>Status</th><th>Flag</th><th>Symbol</th><th>Name</th>
-          <th>Type</th><th>Exchange</th><th>Currency</th><th>Market</th>
-          <th>Qty</th><th>Loss $</th><th>Long Only</th><th>Reason</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="layer1-table"></tbody>
-    </table>
+  <div class="global-body" id="globalBody">
+    <div class="global-grid" id="globalGrid"></div>
+    <div class="override-count" id="overrideCount"></div>
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════════ -->
-<!-- LAYER 2 TAB                                   -->
-<!-- ══════════════════════════════════════════════ -->
-<div class="content" id="tab-layer2">
-
-  <div class="add-form">
-    <h3>➕ ADD ACCUMULATION ETF</h3>
-    <div class="form-grid">
-      <div class="form-group"><label>Symbol *</label><input id="l2-symbol" placeholder="e.g. SPY"></div>
-      <div class="form-group"><label>Name *</label><input id="l2-name" placeholder="e.g. S&P 500 ETF"></div>
-      <div class="form-group"><label>Flag</label><input id="l2-flag" placeholder="📊"></div>
-      <div class="form-group"><label>Quantity</label><input id="l2-qty" type="number" value="3" min="1"></div>
-    </div>
-    <button class="btn btn-success" onclick="addLayer2()">➕ Add ETF</button>
-  </div>
-
-  <div class="section">
-    <div class="section-title">
-      <span>LAYER 2 — ACCUMULATION ETFs (<span id="l2count">0</span> ETFs)</span>
-      <button class="btn btn-primary btn-sm" onclick="saveAll()">💾 Save All</button>
-    </div>
-    <table>
-      <thead><tr><th>On</th><th>Flag</th><th>Symbol</th><th>Name</th><th>Exchange</th><th>Currency</th><th>Qty</th><th>Actions</th></tr></thead>
-      <tbody id="layer2-table"></tbody>
-    </table>
-  </div>
+<div class="note-banner">
+  Changes require bot restart to take effect. Use Test/Optimise to validate before saving.
 </div>
 
-<!-- ══════════════════════════════════════════════ -->
-<!-- SETTINGS TAB                                  -->
-<!-- ══════════════════════════════════════════════ -->
-<div class="content" id="tab-settings">
-  <div class="section">
-    <div class="section-title">GLOBAL SETTINGS</div>
-    <div class="settings-grid" id="settings-grid"></div>
-  </div>
-  <div style="padding:0 0 20px 0">
-    <button class="btn btn-primary" onclick="saveAll()">💾 Save Settings</button>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════ -->
-<!-- BACKUPS TAB                                   -->
-<!-- ══════════════════════════════════════════════ -->
-<div class="content" id="tab-backups">
-  <div class="section">
-    <div class="section-title">AUTOMATIC BACKUPS</div>
-    <div class="backup-list" id="backup-list">Loading...</div>
-  </div>
-  <p style="color:var(--muted);font-size:0.68rem;padding:0 0 20px 0">
-    A backup is created automatically every time you save. Located at ~/trading/backups/
-  </p>
-</div>
-
+<!-- Instrument Cards -->
+<div id="instrumentCards" style="margin-top:8px"></div>
 
 <script>
 const API = 'http://188.166.150.137:8082';
 const JWT_TOKEN = localStorage.getItem('jwt_token') || '';
-let data = null;
-let dirty = false;
-
-// Redirect to login if no token
 if (!JWT_TOKEN) window.location.href = 'login.html?redirect=instruments';
+
+let origData = null;  // Original data from server
+let wfData = null;    // WF recommendations
+let globalSettings = {};
+let modifications = {};  // {symbol: {field: newValue}}
+let indicatorMods = {};  // {symbol: {field: newValue}}
+let expandedCards = new Set();
+let testResults = {};
+let optimiseJobs = {};
 
 // Show logged-in user
 (function() {
@@ -337,237 +285,718 @@ function logout() {
 // ── Load ─────────────────────────────────────────
 async function loadData() {
   try {
-    const r = await fetch(API + '/api/instruments', { headers: apiHeaders() });
+    const r = await fetch(API + '/api/instruments/wf-recommendations', { headers: apiHeaders() });
     if (r.status === 401) { logout(); return; }
-    data = await r.json();
-    renderLayer1();
-    renderLayer2();
-    renderSettings();
-    loadBackups();
+    const d = await r.json();
+    origData = d.instruments || [];
+    globalSettings = d.global_settings || {};
+    wfData = {};
+    origData.forEach(inst => { wfData[inst.symbol] = inst; });
+    renderWFStatus();
+    renderGlobalDefaults();
+    renderCards();
   } catch(e) {
-    toast('Cannot connect to API server. Is api_server.py running?', 'error');
+    toast('Cannot connect to API server', 'error');
   }
 }
 
-// ── Tabs ─────────────────────────────────────────
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
-  document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
-  const tabs = ['layer1','layer2','settings','backups'];
-  document.querySelectorAll('.tab')[tabs.indexOf(tab)].classList.add('active');
-  document.getElementById('tab-' + tab).classList.add('active');
-  if(tab === 'backups') loadBackups();
+// ── WF Status ────────────────────────────────────
+function renderWFStatus() {
+  let robust=0, marginal=0, noEdge=0, mismatch=0;
+  origData.forEach(inst => {
+    const v = inst.wf_verdict;
+    if (v === 'robust') robust++;
+    else if (v === 'marginal') marginal++;
+    else if (v === 'no_edge' || v === 'overfit') noEdge++;
+    if (inst.params_match === false) mismatch++;
+  });
+
+  const date = origData.find(i => i.wf_verdict)?.wf_run_date || '';
+  document.getElementById('wfDate').textContent = date ? `(last run: ${date})` : '(no WF data)';
+  document.getElementById('wfStats').innerHTML = `
+    <span class="stat stat-green">${robust} Robust</span>
+    <span class="stat stat-amber">${marginal} Marginal</span>
+    <span class="stat stat-red">${noEdge} No Edge</span>
+    ${mismatch ? `<span class="stat stat-amber">${mismatch} param mismatches</span>` : ''}
+  `;
 }
 
-// ── Layer 1 ──────────────────────────────────────
-function renderLayer1() {
-  const instruments = data.layer1_active || [];
-  document.getElementById('l1count').textContent = instruments.length;
-  document.getElementById('layer1-table').innerHTML = instruments.map((inst, i) => {
-    const statusColor = inst.enabled === false ? '#ef4444' : 'var(--green)';
-    const statusLabel = inst.enabled === false ? 'OFF' : 'ON';
-    return `
-    <tr id="l1row-${i}" style="${inst.enabled===false?'opacity:0.5':''}">
-      <td><label class="toggle"><input type="checkbox" ${inst.enabled!==false?'checked':''} onchange="toggleEnabled('layer1_active',${i},this.checked)"><span class="slider"></span></label></td>
-      <td style="text-align:center"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${statusColor};margin-right:4px"></span><span style="font-size:0.6rem;color:${statusColor}">${statusLabel}</span></td>
-      <td><input value="${inst.flag||''}" style="width:50px;font-size:1rem;text-align:center" onchange="updateField('layer1_active',${i},'flag',this.value)"></td>
-      <td><strong style="color:var(--gold)">${inst.symbol}</strong></td>
-      <td><input value="${inst.name||''}" style="min-width:160px" onchange="updateField('layer1_active',${i},'name',this.value)"></td>
-      <td>
-        <span class="badge ${inst.sec_type==='CFD'?'badge-cfd':'badge-us'}">${inst.sec_type}</span>
-      </td>
-      <td><input value="${inst.exchange||'SMART'}" style="width:80px" onchange="updateField('layer1_active',${i},'exchange',this.value)"></td>
-      <td>
-        <select onchange="updateField('layer1_active',${i},'currency',this.value)" style="width:70px">
-          ${['USD','GBP','EUR'].map(c=>`<option ${inst.currency===c?'selected':''}>${c}</option>`).join('')}
-        </select>
-      </td>
-      <td>
-        <select onchange="updateField('layer1_active',${i},'market',this.value)" style="width:80px">
-          <option value="" ${!inst.market?'selected':''}>--</option>
-          <option value="LSE" ${inst.market==='LSE'?'selected':''}>LSE</option>
-        </select>
-      </td>
-      <td><input type="number" value="${inst.qty||1}" style="width:60px" min="1" onchange="updateField('layer1_active',${i},'qty',+this.value)"></td>
-      <td><input type="number" value="${inst.loss_limit||150}" style="width:70px" min="0" onchange="updateField('layer1_active',${i},'loss_limit',+this.value)"></td>
-      <td>
-        <select onchange="updateField('layer1_active',${i},'long_only',this.value==='true')" style="width:80px">
-          <option value="true" ${inst.long_only!==false?'selected':''}>Long</option>
-          <option value="false" ${inst.long_only===false?'selected':''}>Both</option>
-        </select>
-      </td>
-      <td style="font-size:0.6rem;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${inst.disabled_reason||''}">${inst.disabled_reason||'--'}</td>
-      <td>
-        <button class="btn btn-danger btn-sm" onclick="removeInstrument('layer1_active',${i})">🗑</button>
-      </td>
-    </tr>`;
-  }).join('');
+// ── Global Defaults ──────────────────────────────
+function toggleGlobalPanel() {
+  const body = document.getElementById('globalBody');
+  const toggle = document.getElementById('globalToggle');
+  body.classList.toggle('show');
+  toggle.textContent = body.classList.contains('show') ? 'Collapse' : 'Expand';
 }
 
-// ── Layer 2 ──────────────────────────────────────
-function renderLayer2() {
-  const instruments = data.layer2_accumulation || [];
-  document.getElementById('l2count').textContent = instruments.length;
-  document.getElementById('layer2-table').innerHTML = instruments.map((inst, i) => `
-    <tr>
-      <td><label class="toggle"><input type="checkbox" ${inst.enabled!==false?'checked':''} onchange="toggleEnabled('layer2_accumulation',${i},this.checked)"><span class="slider"></span></label></td>
-      <td><input value="${inst.flag||''}" style="width:50px;font-size:1rem;text-align:center" onchange="updateField('layer2_accumulation',${i},'flag',this.value)"></td>
-      <td><strong style="color:var(--gold)">${inst.symbol}</strong></td>
-      <td><input value="${inst.name||''}" style="min-width:160px" onchange="updateField('layer2_accumulation',${i},'name',this.value)"></td>
-      <td><span class="badge badge-us">${inst.exchange||'SMART'}</span></td>
-      <td><span class="badge ${inst.currency==='GBP'?'badge-gbp':'badge-us'}">${inst.currency||'USD'}</span></td>
-      <td><input type="number" value="${inst.qty||3}" style="width:60px" min="1" onchange="updateField('layer2_accumulation',${i},'qty',+this.value)"></td>
-      <td><button class="btn btn-danger btn-sm" onclick="removeInstrument('layer2_accumulation',${i})">🗑</button></td>
-    </tr>
-  `).join('');
-}
-
-// ── Settings ─────────────────────────────────────
-function renderSettings() {
-  const s = data.settings || {};
+function renderGlobalDefaults() {
   const fields = [
-    { key:'check_interval_mins', label:'Check Interval (mins)', type:'number', hint:'15 = every 15 minutes' },
-    { key:'portfolio_loss_limit', label:'Portfolio Loss Limit ($)', type:'number', hint:'Bot stops at this loss' },
-    { key:'account', label:'IBKR Account', type:'text', hint:'Paper account ID' },
-    { key:'host', label:'IBKR Host', type:'text', hint:'Usually 127.0.0.1' },
-    { key:'port', label:'IBKR Port', type:'number', hint:'4000 = paper trading' },
-    { key:'client_id', label:'Client ID', type:'number', hint:'Usually 1' },
-    { key:'alligator_min_gap_pct', label:'Alligator Min Gap %', type:'number', hint:'0.003 = 0.3%' },
-    { key:'ma200_period', label:'MA Period', type:'number', hint:'200 day moving average' },
-    { key:'williams_r_period', label:'Williams %R Period', type:'number', hint:'14 bars' },
-    { key:'williams_r_mid', label:'Williams %R Midline', type:'number', hint:'-50 = midpoint' },
-    { key:'rsi_period', label:'RSI Period', type:'number', hint:'14 bars' },
-    { key:'rsi_oversold', label:'RSI Oversold', type:'number', hint:'Below 35 = buy signal' },
-    { key:'rsi_overbought', label:'RSI Overbought', type:'number', hint:'Above 70 = sell signal' },
+    { key:'rsi_period', label:'RSI Period' },
+    { key:'rsi_oversold', label:'RSI Oversold' },
+    { key:'rsi_overbought', label:'RSI Overbought' },
+    { key:'williams_r_period', label:'W%R Period' },
+    { key:'adx_period', label:'ADX Period' },
+    { key:'adx_threshold', label:'ADX Threshold' },
+    { key:'ma200_period', label:'MA Period' },
+    { key:'alligator_min_gap_pct', label:'Alligator Gap' },
   ];
-  document.getElementById('settings-grid').innerHTML = fields.map(f => `
-    <div class="setting-item">
+  document.getElementById('globalGrid').innerHTML = fields.map(f => `
+    <div>
       <label>${f.label}</label>
-      <input type="${f.type}" value="${s[f.key]||''}"
-        step="${f.type==='number'&&s[f.key]<1?'0.001':'1'}"
-        onchange="updateSetting('${f.key}', ${f.type==='number'?'+':''}this.value)">
-      <div class="hint">${f.hint}</div>
+      <input type="number" value="${globalSettings[f.key] || ''}"
+        step="${f.key.includes('gap') ? '0.001' : '1'}"
+        onchange="updateGlobal('${f.key}', +this.value)">
     </div>
   `).join('');
+
+  // Count overrides
+  const count = origData.filter(i => i.indicators && Object.keys(i.indicators).length > 0).length;
+  document.getElementById('overrideCount').textContent =
+    `These apply to all instruments unless overridden per-instrument. ${count} instruments have custom overrides.`;
 }
 
-// ── Backups ───────────────────────────────────────
-async function loadBackups() {
-  try {
-    const r = await fetch(API + '/api/backups', { headers: apiHeaders() });
-    const files = await r.json();
-    document.getElementById('backup-list').innerHTML = files.length
-      ? files.map(f => `<div class="backup-item"><span>${f}</span><span style="color:var(--green)">✓ saved</span></div>`).join('')
-      : '<div style="color:var(--muted);padding:8px 0">No backups yet</div>';
-  } catch(e) {
-    document.getElementById('backup-list').textContent = 'Could not load backups';
+function updateGlobal(key, value) {
+  globalSettings[key] = value;
+  markDirty('__global__', key, value);
+}
+
+// ── Render Cards ─────────────────────────────────
+function renderCards() {
+  const container = document.getElementById('instrumentCards');
+  container.innerHTML = origData.map((inst, i) => renderCard(inst, i)).join('');
+  updateSaveBar();
+}
+
+function renderCard(inst, idx) {
+  const sym = inst.symbol;
+  const v = inst.wf_verdict || '';
+  const expanded = expandedCards.has(sym);
+  const modified = (sym in modifications) || (sym in indicatorMods);
+  const enabled = inst.enabled !== false;
+
+  // Border color
+  let borderClass = '';
+  if (v === 'marginal') borderClass = 'border-amber';
+  if ((v === 'no_edge' || v === 'overfit') && enabled) borderClass = 'border-red';
+
+  // Warning badges
+  let badge = '';
+  if ((v === 'no_edge' || v === 'overfit') && enabled)
+    badge = '<span class="warn-badge">WF says no edge</span>';
+  if (!enabled && v === 'robust')
+    badge = '<span class="edge-badge">WF says edge exists</span>';
+
+  const tf = inst.timeframe || 'daily';
+  const cur = inst.currency || 'USD';
+  const curClass = cur === 'GBP' ? 'inst-cur-gbp' : cur === 'EUR' ? 'inst-cur-eur' : 'inst-cur-usd';
+  const stop = getVal(sym, 'trail_stop_pct', inst.trail_stop_pct || '--');
+  const tp = getVal(sym, 'take_profit_pct', inst.take_profit_pct || '--');
+  const qty = getVal(sym, 'qty', inst.qty || '--');
+  const wfEff = inst.wf_efficiency != null ? inst.wf_efficiency.toFixed(2) : '--';
+
+  return `
+  <div class="inst-card ${modified ? 'modified' : ''} ${borderClass}" id="card-${sym}">
+    <div class="inst-header" onclick="toggleCard('${sym}')">
+      <span style="font-size:1rem">${inst.flag || ''}</span>
+      <span class="inst-sym">${sym}</span>
+      <span class="inst-name">${inst.name}</span>
+      <span class="inst-tf">${tf}</span>
+      <span class="inst-cur ${curClass}">${cur}</span>
+      <div class="inst-vals">
+        <span>S:${stop}%</span>
+        <span>TP:${tp}%</span>
+        <span>Q:${qty}</span>
+      </div>
+      ${v ? `<span class="inst-verdict verdict-${v}">${v}</span>` : ''}
+      ${wfEff !== '--' ? `<span style="font-size:0.62rem;color:var(--muted)">WF:${wfEff}</span>` : ''}
+      ${badge}
+      <span class="inst-spacer"></span>
+      <span class="inst-toggle" onclick="event.stopPropagation()">
+        <label class="toggle">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleEnable('${sym}',this.checked)">
+          <span class="slider"></span>
+        </label>
+      </span>
+    </div>
+    <div class="inst-detail ${expanded ? 'show' : ''}" id="detail-${sym}">
+      ${renderDetail(inst, idx)}
+    </div>
+  </div>`;
+}
+
+function renderDetail(inst, idx) {
+  const sym = inst.symbol;
+  const resolved = inst.resolved_indicators || {};
+  const perInst = inst.indicators || {};
+
+  // Trading params
+  const stop = getVal(sym, 'trail_stop_pct', inst.trail_stop_pct);
+  const tp = getVal(sym, 'take_profit_pct', inst.take_profit_pct);
+  const qty = getVal(sym, 'qty', inst.qty);
+  const emergency = getVal(sym, 'emergency_stop_pct', inst.emergency_stop_pct);
+  const wfStop = inst.wf_stop;
+  const wfTp = inst.wf_tp;
+
+  // Indicator fields
+  const indFields = [
+    { key:'rsi_period', label:'RSI Period' },
+    { key:'rsi_oversold', label:'RSI Oversold' },
+    { key:'rsi_overbought', label:'RSI Overbought' },
+    { key:'williams_r_period', label:'W%R Period' },
+    { key:'adx_period', label:'ADX Period' },
+    { key:'adx_threshold', label:'ADX Threshold' },
+    { key:'ma200_period', label:'MA Period' },
+  ];
+
+  const indRows = indFields.map(f => {
+    const globalVal = globalSettings[f.key] || resolved[f.key];
+    const instVal = getIndVal(sym, f.key, perInst[f.key]);
+    const isCustom = instVal != null && instVal !== undefined;
+    const displayVal = isCustom ? instVal : globalVal;
+    const hint = isCustom ? 'Custom' : `Global: ${globalVal}`;
+    const hintClass = isCustom ? 'custom' : '';
+    return `
+      <div class="detail-row">
+        <label>${f.label}</label>
+        <input type="number" value="${displayVal || ''}" step="1"
+          onchange="updateIndicator('${sym}','${f.key}',+this.value,${globalVal})">
+        <span class="detail-hint ${hintClass}">${hint}</span>
+        ${isCustom ? `<button class="reset-btn" onclick="resetIndicator('${sym}','${f.key}')">Reset</button>` : ''}
+      </div>`;
+  }).join('');
+
+  // Test result
+  const tr = testResults[sym];
+  let testHTML = '';
+  if (tr) {
+    if (tr._loading) {
+      const elapsed = Math.floor((Date.now() - tr._startTime) / 1000);
+      testHTML = `
+        <div class="test-progress">
+          <div style="font-size:0.65rem;color:var(--muted);margin-bottom:6px">Testing ${sym}... ${elapsed}s</div>
+          <div class="progress-bar-track"><div class="progress-bar-fill"></div></div>
+        </div>`;
+    } else if (tr._error) {
+      testHTML = `
+        <div class="test-result worse">
+          ${tr._message}
+          <div class="actions">
+            <button class="btn btn-muted btn-sm" onclick="dismissTest('${sym}')">Dismiss</button>
+          </div>
+        </div>`;
+    } else {
+      const bt = tr.backtest || {};
+      const wf = tr.walkforward || {};
+      const cls = tr.verdict === 'better' ? 'better' : tr.verdict === 'worse' ? 'worse' : 'similar';
+      const icon = tr.verdict === 'better' ? 'Better ✅' : tr.verdict === 'worse' ? 'No edge ❌' : 'Similar ➖';
+      const wfPnlNeg = (wf.oos_pnl || 0) < 0;
+      const disc = tr.reality_discount_pct || 0;
+      const discCls = disc <= 30 ? 'discount-green' : disc <= 70 ? 'discount-amber' : 'discount-red';
+      const discMsg = disc <= 30 ? 'backtest closely matches WF ✅' : disc <= 70 ? 'moderate discount ⚠️' : 'backtest is misleading ❌';
+      const fmtPnl = v => v >= 0 ? `$${Math.round(v).toLocaleString()}` : `-$${Math.abs(Math.round(v)).toLocaleString()}`;
+      testHTML = `
+        <div class="test-result-box">
+          <div class="test-result-header">
+            <span>${sym} test result</span>
+            <span class="verdict-badge ${cls}">${icon}</span>
+          </div>
+          <div class="test-result-body">
+            <div class="test-col">
+              <div class="test-col-title">Backtest (optimistic)</div>
+              <div class="test-stat">P&L: ${fmtPnl(bt.total_pnl||0)}</div>
+              <div class="test-stat">PF: ${(bt.profit_factor||0).toFixed(2)} | Win: ${((bt.win_rate||0)*100).toFixed(1)}%</div>
+              <div class="test-stat">Trades: ${bt.trade_count||0}</div>
+              <div class="test-stat">Max DD: ${fmtPnl(-(bt.max_drawdown||0))}</div>
+            </div>
+            <div class="test-col">
+              <div class="test-col-title">Walk-Forward (honest)</div>
+              <div class="test-stat">OOS P&L: ${fmtPnl(wf.oos_pnl||0)}</div>
+              <div class="test-stat">PF: ${(wf.oos_profit_factor||0).toFixed(2)} | Win: ${((wf.oos_win_rate||0)*100).toFixed(1)}%</div>
+              <div class="test-stat">Trades: ${wf.oos_trade_count||0}</div>
+              <div class="test-stat">WF Ratio: ${(wf.wf_efficiency||0).toFixed(2)}</div>
+            </div>
+          </div>
+          <div class="test-result-footer">
+            <span class="${discCls}">Reality discount: ${disc}% — ${discMsg}</span>
+            <span style="flex:1"></span>
+            ${!wfPnlNeg ? `<button class="btn btn-success btn-sm" onclick="applyTestResult('${sym}')">Apply</button>` : ''}
+            <button class="btn btn-muted btn-sm" onclick="dismissTest('${sym}')">Dismiss</button>
+          </div>
+        </div>`;
+    }
+  }
+
+  // Optimise progress
+  const optJob = optimiseJobs[sym];
+  let optHTML = '';
+  if (optJob) {
+    if (optJob.status === 'running') {
+      const elapsed = optJob._startTime ? Math.floor((Date.now() - optJob._startTime) / 1000) : 0;
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+      const phaseNum = (optJob.phase || '').startsWith('Phase 2') ? 2 : 1;
+      const phaseCls = phaseNum === 1 ? 'phase1' : 'phase2';
+      optHTML = `
+        <div class="optimise-progress">
+          <div class="progress-header"><span>Optimising ${sym}...</span><span>${timeStr}</span></div>
+          <div class="progress-phase">${optJob.phase || 'Starting...'}</div>
+          <div class="progress-bar-track"><div class="progress-bar-fill ${phaseCls}" style="width:${optJob.progress||0}%"></div></div>
+          <div class="progress-pct">${optJob.progress||0}%</div>
+        </div>`;
+    } else if (optJob.status === 'complete' && optJob.result) {
+      const r = optJob.result;
+      const best = r.best || {};
+      optHTML = `
+        <div class="test-result better">
+          Optimisation complete (${(r.duration_seconds/60).toFixed(0)} min) |
+          Best: RSI ${best.rsi_period||'--'} | ADX ${best.adx_threshold||'--'} |
+          Stop ${best.trail_stop_pct}% | TP ${best.take_profit_pct}% |
+          WF ${best.wf_efficiency?.toFixed(2)||'--'} |
+          OOS $${(best.oos_pnl||0).toLocaleString()} |
+          ${r.improvement_pct > 0 ? '+' : ''}${r.improvement_pct?.toFixed(1)||0}%
+          <div class="actions">
+            <button class="btn btn-success btn-sm" onclick="applyOptResult('${sym}','all')">Apply All</button>
+            <button class="btn btn-blue btn-sm" onclick="applyOptResult('${sym}','trading')">Trading Only</button>
+            <button class="btn btn-blue btn-sm" onclick="applyOptResult('${sym}','indicators')">Indicators Only</button>
+            <button class="btn btn-muted btn-sm" onclick="dismissOpt('${sym}')">Dismiss</button>
+          </div>
+        </div>`;
+    } else if (optJob.status === 'error') {
+      optHTML = `<div class="test-result worse">Optimisation failed: ${optJob.error}</div>`;
+    }
+  }
+
+  return `
+    <div class="detail-grid">
+      <div class="detail-col">
+        <h4>Trading Params</h4>
+        <div class="detail-row">
+          <label>Stop %</label>
+          <input type="number" value="${stop||''}" step="0.1"
+            onchange="updateTrading('${sym}','trail_stop_pct',+this.value)">
+          ${wfStop != null ? `<span class="detail-hint">WF: ${wfStop}%</span>` : ''}
+        </div>
+        <div class="detail-row">
+          <label>TP %</label>
+          <input type="number" value="${tp||''}" step="0.1"
+            onchange="updateTrading('${sym}','take_profit_pct',+this.value)">
+          ${wfTp != null ? `<span class="detail-hint">WF: ${wfTp}%</span>` : ''}
+        </div>
+        <div class="detail-row">
+          <label>Qty</label>
+          <input type="number" value="${qty||''}" step="1"
+            onchange="updateTrading('${sym}','qty',+this.value)">
+        </div>
+        <div class="detail-row">
+          <label>Emergency %</label>
+          <input type="number" value="${emergency||''}" step="0.1"
+            onchange="updateTrading('${sym}','emergency_stop_pct',+this.value)">
+        </div>
+      </div>
+      <div class="detail-col">
+        <h4>Indicator Settings</h4>
+        ${indRows}
+      </div>
+      <div class="detail-col">
+        <h4>Actions</h4>
+        <div class="action-col">
+          <button class="btn btn-blue" id="btn-test-${sym}" onclick="runQuickTest('${sym}')">Test</button>
+          <button class="btn btn-success" id="btn-opt-${sym}" onclick="runOptimise('${sym}')">Optimise</button>
+          ${inst.wf_stop != null ? `<button class="btn btn-muted" onclick="applyWF('${sym}')">Apply WF</button>` : ''}
+        </div>
+      </div>
+    </div>
+    ${testHTML}${optHTML}
+  `;
+}
+
+// ── Helpers ──────────────────────────────────────
+function getVal(sym, field, orig) {
+  if (modifications[sym] && field in modifications[sym]) return modifications[sym][field];
+  return orig;
+}
+
+function getIndVal(sym, field, orig) {
+  if (indicatorMods[sym] && field in indicatorMods[sym]) return indicatorMods[sym][field];
+  return orig;
+}
+
+function toggleCard(sym) {
+  if (expandedCards.has(sym)) expandedCards.delete(sym);
+  else expandedCards.add(sym);
+  const el = document.getElementById('detail-' + sym);
+  if (el) el.classList.toggle('show');
+}
+
+function toggleEnable(sym, checked) {
+  if (!modifications[sym]) modifications[sym] = {};
+  modifications[sym]._enabled = checked;
+  updateSaveBar();
+  renderCards();
+}
+
+function updateTrading(sym, field, value) {
+  if (!modifications[sym]) modifications[sym] = {};
+  modifications[sym][field] = value;
+  updateSaveBar();
+  // Highlight card
+  const card = document.getElementById('card-' + sym);
+  if (card) card.classList.add('modified');
+}
+
+function updateIndicator(sym, field, value, globalVal) {
+  if (value === globalVal) {
+    // Same as global — remove override
+    if (indicatorMods[sym]) delete indicatorMods[sym][field];
+    return;
+  }
+  if (!indicatorMods[sym]) indicatorMods[sym] = {};
+  indicatorMods[sym][field] = value;
+  updateSaveBar();
+  const card = document.getElementById('card-' + sym);
+  if (card) card.classList.add('modified');
+}
+
+function resetIndicator(sym, field) {
+  if (indicatorMods[sym]) delete indicatorMods[sym][field];
+  // Also mark for removal of per-instrument override
+  if (!indicatorMods[sym]) indicatorMods[sym] = {};
+  indicatorMods[sym][field] = null;  // null = revert to global
+  updateSaveBar();
+  renderCards();
+}
+
+// ── Save/Discard ─────────────────────────────────
+function updateSaveBar() {
+  const modCount = new Set([...Object.keys(modifications), ...Object.keys(indicatorMods)]).size;
+  const bar = document.getElementById('saveBar');
+  const text = document.getElementById('saveBarText');
+  if (modCount > 0) {
+    bar.classList.add('show');
+    text.textContent = `Unsaved changes: ${modCount} instrument${modCount > 1 ? 's' : ''} modified`;
+  } else {
+    bar.classList.remove('show');
   }
 }
 
-// ── Data mutations ────────────────────────────────
-function updateField(layer, index, field, value) {
-  data[layer][index][field] = value;
-  markDirty();
+function discardAll() {
+  modifications = {};
+  indicatorMods = {};
+  renderCards();
+  updateSaveBar();
+  toast('Changes discarded', 'success');
 }
 
-function updateSetting(key, value) {
-  data.settings[key] = value;
-  markDirty();
-}
-
-function toggleEnabled(layer, index, checked) {
-  data[layer][index].enabled = checked;
-  if(checked) {
-    delete data[layer][index].disabled_reason;
+function showConfirmDialog() {
+  const list = document.getElementById('changesList');
+  let html = '<ul>';
+  const allSyms = new Set([...Object.keys(modifications), ...Object.keys(indicatorMods)]);
+  for (const sym of allSyms) {
+    if (sym === '__global__') {
+      html += '<li>Global settings updated</li>';
+      continue;
+    }
+    const mods = modifications[sym] || {};
+    const inds = indicatorMods[sym] || {};
+    const parts = [];
+    for (const [k,v] of Object.entries(mods)) {
+      if (k === '_enabled') parts.push(v ? 'Enable' : 'Disable');
+      else parts.push(`${k}: ${v}`);
+    }
+    for (const [k,v] of Object.entries(inds)) {
+      if (v === null) parts.push(`${k}: reset to global`);
+      else parts.push(`${k}: ${v}`);
+    }
+    html += `<li><strong>${sym}</strong>: ${parts.join(', ')}</li>`;
   }
-  if(layer === 'layer1_active') renderLayer1();
-  else renderLayer2();
-  markDirty();
+  html += '</ul>';
+  list.innerHTML = html;
+  document.getElementById('confirmDialog').classList.add('show');
 }
 
-function removeInstrument(layer, index) {
-  const sym = data[layer][index].symbol;
-  if(!confirm(`Remove ${sym}? This cannot be undone (but a backup will be saved).`)) return;
-  data[layer].splice(index, 1);
-  layer === 'layer1_active' ? renderLayer1() : renderLayer2();
-  markDirty();
+function closeDialog() {
+  document.getElementById('confirmDialog').classList.remove('show');
 }
 
-function addLayer1() {
-  const symbol  = document.getElementById('new-symbol').value.trim().toUpperCase();
-  const name    = document.getElementById('new-name').value.trim();
-  if(!symbol || !name) { toast('Symbol and Name are required', 'error'); return; }
+async function confirmSave() {
+  closeDialog();
 
-  const market = document.getElementById('new-market').value;
-  const inst = {
-    symbol, name,
-    flag:      document.getElementById('new-flag').value.trim() || '📈',
-    sec_type:  document.getElementById('new-sectype').value,
-    exchange:  document.getElementById('new-exchange').value,
-    currency:  document.getElementById('new-currency').value,
-    qty:       +document.getElementById('new-qty').value,
-    loss_limit:+document.getElementById('new-loss').value,
-    long_only: document.getElementById('new-longonly').value === 'true',
-    enabled:   true,
-    notes:     document.getElementById('new-notes').value.trim(),
-  };
-  if(market) inst.market = market;
+  // Build changes array for the API
+  const changes = [];
+  const allSyms = new Set([...Object.keys(modifications), ...Object.keys(indicatorMods)]);
 
-  data.layer1_active.push(inst);
-  renderLayer1();
-  markDirty();
+  // Handle global settings update
+  if (modifications.__global__) {
+    try {
+      await fetch(API + '/api/instruments/global-settings', {
+        method: 'POST',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(globalSettings),
+      });
+    } catch(e) { toast('Failed to save global settings', 'error'); }
+    delete modifications.__global__;
+  }
 
-  // Clear form
-  ['new-symbol','new-name','new-flag','new-notes'].forEach(id => document.getElementById(id).value = '');
-  toast(`${symbol} added to Layer 1`, 'success');
+  // Handle enable/disable toggles
+  for (const sym of allSyms) {
+    if (sym === '__global__') continue;
+    const mods = modifications[sym] || {};
+    if ('_enabled' in mods) {
+      try {
+        await fetch(API + '/api/instruments/toggle-enable', {
+          method: 'POST',
+          headers: apiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ symbol: sym, enabled: mods._enabled }),
+        });
+      } catch(e) { /* handled by update */ }
+    }
+
+    // Build update entry
+    const entry = { symbol: sym };
+    let hasChanges = false;
+    for (const [k,v] of Object.entries(mods)) {
+      if (k === '_enabled') continue;
+      entry[k] = v;
+      hasChanges = true;
+    }
+    const inds = indicatorMods[sym] || {};
+    if (Object.keys(inds).length > 0) {
+      entry.indicators = inds;
+      hasChanges = true;
+    }
+    if (hasChanges) changes.push(entry);
+  }
+
+  if (changes.length > 0) {
+    try {
+      const r = await fetch(API + '/api/instruments/update', {
+        method: 'POST',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ changes }),
+      });
+      const result = await r.json();
+      if (r.ok && result.ok) {
+        toast('Saved! Restart bot to apply.', 'success');
+      } else {
+        toast('Error: ' + (result.errors || [result.error]).join(', '), 'error');
+        return;
+      }
+    } catch(e) {
+      toast('Save failed', 'error');
+      return;
+    }
+  } else {
+    toast('Saved!', 'success');
+  }
+
+  modifications = {};
+  indicatorMods = {};
+  await loadData();
 }
 
-function addLayer2() {
-  const symbol = document.getElementById('l2-symbol').value.trim().toUpperCase();
-  const name   = document.getElementById('l2-name').value.trim();
-  if(!symbol || !name) { toast('Symbol and Name are required', 'error'); return; }
-
-  data.layer2_accumulation.push({
-    symbol, name,
-    flag:     document.getElementById('l2-flag').value.trim() || '📊',
-    sec_type: 'STK', exchange: 'SMART', currency: 'USD',
-    qty:      +document.getElementById('l2-qty').value,
-    enabled:  true,
-  });
-  renderLayer2();
-  markDirty();
-  ['l2-symbol','l2-name','l2-flag'].forEach(id => document.getElementById(id).value = '');
-  toast(`${symbol} added to Layer 2`, 'success');
+// ── Apply WF ─────────────────────────────────────
+function applyWF(sym) {
+  const inst = wfData[sym];
+  if (!inst || inst.wf_stop == null) return;
+  updateTrading(sym, 'trail_stop_pct', inst.wf_stop);
+  updateTrading(sym, 'take_profit_pct', inst.wf_tp);
+  renderCards();
+  toast(`${sym}: WF params applied (unsaved)`, 'success');
 }
 
-// ── Save ─────────────────────────────────────────
-async function saveAll() {
+async function applyAllWF() {
   try {
-    const r = await fetch(API + '/api/instruments', {
+    const r = await fetch(API + '/api/instruments/apply-wf', {
       method: 'POST',
       headers: apiHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(data),
+      body: JSON.stringify({ symbols: 'all' }),
     });
-    if (r.status === 401) { logout(); return; }
     const result = await r.json();
-    if(result.ok) {
-      toast('✅ Saved! Restart the bot to apply changes.', 'success');
-      dirty = false;
-      document.getElementById('restartBanner').classList.remove('show');
+    if (result.ok) {
+      toast(`Applied WF to ${result.applied.length} instruments, ${result.skipped.length} skipped`, 'success');
+      await loadData();
+    }
+  } catch(e) { toast('Failed to apply WF', 'error'); }
+}
+
+// ── Quick Test ───────────────────────────────────
+let _testTimers = {};
+
+async function runQuickTest(sym) {
+  const inst = wfData[sym];
+  if (!inst) return;
+
+  // Gather current values (including unsaved edits)
+  const params = {
+    trail_stop_pct: getVal(sym, 'trail_stop_pct', inst.trail_stop_pct),
+    take_profit_pct: getVal(sym, 'take_profit_pct', inst.take_profit_pct),
+    emergency_stop_pct: getVal(sym, 'emergency_stop_pct', inst.emergency_stop_pct),
+  };
+
+  // Include indicator settings
+  const resolved = inst.resolved_indicators || {};
+  const indFields = ['rsi_period','rsi_oversold','rsi_overbought','williams_r_period','adx_period','adx_threshold','ma200_period'];
+  for (const f of indFields) {
+    const indVal = getIndVal(sym, f, (inst.indicators||{})[f]);
+    params[f] = indVal != null ? indVal : resolved[f];
+  }
+
+  // Disable buttons and show loading progress bar
+  const testBtn = document.getElementById('btn-test-' + sym);
+  const optBtn = document.getElementById('btn-opt-' + sym);
+  if (testBtn) { testBtn.disabled = true; testBtn.innerHTML = `<span class="spinner"></span>Testing...`; }
+  if (optBtn) optBtn.disabled = true;
+
+  // Show indeterminate progress bar
+  testResults[sym] = { _loading: true, _startTime: Date.now() };
+  renderCards();
+  _testTimers[sym] = setInterval(() => renderCards(), 1000);
+
+  try {
+    const r = await fetch(API + '/api/instruments/test', {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ symbol: sym, params }),
+    });
+    clearInterval(_testTimers[sym]);
+    delete _testTimers[sym];
+    const result = await r.json();
+    if (r.ok) {
+      testResults[sym] = result;
     } else {
-      toast('Error: ' + result.message, 'error');
+      testResults[sym] = { _error: true, _message: result.error || 'Test failed' };
     }
   } catch(e) {
-    toast('Save failed — is api_server.py running?', 'error');
+    clearInterval(_testTimers[sym]);
+    delete _testTimers[sym];
+    testResults[sym] = { _error: true, _message: 'Test failed: server timeout. Try again.' };
+  }
+
+  // Re-enable buttons and render
+  if (testBtn) { testBtn.disabled = false; testBtn.textContent = 'Test'; }
+  if (optBtn) optBtn.disabled = false;
+  renderCards();
+}
+
+function applyTestResult(sym) {
+  // No extra params to apply from quick test (it used the user's params)
+  delete testResults[sym];
+  toast(`${sym}: test params already in fields`, 'success');
+  renderCards();
+}
+
+function dismissTest(sym) {
+  delete testResults[sym];
+  renderCards();
+}
+
+// ── Optimise ─────────────────────────────────────
+let _optTimers = {};
+
+async function runOptimise(sym) {
+  // Disable buttons and show spinner
+  const testBtn = document.getElementById('btn-test-' + sym);
+  const optBtn = document.getElementById('btn-opt-' + sym);
+  if (optBtn) { optBtn.disabled = true; optBtn.innerHTML = `<span class="spinner"></span>Optimising ${sym}...`; }
+  if (testBtn) testBtn.disabled = true;
+
+  // Start elapsed timer
+  const startTime = Date.now();
+  _optTimers[sym] = setInterval(() => {
+    const elapsed = Date.now() - startTime;
+    const mins = Math.floor(elapsed / 60000);
+    const secs = Math.floor((elapsed % 60000) / 1000);
+    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+    if (optBtn) optBtn.innerHTML = `<span class="spinner"></span>Optimising ${sym}... ${timeStr}`;
+  }, 1000);
+
+  try {
+    const r = await fetch(API + '/api/instruments/optimise', {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ symbol: sym }),
+    });
+    const result = await r.json();
+    if (r.ok && result.job_id) {
+      optimiseJobs[sym] = { status: 'running', progress: 0, phase: 'Starting...', job_id: result.job_id, _startTime: Date.now() };
+      renderCards();
+      pollOptimise(sym, result.job_id);
+    } else {
+      clearInterval(_optTimers[sym]);
+      delete _optTimers[sym];
+      if (optBtn) { optBtn.disabled = false; optBtn.textContent = 'Optimise'; }
+      if (testBtn) testBtn.disabled = false;
+      toast(`Optimise failed: ${result.error}`, 'error');
+    }
+  } catch(e) {
+    clearInterval(_optTimers[sym]);
+    delete _optTimers[sym];
+    if (optBtn) { optBtn.disabled = false; optBtn.textContent = 'Optimise'; }
+    if (testBtn) testBtn.disabled = false;
+    toast('Optimise failed', 'error');
   }
 }
 
-function markDirty() {
-  dirty = true;
-  document.getElementById('restartBanner').classList.add('show');
+async function pollOptimise(sym, jobId) {
+  try {
+    const r = await fetch(API + `/api/instruments/optimise/status?job_id=${jobId}`, { headers: apiHeaders() });
+    const result = await r.json();
+    optimiseJobs[sym] = { ...result, job_id: jobId, _startTime: optimiseJobs[sym]?._startTime || Date.now() };
+    if (result.status !== 'running') {
+      // Done — clear timer and re-enable buttons
+      clearInterval(_optTimers[sym]);
+      delete _optTimers[sym];
+      const testBtn = document.getElementById('btn-test-' + sym);
+      const optBtn = document.getElementById('btn-opt-' + sym);
+      if (optBtn) { optBtn.disabled = false; optBtn.textContent = 'Optimise'; }
+      if (testBtn) testBtn.disabled = false;
+    }
+    renderCards();
+    if (result.status === 'running') {
+      setTimeout(() => pollOptimise(sym, jobId), 3000);
+    }
+  } catch(e) {
+    setTimeout(() => pollOptimise(sym, jobId), 5000);
+  }
 }
 
-// ── Toast ─────────────────────────────────────────
+function applyOptResult(sym, mode) {
+  const job = optimiseJobs[sym];
+  if (!job || !job.result) return;
+  const best = job.result.best;
+
+  if (mode === 'all' || mode === 'trading') {
+    updateTrading(sym, 'trail_stop_pct', best.trail_stop_pct);
+    updateTrading(sym, 'take_profit_pct', best.take_profit_pct);
+  }
+  if (mode === 'all' || mode === 'indicators') {
+    const indKeys = ['rsi_period','rsi_oversold','rsi_overbought','williams_r_period','adx_threshold','ma200_period'];
+    for (const k of indKeys) {
+      if (best[k] != null) {
+        if (!indicatorMods[sym]) indicatorMods[sym] = {};
+        indicatorMods[sym][k] = best[k];
+      }
+    }
+  }
+
+  updateSaveBar();
+  renderCards();
+  toast(`${sym}: optimised params applied (unsaved)`, 'success');
+}
+
+function dismissOpt(sym) {
+  delete optimiseJobs[sym];
+  renderCards();
+}
+
+function markDirty(sym, field, value) {
+  if (!modifications[sym]) modifications[sym] = {};
+  modifications[sym][field] = value;
+  updateSaveBar();
+}
+
+// ── Toast ────────────────────────────────────────
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -575,12 +1004,11 @@ function toast(msg, type='success') {
   setTimeout(() => el.classList.remove('show'), 3500);
 }
 
-// ── Warn on exit if unsaved ───────────────────────
+// Warn on exit if unsaved
 window.addEventListener('beforeunload', e => {
-  if(dirty) { e.preventDefault(); e.returnValue = ''; }
+  const modCount = Object.keys(modifications).length + Object.keys(indicatorMods).length;
+  if (modCount > 0) { e.preventDefault(); e.returnValue = ''; }
 });
-
-// ── Auth: logout redirects to login page ─────────
 
 // ── Init ─────────────────────────────────────────
 loadData();

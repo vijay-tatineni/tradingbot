@@ -120,8 +120,19 @@ tr:hover td {{ background:#1c2128; }}
 </head>
 <body>
 
+<!-- Nav Bar -->
+<div style="display:flex;align-items:center;padding:10px 24px;background:#161b22;border-bottom:1px solid #30363d;gap:8px;">
+  <span style="color:#f5c842;font-weight:700;font-size:0.82rem;margin-right:8px;">CogniflowAI</span>
+  <a href="dashboard.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#f5c842;border:1px solid #f5c842;font-family:'JetBrains Mono',monospace;">Dashboard</a>
+  <a href="instruments.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#8b949e;border:1px solid transparent;font-family:'JetBrains Mono',monospace;">Instruments</a>
+  <a href="tests.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#8b949e;border:1px solid transparent;font-family:'JetBrains Mono',monospace;">Tests</a>
+  <div style="flex:1;"></div>
+  <span style="color:#22c55e;font-size:0.65rem;padding:6px 0;">Logged in as: <span id="navUser">--</span></span>
+  <button onclick="logout()" style="color:#ef4444;border:1px solid #ef4444;cursor:pointer;background:none;font-weight:600;font-family:'JetBrains Mono',monospace;font-size:0.72rem;padding:6px 14px;border-radius:4px;">Logout</button>
+</div>
+
 <div class="header">
-  <h1>⚡ Trading Bot Dashboard</h1>
+  <h1>Trading Bot Dashboard</h1>
   <div class="updated" id="updated">Last updated: --</div>
 </div>
 
@@ -290,6 +301,16 @@ async function load() {{
 }}
 load();
 setInterval(load, 30000);
+
+// Nav auth
+const _user = localStorage.getItem('jwt_user');
+if (_user) document.getElementById('navUser').textContent = _user;
+function logout() {{
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  document.cookie = 'jwt_token=; path=/; max-age=0';
+  window.location.href = 'login.html';
+}}
 </script>
 </body>
 </html>"""

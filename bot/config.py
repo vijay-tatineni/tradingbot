@@ -99,6 +99,39 @@ class Config:
             print(f"Run: python3 -c \"import json; json.load(open('{self.path}'))\"")
             sys.exit(1)
 
+    # ── Settings dict for backtest/offline use ─────────────────
+    @property
+    def _settings(self) -> dict:
+        return self._raw.get('settings', {})
+
+    def get_indicator_settings(self, instrument: dict) -> dict:
+        """
+        Get resolved indicator settings for an instrument.
+        Per-instrument overrides take priority over global defaults.
+        """
+        s = self._settings
+        settings = {
+            "rsi_period": s.get("rsi_period", 14),
+            "rsi_oversold": s.get("rsi_oversold", 35),
+            "rsi_overbought": s.get("rsi_overbought", 70),
+            "williams_r_period": s.get("williams_r_period", 14),
+            "williams_r_mid": s.get("williams_r_mid", -50),
+            "williams_r_oversold": s.get("williams_r_oversold", -80),
+            "williams_r_overbought": s.get("williams_r_overbought", -20),
+            "adx_period": s.get("adx_period", 14),
+            "adx_threshold": s.get("adx_threshold", 20),
+            "ma200_period": s.get("ma200_period", 200),
+            "alligator_min_gap_pct": s.get("alligator_min_gap_pct", 0.003),
+        }
+
+        # Apply per-instrument overrides (skip None values — null means revert to global)
+        overrides = instrument.get("indicators", {})
+        for key, val in overrides.items():
+            if val is not None:
+                settings[key] = val
+
+        return settings
+
     def reload(self) -> None:
         """Reload config from disk — call after editing instruments.json without restart."""
         self.__init__(self.path)

@@ -1,14 +1,19 @@
 """
-bot/position_tracker.py  — v7.0
+bot/position_tracker.py  — v8.0
 Tracks peak prices, trailing stops, and re-entry signals.
 All state persisted to SQLite so trail stops survive restarts.
 
-FIXED in v7.0:
+v8.0 changes:
+  - Two-tier stop evaluation: emergency hard stop (every cycle) +
+    trailing stop / take profit (bar close only)
+  - Peak price only updates on bar close (matches walk-forward)
+  - Missing position counter: waits 3 cycles before recording close
+  - check_emergency_stop() for tier 1 evaluation
+  - exit_price validation: never records 0 or negative
+
+v7.0 changes:
   - SQLite persistence for all position state
   - GBP pence/pounds: removed broken < 500 heuristic.
-    IBKR avgCost is ALWAYS in pounds for GBP.
-    Market prices are ALWAYS in pence for LSE.
-    Conversion only applied to IBKR avgCost, never to market prices.
   - Cooldown timer: fixed .seconds → .total_seconds()
 """
 
@@ -67,6 +72,7 @@ class PositionTracker:
         self.db_path  = DB_FILE
         self.open     : dict[str, PositionState] = {}
         self.watching : dict[str, WatchState]    = {}
+        self._missing_counts : dict[str, int]    = {}
         self._init_db()
         self._load_state()
 
@@ -314,6 +320,90 @@ class PositionTracker:
                 return f"TRAIL_STOP {pnl_pct:+.1f}%"
 
         return None
+
+    def check_emergency_stop(self, symbol: str, price: float,
+                             emergency_stop_pct: float) -> Optional[str]:
+        """
+        Tier 1: Emergency hard stop — checked every cycle.
+        Only triggers on catastrophic moves from ENTRY price.
+        Returns exit reason string if triggered, else None.
+        """
+        if symbol not in self.open:
+            return None
+
+        state = self.open[symbol]
+        entry = state.entry_price
+
+        if state.side == 'SHORT':
+            emergency_price = entry * (1 + emergency_stop_pct / 100)
+            if price >= emergency_price:
+                pnl_pct = ((entry - price) / entry) * 100
+                reason = f"EMERGENCY_STOP {pnl_pct:+.1f}%"
+                log(f"[Tracker] EMERGENCY STOP SHORT {symbol}  "
+                    f"price {price:.4f} >= limit {emergency_price:.4f}  "
+                    f"(-{emergency_stop_pct}% from entry)")
+                return reason
+        else:
+            emergency_price = entry * (1 - emergency_stop_pct / 100)
+            if price <= emergency_price:
+                pnl_pct = ((price - entry) / entry) * 100
+                reason = f"EMERGENCY_STOP {pnl_pct:+.1f}%"
+                log(f"[Tracker] EMERGENCY STOP {symbol}  "
+                    f"price {price:.4f} <= limit {emergency_price:.4f}  "
+                    f"(-{emergency_stop_pct}% from entry)")
+                return reason
+
+        return None
+
+    def handle_missing_position(self, symbol: str,
+                                current_price: float) -> Optional[dict]:
+        """
+        Called when a tracked position is not found in broker positions.
+        Waits 3 consecutive cycles before confirming position is gone.
+
+        Returns dict with action/reason/exit_price if confirmed gone,
+        or None if still waiting.
+        """
+        self._missing_counts[symbol] = self._missing_counts.get(symbol, 0) + 1
+        count = self._missing_counts[symbol]
+
+        if count < 3:
+            log(f"[Tracker] {symbol} missing from broker "
+                f"({count}/3 checks)", "WARN")
+            return None
+
+        # Position gone for 3 consecutive cycles — confirmed closed
+        state = self.open.get(symbol)
+        entry_price = state.entry_price if state else 0
+
+        # Determine best exit price
+        if current_price is not None and current_price > 0:
+            exit_price = current_price
+            reason = "POSITION_GONE"
+        elif entry_price > 0:
+            # Last resort: use entry price (record as scratch)
+            exit_price = entry_price
+            reason = "POSITION_GONE_NO_PRICE"
+        else:
+            # Should never happen, but guard against it
+            exit_price = 1.0
+            reason = "POSITION_GONE_NO_PRICE"
+
+        log(f"[Tracker] {symbol} confirmed gone after {count} checks  "
+            f"exit_price={exit_price:.4f}  reason={reason}", "WARN")
+
+        # Reset counter
+        del self._missing_counts[symbol]
+
+        return {
+            "action": "RECORD_CLOSE",
+            "reason": reason,
+            "exit_price": exit_price,
+        }
+
+    def clear_missing_count(self, symbol: str) -> None:
+        """Reset missing counter when position reappears."""
+        self._missing_counts.pop(symbol, None)
 
     def on_close(self, symbol: str, exit_price: float,
                  reason: str, cooldown_mins: int = 30) -> None:

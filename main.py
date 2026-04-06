@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from bot.config        import Config
-from bot.connection    import IBConnection
+from bot.brokers       import create_broker
 from bot.market_hours  import MarketHours
 from bot.layer1        import ActiveTrading
 from bot.layer2        import Accumulation
@@ -63,7 +63,8 @@ class TradingBot:
 
     def __init__(self):
         self.cfg     = Config()
-        self.ib      = IBConnection(self.cfg)
+        broker_type  = self.cfg._raw.get('settings', {}).get('broker', 'ibkr')
+        self.broker  = create_broker(broker_type, self.cfg)
         self.hours   = MarketHours()
         self.plugins : list = []
 
@@ -79,10 +80,13 @@ class TradingBot:
         # self.register_plugin(MacroFilter(self.cfg))
         # self.register_plugin(MLOverride(self.cfg))
 
+        # ── Wire alerts to broker for order failure notifications ─
+        self.broker.set_alerts(self.alerts)
+
         # ── Pass plugins to layer1 ────────────────────────────
-        self.l1   = ActiveTrading(self.cfg, self.ib, self.plugins, alerts=self.alerts)
-        self.l2   = Accumulation(self.cfg, self.ib)
-        self.l3   = SilverScalper(self.cfg, self.ib, alerts=self.alerts)
+        self.l1   = ActiveTrading(self.cfg, self.broker, self.plugins, alerts=self.alerts)
+        self.l2   = Accumulation(self.cfg, self.broker)
+        self.l3   = SilverScalper(self.cfg, self.broker, alerts=self.alerts)
         self.dash = Dashboard(self.cfg)
 
         # ── Watchdog: alert if bot appears stuck ──────────────
@@ -110,11 +114,11 @@ class TradingBot:
 
         # Qualify all contracts on startup
         log("Qualifying Layer 1 contracts...")
-        self.cfg.active_instruments = self.ib.qualify_contracts(self.cfg.active_instruments)
+        self.cfg.active_instruments = self.broker.qualify_contracts(self.cfg.active_instruments)
         log("Qualifying Layer 2 contracts...")
-        self.cfg.accum_instruments  = self.ib.qualify_contracts(self.cfg.accum_instruments)
+        self.cfg.accum_instruments  = self.broker.qualify_contracts(self.cfg.accum_instruments)
         log("Qualifying Layer 3 contracts...")
-        self.l3.qualify(self.ib)
+        self.l3.qualify(self.broker)
 
         # Notify plugins bot has started
         for plugin in self.plugins:
@@ -131,10 +135,18 @@ class TradingBot:
             if now.weekday() >= 5:  # Saturday=5, Sunday=6
                 self.watchdog.set_sleep_mode(True)
                 log("Weekend — markets closed, sleeping 1 hour")
-                self.ib.sleep(3600)
+                try:
+                    self.broker.sleep(3600)
+                except (ConnectionError, OSError, Exception) as e:
+                    log(f"Weekend sleep connection error: {e} — using fallback sleep", "WARN")
+                    import time as _time
+                    _time.sleep(3600)
                 continue
 
             self.watchdog.set_sleep_mode(False)
+            if not self.broker.is_connected():
+                log("Reconnecting to IBKR after weekend sleep...")
+                self.broker.reconnect()
             cycle += 1
             separator(f"CYCLE #{cycle}  ·  "
                       f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -174,14 +186,14 @@ class TradingBot:
 
                 log(f"Cycle #{cycle} complete. "
                     f"Next in {self.cfg.check_interval_mins} minutes.")
-                self.ib.sleep(self.cfg.check_interval)
+                self.broker.sleep(self.cfg.check_interval)
 
             except Exception as e:
                 log(f"Cycle error: {e}", "ERROR")
                 import traceback
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
-                self.ib.reconnect()
+                self.broker.reconnect()
 
     def _shutdown(self, sig=None, frame=None) -> None:
         """Graceful shutdown — notify plugins, watchdog, log final state."""

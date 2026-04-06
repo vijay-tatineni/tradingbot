@@ -54,6 +54,21 @@ class IndicatorBundle:
     adx:      ADXResult
 
 
+class _SettingsProxy:
+    """Lightweight proxy that reads indicator settings from a dict,
+    falling back to the original Config object for anything not specified."""
+    def __init__(self, settings: dict, fallback):
+        self._settings = settings
+        self._fallback = fallback
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        if name in self._settings:
+            return self._settings[name]
+        return getattr(self._fallback, name)
+
+
 # ── Indicators class ──────────────────────────────────────────
 
 class Indicators:
@@ -70,20 +85,28 @@ class Indicators:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def calculate(self, df: pd.DataFrame) -> Optional[IndicatorBundle]:
+    def calculate(self, df: pd.DataFrame, indicator_settings: dict = None) -> Optional[IndicatorBundle]:
         """
         Run all indicators on a price DataFrame.
         Returns IndicatorBundle or None if data is insufficient.
+
+        If indicator_settings is provided, uses those values instead of
+        the global config (for per-instrument overrides).
         """
-        if df is None or len(df) < self.cfg.ma200_period:
+        cfg = self.cfg
+        if indicator_settings:
+            # Build a lightweight config-like object from the settings dict
+            cfg = _SettingsProxy(indicator_settings, self.cfg)
+
+        if df is None or len(df) < cfg.ma200_period:
             return None
 
         price     = float(df['close'].iloc[-1])
-        alligator = self._alligator(df)
-        ma200     = self._ma200(df)
-        wr        = self._williams_r(df)
-        rsi       = self._rsi(df)
-        adx       = self._adx(df)
+        alligator = self._alligator(df, cfg)
+        ma200     = self._ma200(df, cfg)
+        wr        = self._williams_r(df, cfg)
+        rsi       = self._rsi(df, cfg)
+        adx       = self._adx(df, cfg)
 
         return IndicatorBundle(
             price=round(price, 4),
@@ -111,7 +134,8 @@ class Indicators:
         valid = [v for v in vals if v is not None]
         return valid[-(shift + 1)] if len(valid) > shift else None
 
-    def _alligator(self, df: pd.DataFrame) -> AlligatorResult:
+    def _alligator(self, df: pd.DataFrame, cfg=None) -> AlligatorResult:
+        cfg = cfg or self.cfg
         if len(df) < self.JAW_PERIOD + self.JAW_SHIFT + 5:
             return AlligatorResult(None, None, None, 'SLEEPING', 'NONE')
 
@@ -126,7 +150,7 @@ class Indicators:
         price  = float(df['close'].iloc[-1])
         gap_jt = abs(jaw - teeth) / price
         gap_tl = abs(teeth - lips) / price
-        mg     = self.cfg.alligator_min_gap_pct
+        mg     = cfg.alligator_min_gap_pct
 
         state = (
             'SLEEPING' if gap_jt < mg and gap_tl < mg else
@@ -146,10 +170,11 @@ class Indicators:
 
     # ── Private: MA200 ────────────────────────────────────────
 
-    def _ma200(self, df: pd.DataFrame) -> MA200Result:
-        if len(df) < self.cfg.ma200_period:
+    def _ma200(self, df: pd.DataFrame, cfg=None) -> MA200Result:
+        cfg = cfg or self.cfg
+        if len(df) < cfg.ma200_period:
             return MA200Result(None, 'UNKNOWN')
-        ma200 = float(df['close'].rolling(self.cfg.ma200_period).mean().iloc[-1])
+        ma200 = float(df['close'].rolling(cfg.ma200_period).mean().iloc[-1])
         price = float(df['close'].iloc[-1])
         return MA200Result(
             value=round(ma200, 4),
@@ -158,9 +183,10 @@ class Indicators:
 
     # ── Private: Williams %R ──────────────────────────────────
 
-    def _williams_r(self, df: pd.DataFrame) -> WilliamsRResult:
-        period = self.cfg.williams_r_period
-        mid    = self.cfg.williams_r_mid
+    def _williams_r(self, df: pd.DataFrame, cfg=None) -> WilliamsRResult:
+        cfg = cfg or self.cfg
+        period = cfg.williams_r_period
+        mid    = cfg.williams_r_mid
 
         if len(df) < period + 1:
             return WilliamsRResult(-50.0, 'NEUTRAL')
@@ -186,9 +212,10 @@ class Indicators:
 
     # ── Private: ADX ──────────────────────────────────────────
 
-    def _adx(self, df: pd.DataFrame) -> ADXResult:
-        period = self.cfg.adx_period if hasattr(self.cfg, 'adx_period') else 14
-        threshold = self.cfg.adx_threshold if hasattr(self.cfg, 'adx_threshold') else 20
+    def _adx(self, df: pd.DataFrame, cfg=None) -> ADXResult:
+        cfg = cfg or self.cfg
+        period = cfg.adx_period if hasattr(cfg, 'adx_period') else 14
+        threshold = cfg.adx_threshold if hasattr(cfg, 'adx_threshold') else 20
 
         if len(df) < period * 2:
             return ADXResult(0.0, 'NONE')
@@ -227,8 +254,9 @@ class Indicators:
 
     # ── Private: RSI ──────────────────────────────────────────
 
-    def _rsi(self, df: pd.DataFrame) -> float:
-        period = self.cfg.rsi_period
+    def _rsi(self, df: pd.DataFrame, cfg=None) -> float:
+        cfg = cfg or self.cfg
+        period = cfg.rsi_period
         if len(df) < period + 1:
             return 50.0
         delta = df['close'].diff()

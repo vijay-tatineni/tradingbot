@@ -33,3 +33,24 @@ Thumbs.db
 # Old archives
 trading_v6/
 *.zip
+
+# Task specs (local planning docs)
+TASK_SPEC*.md
+HANDOVER.md
+
+# Database files
+*.db
+*.db.bak
+
+# Backups
+*.bak
+instruments.json.bak.*
+
+# Backtest results (generated)
+backtest/results/
+
+# Old scripts
+backtest_2yr.py
+backtest_2yr_results.txt
+fix_gbp_pnl.py
+learning_loop.db.bak

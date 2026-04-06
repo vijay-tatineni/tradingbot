@@ -84,6 +84,7 @@ function getRedirectTarget() {
   const params = new URLSearchParams(window.location.search);
   const redirect = params.get('redirect');
   if (redirect === 'instruments') return 'instruments.html';
+  if (redirect === 'tests') return 'tests.html';
   if (redirect === 'dashboard') return 'dashboard.html';
   return 'dashboard.html';
 }

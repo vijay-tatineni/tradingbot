@@ -18,10 +18,8 @@ import os
 from pathlib import Path
 import pytz
 from bot.config       import Config
-from bot.connection   import IBConnection
+from bot.brokers.base import BaseBroker
 from bot.market_hours import MarketHours
-from bot.portfolio    import Portfolio
-from bot.orders       import OrderManager
 from bot.logger       import log, separator
 
 BASE_DIR = Path(__file__).parent.parent
@@ -45,12 +43,10 @@ class SilverScalper:
     All state persisted in SQLite. Daily reset at 08:00 UTC.
     """
 
-    def __init__(self, cfg: Config, ib_conn: IBConnection, alerts=None):
+    def __init__(self, cfg: Config, broker: BaseBroker, alerts=None):
         self.cfg       = cfg
-        self.ib_conn   = ib_conn
+        self.broker    = broker
         self.hours     = MarketHours()
-        self.portfolio = Portfolio(ib_conn, cfg)
-        self.orders    = OrderManager(ib_conn, cfg)
         self.alerts    = alerts
 
         # ── Instrument config (loaded from instruments.json) ─
@@ -72,7 +68,7 @@ class SilverScalper:
 
     # ── Public interface ─────────────────────────────────────
 
-    def qualify(self, ib_conn: IBConnection) -> bool:
+    def qualify(self, broker: BaseBroker) -> bool:
         """Find SSLN in layer3_silver config and qualify its contract."""
         instruments = self.cfg._raw.get('layer3_silver', [])
         enabled = [i for i in instruments if i.get('enabled', True)]
@@ -80,7 +76,7 @@ class SilverScalper:
             log("[L3 Silver] No enabled instruments in layer3_silver config")
             return False
 
-        qualified = ib_conn.qualify_contracts(enabled)
+        qualified = broker.qualify_contracts(enabled)
         if not qualified:
             log("[L3 Silver] Failed to qualify SSLN contract", "WARN")
             return False
@@ -135,7 +131,7 @@ class SilverScalper:
 
         # ── Sync position with IBKR ─────────────────────────
         if self._state['status'] == 'IN_POSITION':
-            actual_pos = self.portfolio.get_position(self.inst['symbol'])
+            actual_pos = self.broker.get_position(self.inst['symbol'])
             if actual_pos <= 0:
                 # Position was closed externally
                 self._state['status']      = 'WATCHING'
@@ -205,7 +201,7 @@ class SilverScalper:
     def _buy(self, price: float) -> None:
         """Execute buy and set initial trail stop."""
         qty = self.inst['qty']
-        ok  = self.orders.place(
+        ok  = self.broker.place_order(
             self.inst['contract'], 'BUY', qty, self.inst['name']
         )
         if not ok:
@@ -232,10 +228,10 @@ class SilverScalper:
     def _sell(self, price: float, reason: str) -> None:
         """Execute sell and record P&L."""
         qty = self.inst['qty']
-        actual_pos = self.portfolio.get_position(self.inst['symbol'])
+        actual_pos = self.broker.get_position(self.inst['symbol'])
         sell_qty = actual_pos if actual_pos > 0 else qty
 
-        ok = self.orders.place(
+        ok = self.broker.place_order(
             self.inst['contract'], 'SELL', sell_qty, self.inst['name']
         )
         if not ok:
@@ -283,22 +279,8 @@ class SilverScalper:
     # ── Price fetching ───────────────────────────────────────
 
     def _get_price(self) -> float | None:
-        """Get current SSLN price from IBKR (1-minute snapshot)."""
-        try:
-            bars = self.ib_conn.ib.reqHistoricalData(
-                self.inst['contract'],
-                endDateTime='',
-                durationStr='120 S',
-                barSizeSetting='1 min',
-                whatToShow='TRADES',
-                useRTH=True,
-            )
-            if bars:
-                return bars[-1].close
-            return None
-        except Exception as e:
-            log(f"[L3 Silver] Price fetch error: {e}", "WARN")
-            return None
+        """Get current SSLN price from broker (1-minute snapshot)."""
+        return self.broker.fetch_price_snapshot(self.inst['contract'])
 
     # ── Session reset ────────────────────────────────────────
 

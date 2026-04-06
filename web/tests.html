@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Test Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100..800&display=swap" rel="stylesheet">
+<style>
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+}
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2128;
+  --green:#22c55e; --red:#ef4444; --gold:#f5c842;
+  --blue:#38bdf8; --muted:#8b949e; --border:#30363d;
+  --text:#ffffff; --navy:#0f3460;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.8rem; }
+
+/* ── Nav Bar ── */
+.navbar { display:flex; align-items:center; padding:10px 24px; background:var(--bg2); border-bottom:1px solid var(--border); gap:8px; }
+.navbar a, .navbar span { font-size:0.72rem; text-decoration:none; padding:6px 14px; border-radius:4px; font-family:'JetBrains Mono',monospace; }
+.navbar a { color:var(--muted); border:1px solid transparent; }
+.navbar a:hover { color:var(--text); border-color:var(--border); }
+.navbar a.active { color:var(--gold); border:1px solid var(--gold); }
+.nav-logo { color:var(--gold); font-weight:700; font-size:0.82rem; margin-right:8px; }
+.nav-spacer { flex:1; }
+.nav-user { color:var(--green); font-size:0.65rem; padding:6px 0; }
+.nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; font-family:'JetBrains Mono',monospace; font-size:0.72rem; padding:6px 14px; border-radius:4px; }
+.nav-logout:hover { background:#2d0a0a !important; }
+
+/* ── Header ── */
+.header { padding:16px 24px; border-bottom:1px solid var(--border); }
+.header h1 { color:var(--gold); font-size:1.3rem; font-weight:700; }
+.header .sub { color:var(--muted); font-size:0.68rem; margin-top:4px; }
+
+/* ── Summary Cards ── */
+.cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:16px 24px; }
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px; }
+.card-label { font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+.card-value { font-size:1.6rem; font-weight:700; margin-top:6px; }
+.card-sub { font-size:0.65rem; color:var(--muted); margin-top:4px; }
+.green { color:var(--green); } .red { color:var(--red); }
+.gold { color:var(--gold); } .muted { color:var(--muted); }
+
+/* ── Section ── */
+.section { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:0 24px 16px; overflow:hidden; }
+.section-title { padding:12px 16px; font-size:0.72rem; color:var(--gold); border-bottom:1px solid var(--border); letter-spacing:2px; font-weight:600; display:flex; align-items:center; justify-content:space-between; }
+.section-title .btn { font-size:0.62rem; padding:4px 12px; border-radius:4px; border:1px solid var(--border); background:var(--bg3); color:var(--blue); cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:600; }
+.section-title .btn:hover { border-color:var(--blue); }
+.section-title .btn:disabled { opacity:0.4; cursor:not-allowed; }
+.section-title .btn.running { color:var(--gold); border-color:var(--gold); }
+
+/* ── Tables ── */
+table { width:100%; border-collapse:collapse; }
+th { padding:8px 10px; text-align:left; font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--border); font-weight:500; white-space:nowrap; }
+td { padding:8px 10px; border-bottom:1px solid #1c2128; font-size:0.72rem; color:var(--text); white-space:nowrap; }
+tr:hover td { background:#1c2128; }
+th.right, td.right { text-align:right; }
+
+/* ── Badges ── */
+.badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; }
+.badge-pass { background:#052e16; color:var(--green); }
+.badge-fail { background:#2d0a0a; color:var(--red); }
+.badge-robust { background:#052e16; color:var(--green); }
+.badge-marginal { background:#713f12; color:#fbbf24; }
+.badge-overfit { background:#2d0a0a; color:var(--red); }
+.badge-noedge { background:#1f2937; color:var(--muted); }
+.badge-enabled { background:#0c2461; color:var(--blue); }
+.badge-disabled { background:#1f2937; color:var(--muted); }
+
+/* ── Progress bar ── */
+.progress-bar { height:4px; background:var(--border); border-radius:2px; margin-top:8px; }
+.progress-fill { height:4px; border-radius:2px; transition:width 0.5s; }
+
+/* ── Report selector ── */
+.report-controls { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:center; }
+.report-controls select { background:var(--bg3); border:1px solid var(--border); border-radius:4px; color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.7rem; padding:6px 10px; }
+.report-controls select:focus { outline:none; border-color:var(--gold); }
+
+/* ── Pre block ── */
+.report-pre { padding:16px; font-size:0.68rem; line-height:1.5; white-space:pre; overflow-x:auto; color:var(--muted); max-height:600px; overflow-y:auto; }
+.report-pre .hl-green { color:var(--green); }
+.report-pre .hl-red { color:var(--red); }
+.report-pre .hl-gold { color:var(--gold); }
+
+/* ── WF Efficiency bar ── */
+.eff-bar { display:inline-block; height:12px; border-radius:2px; min-width:2px; vertical-align:middle; }
+
+/* ── Comparison delta ── */
+.delta-pos { color:var(--green); font-size:0.65rem; }
+.delta-neg { color:var(--red); font-size:0.65rem; }
+
+/* ── Loading ── */
+.loading { padding:24px; text-align:center; color:var(--muted); font-size:0.72rem; }
+</style>
+</head>
+<body>
+
+<!-- Nav Bar -->
+<div class="navbar">
+  <span class="nav-logo">CogniflowAI</span>
+  <a href="dashboard.html">Dashboard</a>
+  <a href="instruments.html">Instruments</a>
+  <a href="tests.html" class="active">Tests</a>
+  <div class="nav-spacer"></div>
+  <span class="nav-user">Logged in as: <span id="navUser">--</span></span>
+  <button class="nav-logout" onclick="logout()">Logout</button>
+</div>
+
+<div class="header">
+  <h1>Test Dashboard</h1>
+  <div class="sub" id="headerSub">Unit tests, walk-forward validation, and backtest results</div>
+</div>
+
+<!-- Summary Cards -->
+<div class="cards">
+  <div class="card">
+    <div class="card-label">Unit Tests</div>
+    <div class="card-value" id="unitSummary"><span class="muted">--</span></div>
+    <div class="card-sub" id="unitDuration">Not run yet</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Walk-Forward</div>
+    <div class="card-value" id="wfSummary"><span class="muted">--</span></div>
+    <div class="card-sub" id="wfDate">--</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Robust Instruments</div>
+    <div class="card-value green" id="robustCount">--</div>
+    <div class="card-sub" id="robustSub">--</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Total OOS P&L</div>
+    <div class="card-value" id="totalOos">--</div>
+    <div class="card-sub" id="totalOosSub">--</div>
+  </div>
+</div>
+
+<!-- Section 1: Unit Tests -->
+<div class="section">
+  <div class="section-title">
+    // UNIT TESTS
+    <button class="btn" id="runTestsBtn" onclick="runTests()">Run Tests</button>
+  </div>
+  <div id="unitTestsBody">
+    <div class="loading">Click "Run Tests" to execute the test suite</div>
+  </div>
+</div>
+
+<!-- Section 2: Walk-Forward Results -->
+<div class="section">
+  <div class="section-title">// WALK-FORWARD RESULTS</div>
+  <div class="report-controls">
+    <select id="wfRunSelect" onchange="loadWalkforward()">
+      <option value="">Loading...</option>
+    </select>
+  </div>
+  <div id="wfBody">
+    <div class="loading">Loading walk-forward data...</div>
+  </div>
+</div>
+
+<!-- Section 3: Backtest vs Walk-Forward Comparison -->
+<div class="section">
+  <div class="section-title">// BACKTEST vs WALK-FORWARD COMPARISON</div>
+  <div id="comparisonBody">
+    <div class="loading">Loading comparison data...</div>
+  </div>
+</div>
+
+<!-- Section 4: Individual Backtest Reports -->
+<div class="section">
+  <div class="section-title">// BACKTEST REPORTS</div>
+  <div class="report-controls">
+    <select id="btReportSelect" onchange="loadReport()">
+      <option value="">Loading...</option>
+    </select>
+  </div>
+  <div id="btReportBody">
+    <div class="loading">Select a report to view</div>
+  </div>
+</div>
+
+<div style="height:24px"></div>
+
+<script>
+const API = 'http://188.166.150.137:8082';
+const token = localStorage.getItem('jwt_token');
+const user = localStorage.getItem('jwt_user');
+
+// Auth check
+if (!token) { window.location.href = 'login.html?redirect=tests'; }
+document.getElementById('navUser').textContent = user || '--';
+
+function authHeaders() {
+  return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+}
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  document.cookie = 'jwt_token=; path=/; max-age=0';
+  window.location.href = 'login.html';
+}
+
+function fmtPnl(val) {
+  if (val === null || val === undefined) return '--';
+  const sign = val >= 0 ? '+' : '-';
+  return sign + '$' + Math.abs(val).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0});
+}
+
+function fmtPnl2(val) {
+  if (val === null || val === undefined) return '--';
+  const sign = val >= 0 ? '+' : '-';
+  return sign + '$' + Math.abs(val).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function pnlClass(val) { return val >= 0 ? 'green' : 'red'; }
+
+function verdictBadge(v) {
+  const map = {
+    'robust': 'badge-robust', 'marginal': 'badge-marginal',
+    'overfit': 'badge-overfit', 'no_edge': 'badge-noedge',
+  };
+  const label = { 'robust': 'Robust', 'marginal': 'Marginal', 'overfit': 'Overfit', 'no_edge': 'No Edge' };
+  return `<span class="badge ${map[v]||'badge-noedge'}">${label[v]||v}</span>`;
+}
+
+function effBar(val) {
+  const pct = Math.min(Math.max(val * 100, 0), 150);
+  const w = Math.min(pct, 100);
+  const color = val > 0.5 ? '#22c55e' : val >= 0.3 ? '#f59e0b' : '#ef4444';
+  return `<span class="eff-bar" style="width:${w}px;background:${color}"></span> ${val.toFixed(2)}`;
+}
+
+// ── Section 1: Unit Tests ────────────────────────────────────────
+
+async function runTests() {
+  const btn = document.getElementById('runTestsBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  btn.classList.add('running');
+  document.getElementById('unitTestsBody').innerHTML = '<div class="loading">Running pytest...</div>';
+
+  try {
+    const r = await fetch(API + '/api/tests/unit', {
+      method: 'POST', headers: authHeaders(),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    renderUnitTests(d);
+  } catch(e) {
+    document.getElementById('unitTestsBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run Tests';
+  btn.classList.remove('running');
+}
+
+function renderUnitTests(d) {
+  const total = d.passed + d.failed + d.errors;
+  const allPass = d.failed === 0 && d.errors === 0;
+
+  // Update card
+  const sumEl = document.getElementById('unitSummary');
+  sumEl.innerHTML = allPass
+    ? `<span class="green">${d.passed} PASS</span>`
+    : `<span class="red">${d.failed} FAIL</span>`;
+  document.getElementById('unitDuration').textContent =
+    `${total} tests in ${d.duration}`;
+
+  // Group by module
+  const modules = {};
+  d.tests.forEach(t => {
+    if (!modules[t.module]) modules[t.module] = [];
+    modules[t.module].push(t);
+  });
+
+  let html = '<table><thead><tr><th>Module</th><th>Test</th><th>Status</th></tr></thead><tbody>';
+  for (const [mod, tests] of Object.entries(modules)) {
+    tests.forEach((t, i) => {
+      const statusClass = t.status === 'PASSED' ? 'badge-pass' : 'badge-fail';
+      html += `<tr>
+        <td>${i===0 ? '<span class="gold">'+mod+'</span>' : ''}</td>
+        <td>${t.name}</td>
+        <td><span class="badge ${statusClass}">${t.status}</span></td>
+      </tr>`;
+    });
+  }
+  html += '</tbody></table>';
+
+  // If failures, add stdout
+  if (!allPass && d.stderr) {
+    html += `<div class="report-pre">${escapeHtml(d.stderr)}</div>`;
+  }
+
+  document.getElementById('unitTestsBody').innerHTML = html;
+}
+
+// ── Section 2: Walk-Forward Results ──────────────────────────────
+
+let wfData = null;
+
+async function loadWalkforwardInit() {
+  try {
+    const r = await fetch(API + '/api/tests/walkforward', { headers: authHeaders() });
+    const d = await r.json();
+    wfData = d;
+
+    // Populate run selector
+    const sel = document.getElementById('wfRunSelect');
+    sel.innerHTML = d.runs.map((run, i) =>
+      `<option value="${run}" ${i===0?'selected':''}>${run}</option>`
+    ).join('');
+    if (d.runs.length === 0) {
+      sel.innerHTML = '<option value="">No walk-forward runs found</option>';
+      document.getElementById('wfBody').innerHTML = '<div class="loading">No data available</div>';
+      return;
+    }
+
+    renderWalkforward(d);
+  } catch(e) {
+    document.getElementById('wfBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+async function loadWalkforward() {
+  const runDate = document.getElementById('wfRunSelect').value;
+  if (!runDate) return;
+
+  try {
+    const r = await fetch(API + '/api/tests/walkforward?run_date=' + encodeURIComponent(runDate), {
+      headers: authHeaders(),
+    });
+    const d = await r.json();
+    wfData = d;
+    renderWalkforward(d);
+  } catch(e) {
+    document.getElementById('wfBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function renderWalkforward(d) {
+  const results = d.results || [];
+
+  // Update cards
+  const verdicts = { robust:0, marginal:0, overfit:0, no_edge:0 };
+  let totalOos = 0;
+  results.forEach(r => {
+    verdicts[r.verdict] = (verdicts[r.verdict]||0) + 1;
+    totalOos += r.oos_pnl || 0;
+  });
+
+  document.getElementById('wfSummary').innerHTML =
+    `<span class="muted">${results.length}</span>`;
+  document.getElementById('wfDate').textContent = d.run_date || '--';
+  document.getElementById('robustCount').textContent = verdicts.robust;
+  document.getElementById('robustSub').textContent =
+    `${verdicts.marginal} marginal, ${verdicts.overfit} overfit, ${verdicts.no_edge} no edge`;
+
+  const oosEl = document.getElementById('totalOos');
+  oosEl.innerHTML = `<span class="${pnlClass(totalOos)}">${fmtPnl(totalOos)}</span>`;
+  document.getElementById('totalOosSub').textContent = 'Out-of-sample total';
+
+  if (results.length === 0) {
+    document.getElementById('wfBody').innerHTML = '<div class="loading">No results for this run</div>';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th>Symbol</th><th>TF</th><th class="right">IS P&L</th><th class="right">OOS P&L</th>
+    <th>WF Efficiency</th><th class="right">Stop%</th><th class="right">TP%</th>
+    <th class="right">OOS Trades</th><th class="right">OOS Win%</th><th>Verdict</th>
+  </tr></thead><tbody>`;
+
+  results.forEach(r => {
+    const wr = r.oos_win_rate !== null ? (r.oos_win_rate * 100).toFixed(0) + '%' : '--';
+    html += `<tr>
+      <td><span class="gold">${r.symbol}</span></td>
+      <td>${r.timeframe || '--'}</td>
+      <td class="right ${pnlClass(r.is_pnl)}">${fmtPnl(r.is_pnl)}</td>
+      <td class="right ${pnlClass(r.oos_pnl)}">${fmtPnl(r.oos_pnl)}</td>
+      <td>${effBar(r.wf_efficiency || 0)}</td>
+      <td class="right">${r.best_stop_pct ? r.best_stop_pct.toFixed(1)+'%' : '--'}</td>
+      <td class="right">${r.best_tp_pct ? r.best_tp_pct.toFixed(1)+'%' : '--'}</td>
+      <td class="right">${r.oos_trade_count || 0}</td>
+      <td class="right">${wr}</td>
+      <td>${verdictBadge(r.verdict)}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('wfBody').innerHTML = html;
+}
+
+// ── Section 3: Backtest vs Walk-Forward Comparison ───────────────
+
+async function loadComparison() {
+  try {
+    const r = await fetch(API + '/api/tests/comparison', { headers: authHeaders() });
+    const d = await r.json();
+    renderComparison(d);
+  } catch(e) {
+    document.getElementById('comparisonBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function renderComparison(d) {
+  const results = d.results || [];
+  if (results.length === 0) {
+    document.getElementById('comparisonBody').innerHTML =
+      '<div class="loading">No comparison data available</div>';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th>Symbol</th><th>TF</th>
+    <th class="right">IS P&L</th><th class="right">IS PF</th><th class="right">IS Trades</th>
+    <th class="right">OOS P&L</th><th class="right">OOS PF</th><th class="right">OOS Trades</th>
+    <th class="right">Degradation</th><th>WF Eff</th><th>Verdict</th>
+  </tr></thead><tbody>`;
+
+  results.forEach(r => {
+    // Degradation: how much OOS degrades vs IS
+    const degradation = Math.abs(r.is_pnl) > 0 ? ((r.oos_pnl - r.is_pnl) / Math.abs(r.is_pnl) * 100) : 0;
+    const degradStr = Math.abs(r.is_pnl) > 0
+      ? `<span class="${degradation >= -30 ? 'green' : 'red'}">${degradation >= 0 ? '+' : ''}${degradation.toFixed(0)}%</span>`
+      : '<span class="muted">--</span>';
+
+    const isPf = r.is_profit_factor ? r.is_profit_factor.toFixed(2) : '--';
+    const oosPf = r.oos_profit_factor ? r.oos_profit_factor.toFixed(2) : '--';
+
+    html += `<tr>
+      <td><span class="gold">${r.symbol}</span></td>
+      <td>${r.timeframe || '--'}</td>
+      <td class="right ${pnlClass(r.is_pnl)}">${fmtPnl(r.is_pnl)}</td>
+      <td class="right">${isPf}</td>
+      <td class="right">${r.is_trade_count || 0}</td>
+      <td class="right ${pnlClass(r.oos_pnl)}">${fmtPnl(r.oos_pnl)}</td>
+      <td class="right">${oosPf}</td>
+      <td class="right">${r.oos_trade_count || 0}</td>
+      <td class="right">${degradStr}</td>
+      <td>${effBar(r.wf_efficiency || 0)}</td>
+      <td>${verdictBadge(r.verdict)}</td>
+    </tr>`;
+  });
+
+  // Totals row
+  let totIs = 0, totOos = 0;
+  results.forEach(r => { totIs += r.is_pnl || 0; totOos += r.oos_pnl || 0; });
+  const totDeg = Math.abs(totIs) > 0 ? ((totOos - totIs) / Math.abs(totIs) * 100) : 0;
+  html += `<tr style="border-top:2px solid var(--border)">
+    <td><strong>TOTAL</strong></td><td></td>
+    <td class="right ${pnlClass(totIs)}"><strong>${fmtPnl(totIs)}</strong></td><td></td><td></td>
+    <td class="right ${pnlClass(totOos)}"><strong>${fmtPnl(totOos)}</strong></td><td></td><td></td>
+    <td class="right"><strong><span class="${totDeg >= -30 ? 'green' : 'red'}">${totDeg >= 0?'+':''}${totDeg.toFixed(0)}%</span></strong></td>
+    <td></td><td></td>
+  </tr>`;
+
+  html += '</tbody></table>';
+  document.getElementById('comparisonBody').innerHTML = html;
+}
+
+// ── Section 4: Individual Backtest Reports ───────────────────────
+
+async function loadReportList() {
+  try {
+    const r = await fetch(API + '/api/tests/backtest/list', { headers: authHeaders() });
+    const files = await r.json();
+    const sel = document.getElementById('btReportSelect');
+
+    if (files.length === 0) {
+      sel.innerHTML = '<option value="">No reports found</option>';
+      document.getElementById('btReportBody').innerHTML = '<div class="loading">No reports available</div>';
+      return;
+    }
+
+    sel.innerHTML = files.map(f => {
+      const label = f.type === 'walkforward' ? 'WF' : 'BT';
+      const date = f.modified ? f.modified.substring(0,16).replace('T',' ') : '';
+      return `<option value="${f.name}">[${label}] ${f.name} (${date})</option>`;
+    }).join('');
+
+    // Auto-load first report
+    loadReport();
+  } catch(e) {
+    document.getElementById('btReportBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+async function loadReport() {
+  const filename = document.getElementById('btReportSelect').value;
+  if (!filename) return;
+
+  document.getElementById('btReportBody').innerHTML = '<div class="loading">Loading report...</div>';
+
+  try {
+    const r = await fetch(API + '/api/tests/backtest/report?file=' + encodeURIComponent(filename), {
+      headers: authHeaders(),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    // Syntax-highlight the report
+    const highlighted = highlightReport(escapeHtml(d.content));
+    document.getElementById('btReportBody').innerHTML =
+      `<div class="report-pre">${highlighted}</div>`;
+  } catch(e) {
+    document.getElementById('btReportBody').innerHTML =
+      `<div class="loading" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function highlightReport(html) {
+  // Highlight positive P&L values
+  html = html.replace(/(\+?\$[\d,]+\.?\d*)/g, (match) => {
+    if (match.startsWith('-')) return `<span class="hl-red">${match}</span>`;
+    return `<span class="hl-green">${match}</span>`;
+  });
+  // Highlight negative P&L
+  html = html.replace(/(-\$[\d,]+\.?\d*)/g, `<span class="hl-red">$1</span>`);
+  // Highlight verdicts
+  html = html.replace(/\bRobust\b/g, '<span class="hl-green">Robust</span>');
+  html = html.replace(/\bMarginal\b/g, '<span class="hl-gold">Marginal</span>');
+  html = html.replace(/\bOverfit\b/g, '<span class="hl-red">Overfit</span>');
+  html = html.replace(/\bNo edge\b/g, '<span class="hl-red">No edge</span>');
+  // Highlight section headers
+  html = html.replace(/^(={2,})/gm, '<span class="hl-gold">$1</span>');
+  // Highlight TP/SL results
+  html = html.replace(/\bTP\b/g, '<span class="hl-green">TP</span>');
+  html = html.replace(/\bSL\b/g, '<span class="hl-red">SL</span>');
+  return html;
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+
+loadWalkforwardInit();
+loadComparison();
+loadReportList();
+</script>
+</body>
+</html>
