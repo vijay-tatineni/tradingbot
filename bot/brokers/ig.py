@@ -20,6 +20,7 @@ import pandas as pd
 from trading_ig import IGService
 
 from bot.brokers.base import BaseBroker, BrokerPosition, FillResult, PositionInfo
+from bot.currency import is_pence_instrument, convert_pnl_to_base
 
 logger = logging.getLogger("ig_broker")
 
@@ -84,6 +85,11 @@ class IGBroker(BaseBroker):
         self._connected = False
         self._alerts = None
         self._last_request: dict[str, float] = {}
+
+        # Position cache — avoids repeated API calls within same cycle
+        self._position_cache: Optional[list[BrokerPosition]] = None
+        self._position_cache_time: float = 0
+        self._position_cache_ttl: float = 30  # seconds
 
     # ── Connection ────────────────────────────────────────────────
 
@@ -291,6 +297,7 @@ class IGBroker(BaseBroker):
                     "IG order filled: %s %s %s @ %s (deal: %s)",
                     action, fill_size, epic, fill_level, deal_id,
                 )
+                self.invalidate_position_cache()
                 return FillResult(
                     success=True,
                     fill_price=fill_level,
@@ -357,6 +364,7 @@ class IGBroker(BaseBroker):
 
             if deal_status == "ACCEPTED":
                 logger.info("IG position closed: %s @ %s", epic, fill_level)
+                self.invalidate_position_cache()
                 return FillResult(
                     success=True,
                     fill_price=fill_level,
@@ -429,8 +437,8 @@ class IGBroker(BaseBroker):
                 if pos.avg_cost and price:
                     unreal = (price - pos.avg_cost) * pos.qty
                     # GBP instruments are priced in pence; convert P&L to pounds
-                    if pos.currency == "GBP":
-                        unreal = round(unreal / 100, 2)
+                    if is_pence_instrument(pos.currency):
+                        unreal = round(convert_pnl_to_base(unreal, pos.currency), 2)
                     pnl_pct = ((price - pos.avg_cost) / pos.avg_cost) * 100
                 return PositionInfo(
                     symbol=symbol,
@@ -464,6 +472,20 @@ class IGBroker(BaseBroker):
             return 0.0
 
     def get_all_positions(self) -> list[BrokerPosition]:
+        """Return cached positions, refreshing if TTL expired."""
+        now = time.time()
+        if (self._position_cache is not None
+                and now - self._position_cache_time < self._position_cache_ttl):
+            return self._position_cache
+        self._position_cache = self._fetch_positions_from_api()
+        self._position_cache_time = now
+        return self._position_cache
+
+    def invalidate_position_cache(self) -> None:
+        """Call after placing/closing an order to force refresh."""
+        self._position_cache = None
+
+    def _fetch_positions_from_api(self) -> list[BrokerPosition]:
         try:
             self._ensure_session()
             self._rate_limit("general")

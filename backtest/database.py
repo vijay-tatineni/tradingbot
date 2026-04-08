@@ -18,6 +18,7 @@ def get_connection() -> sqlite3.Connection:
     """Open (or create) backtest.db and ensure schema exists."""
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     _create_schema(conn)
     return conn
 

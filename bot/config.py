@@ -68,6 +68,11 @@ class Config:
         self.adx_period    : int   = s.get('adx_period', 14)
         self.adx_threshold : float = s.get('adx_threshold', 20)
 
+        # ── Portfolio risk limits ────────────────────────────
+        self.max_open_positions    : int   = s.get('max_open_positions', 10)
+        self.max_entries_per_cycle : int   = s.get('max_entries_per_cycle', 2)
+        self.default_target_notional : float = s.get('default_target_notional', None)
+
         # ── Unmanaged positions (excluded from P&L / emergency stop) ──
         self.unmanaged_positions : list = s.get('unmanaged_positions', [])
 

@@ -7,6 +7,7 @@ All position data comes from IBKR, not calculated locally.
 from dataclasses import dataclass
 from typing import Optional
 from bot.logger import log
+from bot.currency import is_pence_instrument, pounds_to_pence, convert_pnl_to_base
 
 
 @dataclass
@@ -54,7 +55,7 @@ class Portfolio:
                     qty      = p.position
                     currency = getattr(p.contract, 'currency', 'USD')
                     # IBKR returns avgCost in GBP pounds; LSE prices in pence
-                    avg_cost = round(p.avgCost * 100, 4) if currency == 'GBP' else round(p.avgCost, 4)
+                    avg_cost = round(pounds_to_pence(p.avgCost), 4) if is_pence_instrument(currency) else round(p.avgCost, 4)
                     # Correct P&L for both long and short positions
                     if avg_cost > 0 and current_price > 0:
                         if qty > 0:  # long
@@ -67,8 +68,8 @@ class Portfolio:
                             unreal, pct = 0, 0
                         # GBP: avg_cost and price are both in pence, so P&L is
                         # in pence too — convert to pounds for display
-                        if currency == 'GBP':
-                            unreal = round(unreal / 100, 2)
+                        if is_pence_instrument(currency):
+                            unreal = round(convert_pnl_to_base(unreal, currency), 2)
                     else:
                         unreal, pct = 0, 0
                     return PositionInfo(

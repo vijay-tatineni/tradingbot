@@ -24,6 +24,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 from bot.logger import log
+from bot.currency import is_pence_instrument, pounds_to_pence
 
 BASE_DIR = Path(__file__).parent.parent
 DB_FILE = str(BASE_DIR / 'positions.db')
@@ -60,8 +61,8 @@ def ibkr_avg_cost_to_market(avg_cost: float, currency: str) -> float:
     IBKR returns avgCost in GBP pounds; LSE quotes in pence.
     Always multiply by 100 for GBP — no heuristic threshold.
     """
-    if currency == 'GBP':
-        return avg_cost * 100
+    if is_pence_instrument(currency):
+        return pounds_to_pence(avg_cost)
     return avg_cost
 
 
@@ -78,8 +79,14 @@ class PositionTracker:
 
     # ── SQLite persistence ──────────────────────────
 
-    def _init_db(self) -> None:
+    def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    def _init_db(self) -> None:
+        conn = self._connect()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS open_positions (
                 symbol        TEXT PRIMARY KEY,
@@ -115,7 +122,7 @@ class PositionTracker:
 
     def _load_state(self) -> None:
         """Load persisted state from SQLite on startup."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
 
         for row in conn.execute("SELECT * FROM open_positions"):
@@ -149,7 +156,7 @@ class PositionTracker:
 
     def _save_open(self, symbol: str) -> None:
         state = self.open[symbol]
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.execute("""
             INSERT OR REPLACE INTO open_positions
             (symbol, entry_price, entry_time, peak_price,
@@ -162,14 +169,14 @@ class PositionTracker:
         conn.close()
 
     def _delete_open(self, symbol: str) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.execute("DELETE FROM open_positions WHERE symbol=?", (symbol,))
         conn.commit()
         conn.close()
 
     def _save_watch(self, symbol: str) -> None:
         watch = self.watching[symbol]
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.execute("""
             INSERT OR REPLACE INTO watch_positions
             (symbol, exit_price, exit_time, exit_reason, low_since_exit,
@@ -182,7 +189,7 @@ class PositionTracker:
         conn.close()
 
     def _delete_watch(self, symbol: str) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.execute("DELETE FROM watch_positions WHERE symbol=?", (symbol,))
         conn.commit()
         conn.close()

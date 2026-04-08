@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import pandas as pd
 
 from backtest.offline_signals import Signal
+from bot.currency import is_pence_instrument, convert_pnl_to_base
+from bot.sizing import calculate_qty
 
 
 @dataclass
@@ -53,27 +55,27 @@ def simulate_trades(
     qty: int = 1,
     long_only: bool = True,
     currency: str = "USD",
+    target_notional: float = None,
+    trailing_mode: bool = True,
 ) -> list[TradeResult]:
     """
-    Simulate each signal as a trade with fixed stop% and TP%.
+    Simulate each signal as a trade with stop% and TP%.
 
-    For BUY signals:
-        stop_price = entry * (1 - stop_pct/100)
-        tp_price   = entry * (1 + tp_pct/100)
-        Scan forward: low <= stop → LOSS; high >= tp → WIN
-        Both in same bar → conservative: LOSS
+    If trailing_mode=True (default):
+      - Peak price updates on each bar close
+      - Stop ratchets up (for longs) / down (for shorts) but never reverses
+      - Matches the live bot's bar-close trailing stop logic
 
-    For SELL signals (only if long_only=False):
-        stop_price = entry * (1 + stop_pct/100)
-        tp_price   = entry * (1 - tp_pct/100)
-        Loss if high >= stop; win if low <= tp
+    If trailing_mode=False:
+      - Fixed stop = entry × (1 ± stop_pct/100)
+      - Never changes after entry (original behavior)
 
     GBP instruments: LSE stocks are quoted in pence. P&L is calculated in
     pence then divided by 100 to convert to pounds, matching the live bot's
     logic in bot/portfolio.py and bot/layer3_silver.py.
     """
     # GBP pence→pounds divisor (LSE quotes in pence, P&L needs pounds)
-    pence_divisor = 100.0 if currency == "GBP" else 1.0
+    pence_divisor = 100.0 if is_pence_instrument(currency) else 1.0
 
     trades = []
 
@@ -87,9 +89,11 @@ def simulate_trades(
         if sig.direction == "BUY":
             stop_price = entry_price * (1 - stop_pct / 100)
             tp_price = entry_price * (1 + tp_pct / 100)
+            peak_price = entry_price
         else:  # SELL
             stop_price = entry_price * (1 + stop_pct / 100)
             tp_price = entry_price * (1 - tp_pct / 100)
+            peak_price = entry_price
 
         outcome = "open"
         exit_price = entry_price
@@ -99,6 +103,20 @@ def simulate_trades(
         # Scan forward from the bar AFTER the signal
         for j in range(entry_idx + 1, len(df)):
             bar = df.iloc[j]
+
+            # Trailing stop: update peak and ratchet stop on bar close
+            if trailing_mode:
+                close = bar["close"]
+                if sig.direction == "BUY":
+                    if close > peak_price:
+                        peak_price = close
+                        new_stop = peak_price * (1 - stop_pct / 100)
+                        stop_price = max(stop_price, new_stop)
+                else:  # SELL (short)
+                    if close < peak_price:
+                        peak_price = close
+                        new_stop = peak_price * (1 + stop_pct / 100)
+                        stop_price = min(stop_price, new_stop)
 
             if sig.direction == "BUY":
                 hit_stop = bar["low"] <= stop_price
@@ -133,11 +151,16 @@ def simulate_trades(
             holding_bars = len(df) - entry_idx - 1
 
         # Calculate P&L
+        # If target_notional is set, compute qty from entry price
+        trade_qty = qty
+        if target_notional is not None:
+            inst_stub = {'qty': qty, 'currency': currency}
+            trade_qty = calculate_qty(inst_stub, entry_price, target_notional)
         # Raw P&L in price units (pence for GBP, dollars for USD)
         if sig.direction == "BUY":
-            raw_pnl = (exit_price - entry_price) * qty
+            raw_pnl = (exit_price - entry_price) * trade_qty
         else:
-            raw_pnl = (entry_price - exit_price) * qty
+            raw_pnl = (entry_price - exit_price) * trade_qty
         # Convert pence → pounds for GBP instruments
         pnl = raw_pnl / pence_divisor
         pnl_pct = ((exit_price - entry_price) / entry_price * 100

@@ -182,6 +182,7 @@ def test_concurrent_optimise_same_symbol(setup_api):
         'symbol': 'BARC', 'status': 'running', 'progress': 50,
         'phase': 'Running', 'estimated_remaining_seconds': 60,
         'result': None, 'error': None,
+        '_created_at': time.time(),
     }
     r = client.post('/api/instruments/optimise',
         headers=auth_headers(token),
@@ -199,6 +200,7 @@ def test_concurrent_optimise_different_symbols(setup_api):
         'symbol': 'BARC', 'status': 'running', 'progress': 50,
         'phase': 'Running', 'estimated_remaining_seconds': 60,
         'result': None, 'error': None,
+        '_created_at': time.time(),
     }
     # MSFT should be allowed since BARC is the one running
     r = client.post('/api/instruments/optimise',

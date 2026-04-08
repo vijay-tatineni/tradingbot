@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 from bot.plugins.base_plugin import BasePlugin
 from bot.logger import log
+from bot.currency import convert_pnl_to_base
 
 BASE_DIR = Path(__file__).parent.parent.parent
 DB_FILE = str(BASE_DIR / 'learning_loop.db')
@@ -33,6 +34,12 @@ class LearningLoop(BasePlugin):
         self.db  = DB_FILE
         self._last_retrain_time = datetime.datetime.utcnow()
         self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
 
     # ── Lifecycle hooks ───────────────────────────────────────
 
@@ -73,7 +80,7 @@ class LearningLoop(BasePlugin):
         if bundle is None:
             return
 
-        conn = sqlite3.connect(self.db)
+        conn = self._connect()
         conn.execute("""
             INSERT INTO trades
             (timestamp, symbol, name, action, entry_price, qty,
@@ -113,7 +120,7 @@ class LearningLoop(BasePlugin):
                 f"exit_price={exit_price} for {symbol}", "ERROR")
             return
 
-        conn   = sqlite3.connect(self.db)
+        conn   = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, entry_price, qty, action, timestamp, currency "
@@ -136,8 +143,7 @@ class LearningLoop(BasePlugin):
             pnl = (entry_price_db - exit_price) * qty
 
         # GBP: prices are in pence, convert P&L to pounds
-        if currency == 'GBP':
-            pnl = pnl / 100
+        pnl = convert_pnl_to_base(pnl, currency)
 
         outcome = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'SCRATCH'
 
@@ -170,7 +176,7 @@ class LearningLoop(BasePlugin):
 
     def _check_exits(self, signal_rows: list) -> None:
         """Safety net: mark open trades as closed if IBKR position is now 0."""
-        conn   = sqlite3.connect(self.db)
+        conn   = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, symbol, entry_price, qty, action, timestamp, currency "
@@ -206,8 +212,7 @@ class LearningLoop(BasePlugin):
                 pnl = (entry_price - exit_price) * qty
 
             # GBP: prices are in pence, convert P&L to pounds
-            if currency == 'GBP':
-                pnl = pnl / 100
+            pnl = convert_pnl_to_base(pnl, currency)
 
             outcome = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'SCRATCH'
 
@@ -235,7 +240,7 @@ class LearningLoop(BasePlugin):
 
     def _get_stats(self) -> dict:
         try:
-            conn   = sqlite3.connect(self.db)
+            conn   = self._connect()
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM trades WHERE open=0")
             total = cursor.fetchone()[0]
@@ -261,7 +266,7 @@ class LearningLoop(BasePlugin):
     # ── Database init ─────────────────────────────────────────
 
     def _init_db(self) -> None:
-        conn = sqlite3.connect(self.db)
+        conn = self._connect()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,

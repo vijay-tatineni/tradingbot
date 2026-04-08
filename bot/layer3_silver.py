@@ -18,12 +18,20 @@ import os
 from pathlib import Path
 import pytz
 from bot.config       import Config
+from bot.currency     import convert_pnl_to_base
 from bot.brokers.base import BaseBroker
 from bot.market_hours import MarketHours
 from bot.logger       import log, separator
 
 BASE_DIR = Path(__file__).parent.parent
 DB_FILE = str(BASE_DIR / 'layer3_silver.db')
+
+
+def _connect_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
 
 # ── Scalper parameters ───────────────────────────────────────
 BOUNCE_PCT         = 0.3    # % rise from day low to trigger buy
@@ -237,9 +245,9 @@ class SilverScalper:
         if not ok:
             return
 
-        # P&L in pence (SSLN is GBP pence)
+        # P&L in pence (SSLN is GBP pence) — convert to pounds
         pnl_pence  = (price - self._state['entry_price']) * sell_qty
-        pnl_pounds = pnl_pence / 100.0
+        pnl_pounds = convert_pnl_to_base(pnl_pence, 'GBP')
 
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -315,7 +323,7 @@ class SilverScalper:
     # ── SQLite: state persistence ────────────────────────────
 
     def _init_db(self) -> None:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _connect_db()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS silver_scalper_state (
                 symbol         TEXT PRIMARY KEY,
@@ -369,7 +377,7 @@ class SilverScalper:
             'last_updated':   '',
         }
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _connect_db()
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM silver_scalper_state WHERE symbol = ?",
@@ -403,7 +411,7 @@ class SilverScalper:
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._state['last_updated'] = now_iso
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _connect_db()
             conn.execute("""
                 INSERT INTO silver_scalper_state
                     (symbol, date, status, day_low, day_high,
@@ -447,7 +455,7 @@ class SilverScalper:
                    pnl: float, reason: str = "") -> None:
         """Log a trade to the layer3_trades table."""
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _connect_db()
             conn.execute("""
                 INSERT INTO layer3_trades
                 (timestamp, symbol, action, price, qty, pnl_gbp,

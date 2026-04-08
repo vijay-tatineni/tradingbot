@@ -45,7 +45,7 @@ def test_simulator_gbp_pnl_in_pounds():
     ])
     signals = [make_signal('SGLN', 'BUY', 250.0, 0)]
     trades = simulate_trades(signals, df, stop_pct=4.0, tp_pct=4.0,
-                             qty=400, currency='GBP')
+                             qty=400, currency='GBP', trailing_mode=False)
     assert len(trades) == 1
     t = trades[0]
     assert t.outcome == 'win'
@@ -63,7 +63,7 @@ def test_simulator_usd_pnl_unchanged():
     ])
     signals = [make_signal('MSFT', 'BUY', 100.0, 0)]
     trades = simulate_trades(signals, df, stop_pct=4.0, tp_pct=5.0,
-                             qty=10, currency='USD')
+                             qty=10, currency='USD', trailing_mode=False)
     assert len(trades) == 1
     assert trades[0].pnl == 50.0, f"Expected 50.0, got {trades[0].pnl}"
 
@@ -78,7 +78,7 @@ def test_simulator_gbp_stop_loss():
     ])
     signals = [make_signal('SHEL', 'BUY', 3450.0, 0)]
     trades = simulate_trades(signals, df, stop_pct=4.0, tp_pct=12.0,
-                             qty=40, currency='GBP')
+                             qty=40, currency='GBP', trailing_mode=False)
     assert len(trades) == 1
     t = trades[0]
     assert t.outcome == 'loss'
@@ -97,7 +97,7 @@ def test_simulator_gbp_take_profit():
     ])
     signals = [make_signal('SHEL', 'BUY', 3450.0, 0)]
     trades = simulate_trades(signals, df, stop_pct=4.0, tp_pct=12.0,
-                             qty=40, currency='GBP')
+                             qty=40, currency='GBP', trailing_mode=False)
     assert len(trades) == 1
     t = trades[0]
     assert t.outcome == 'win'

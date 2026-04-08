@@ -55,6 +55,15 @@ limiter = Limiter(get_remote_address, app=app, default_limits=[],
                   storage_uri='memory://')
 
 
+# ── SQLite helper ────────────────────────────────────
+
+def _connect_db(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
 # ── User helpers ──────────────────────────────────────
 
 def load_users():
@@ -355,7 +364,7 @@ def get_walkforward_results():
     if not os.path.exists(BACKTEST_DB):
         return jsonify({'runs': [], 'latest': []})
 
-    conn = sqlite3.connect(BACKTEST_DB)
+    conn = _connect_db(BACKTEST_DB)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -422,7 +431,7 @@ def get_backtest_vs_walkforward():
     if not os.path.exists(BACKTEST_DB):
         return jsonify([])
 
-    conn = sqlite3.connect(BACKTEST_DB)
+    conn = _connect_db(BACKTEST_DB)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -451,6 +460,20 @@ def get_backtest_vs_walkforward():
 # Store running optimisation jobs: {job_id: {status, progress, phase, result, ...}}
 _optimise_jobs = {}
 _optimise_lock = threading.Lock()
+
+_JOB_MAX_AGE = 86400  # 24 hours
+
+
+def _cleanup_old_jobs():
+    """Remove optimise jobs older than 24 hours."""
+    cutoff = _time.time() - _JOB_MAX_AGE
+    with _optimise_lock:
+        expired = [
+            jid for jid, job in _optimise_jobs.items()
+            if job.get("_created_at", 0) < cutoff
+        ]
+        for jid in expired:
+            del _optimise_jobs[jid]
 
 INDICATOR_FIELDS = {
     "rsi_period", "rsi_oversold", "rsi_overbought",
@@ -538,7 +561,7 @@ def get_wf_recommendations():
 
     wf_data = {}
     if os.path.exists(BACKTEST_DB):
-        conn = sqlite3.connect(BACKTEST_DB)
+        conn = _connect_db(BACKTEST_DB)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -678,7 +701,7 @@ def apply_wf():
     if not os.path.exists(BACKTEST_DB):
         return jsonify({'error': 'No walk-forward results available'}), 400
 
-    conn = sqlite3.connect(BACKTEST_DB)
+    conn = _connect_db(BACKTEST_DB)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
@@ -912,7 +935,7 @@ def _get_baseline(symbol: str) -> dict | None:
     if not os.path.exists(BACKTEST_DB):
         return None
     try:
-        conn = sqlite3.connect(BACKTEST_DB)
+        conn = _connect_db(BACKTEST_DB)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -946,6 +969,8 @@ def start_optimise():
     if not sym:
         return jsonify({'error': 'Symbol required'}), 400
 
+    _cleanup_old_jobs()
+
     data = load()
     instruments = data.get('layer1_active', [])
     inst = next((i for i in instruments if i['symbol'] == sym), None)
@@ -972,6 +997,7 @@ def start_optimise():
             'estimated_remaining_seconds': None,
             'result': None,
             'error': None,
+            '_created_at': _time.time(),
         }
 
     # Run in background thread

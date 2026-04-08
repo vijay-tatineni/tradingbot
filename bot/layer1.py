@@ -25,6 +25,7 @@ from bot.signals          import SignalEngine
 from bot.position_tracker import PositionTracker
 from bot.bar_schedule     import is_bar_close, next_bar_close_str
 from bot.logger           import log, separator
+from bot.sizing            import calculate_qty
 
 
 class ActiveTrading:
@@ -63,6 +64,8 @@ class ActiveTrading:
             return
 
         self.signal_rows = []
+        self._entries_this_cycle = 0
+        self._open_count = len(self.tracker.open)
         for inst in self.cfg.active_instruments:
             row = self._process_instrument(inst)
             self.signal_rows.append(row)
@@ -129,6 +132,23 @@ class ActiveTrading:
                         f"Recorded exit at {exit_price:.4f}. Check broker app."
                     )
 
+    def _can_enter(self, symbol: str) -> bool:
+        """Check if portfolio risk limits allow a new entry."""
+        if self._open_count >= self.cfg.max_open_positions:
+            log(f"  [{symbol}] Skipping entry — max positions reached "
+                f"({self._open_count}/{self.cfg.max_open_positions})")
+            return False
+        if self._entries_this_cycle >= self.cfg.max_entries_per_cycle:
+            log(f"  [{symbol}] Skipping entry — max entries this cycle "
+                f"({self._entries_this_cycle}/{self.cfg.max_entries_per_cycle})")
+            return False
+        return True
+
+    def _record_entry(self):
+        """Update counters after a successful entry."""
+        self._entries_this_cycle += 1
+        self._open_count += 1
+
     def _process_instrument(self, inst: dict) -> dict:
         symbol   = inst['symbol']
         mkt_open = self.hours.is_open(inst)
@@ -163,6 +183,10 @@ class ActiveTrading:
         reentry_recovery_pct = inst.get('reentry_recovery_pct',  1.5)
         reentry_cooldown     = inst.get('reentry_cooldown_mins',  30)
         loss_limit           = inst.get('loss_limit',            200)
+
+        # Risk-based position sizing: calculate qty from target_notional
+        entry_qty = calculate_qty(inst, price, self.cfg.default_target_notional)
+        inst['qty'] = entry_qty  # Override fixed qty for this cycle
 
         action = "--"
         timeframe = inst.get('timeframe', 'daily')
@@ -265,59 +289,71 @@ class ActiveTrading:
                     symbol, price, signal_valid, reentry_recovery_pct
                 )
                 if should_reenter:
-                    allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
-                    if allowed:
-                        fill_result = self.broker.place_order(
-                            inst['contract'], 'BUY', inst['qty'], inst['name'])
-                        if fill_result:
-                            fill_price = fill_result.fill_price or price
-                            fill_qty = fill_result.filled_qty or inst['qty']
-                            self.tracker.on_open(symbol, fill_price, fill_qty,
-                                                 trail_stop_pct, inst.get('currency','USD'))
-                            self.tracker.clear_watch(symbol)
-                            action = f"RE-ENTRY [{result.confidence}]"
-                            for p in self.plugins:
-                                p.post_trade(inst, 1, action, fill_price)
-                            pos_info = self.broker.get_position_info(symbol, price)
-                        else:
-                            action = "RE-ENTRY FAILED"
+                    if not self._can_enter(symbol):
+                        action = "RE-ENTRY BLOCKED (position limit)"
+                    else:
+                        allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
+                        if allowed:
+                            fill_result = self.broker.place_order(
+                                inst['contract'], 'BUY', inst['qty'], inst['name'])
+                            if fill_result:
+                                fill_price = fill_result.fill_price or price
+                                fill_qty = fill_result.filled_qty or inst['qty']
+                                self.tracker.on_open(symbol, fill_price, fill_qty,
+                                                     trail_stop_pct, inst.get('currency','USD'))
+                                self.tracker.clear_watch(symbol)
+                                action = f"RE-ENTRY [{result.confidence}]"
+                                self._record_entry()
+                                for p in self.plugins:
+                                    p.post_trade(inst, 1, action, fill_price)
+                                pos_info = self.broker.get_position_info(symbol, price)
+                            else:
+                                action = "RE-ENTRY FAILED"
                 else:
                     action = f"WATCHING: {re_reason}"
 
             elif result.signal == 1:
                 # Fresh entry
-                allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
-                if allowed:
-                    action, fill_result = self.broker.handle_signal(
-                        inst, result.signal, result.confidence, pos)
-                    if 'BOUGHT' in action and fill_result:
-                        fill_price = fill_result.fill_price or price
-                        fill_qty = fill_result.filled_qty or inst['qty']
-                        self.tracker.on_open(symbol, fill_price, fill_qty,
-                                             trail_stop_pct, inst.get('currency','USD'))
-                        for p in self.plugins:
-                            p.post_trade(inst, 1, action, fill_price)
-                        pos_info = self.broker.get_position_info(symbol, price)
+                if not self._can_enter(symbol):
+                    action = "ENTRY BLOCKED (position limit)"
                 else:
-                    action = "BLOCKED by plugin"
+                    allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
+                    if allowed:
+                        action, fill_result = self.broker.handle_signal(
+                            inst, result.signal, result.confidence, pos)
+                        if 'BOUGHT' in action and fill_result:
+                            fill_price = fill_result.fill_price or price
+                            fill_qty = fill_result.filled_qty or inst['qty']
+                            self.tracker.on_open(symbol, fill_price, fill_qty,
+                                                 trail_stop_pct, inst.get('currency','USD'))
+                            self._record_entry()
+                            for p in self.plugins:
+                                p.post_trade(inst, 1, action, fill_price)
+                            pos_info = self.broker.get_position_info(symbol, price)
+                    else:
+                        action = "BLOCKED by plugin"
 
             elif result.signal == -1 and not inst.get('long_only', True):
                 # Fresh short from flat
-                allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
-                if allowed:
-                    action, fill_result = self.broker.handle_signal(
-                        inst, result.signal, result.confidence, pos)
-                    if 'SHORTED' in action and fill_result:
-                        fill_price = fill_result.fill_price or price
-                        fill_qty = fill_result.filled_qty or inst['qty']
-                        self.tracker.on_open(symbol, fill_price, -fill_qty,
-                                             trail_stop_pct, inst.get('currency','USD'),
-                                             side='SHORT')
-                        for p in self.plugins:
-                            p.post_trade(inst, -1, action, fill_price)
-                        pos_info = self.broker.get_position_info(symbol, price)
+                if not self._can_enter(symbol):
+                    action = "ENTRY BLOCKED (position limit)"
                 else:
-                    action = "BLOCKED by plugin"
+                    allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
+                    if allowed:
+                        action, fill_result = self.broker.handle_signal(
+                            inst, result.signal, result.confidence, pos)
+                        if 'SHORTED' in action and fill_result:
+                            fill_price = fill_result.fill_price or price
+                            fill_qty = fill_result.filled_qty or inst['qty']
+                            self.tracker.on_open(symbol, fill_price, -fill_qty,
+                                                 trail_stop_pct, inst.get('currency','USD'),
+                                                 side='SHORT')
+                            self._record_entry()
+                            for p in self.plugins:
+                                p.post_trade(inst, -1, action, fill_price)
+                            pos_info = self.broker.get_position_info(symbol, price)
+                    else:
+                        action = "BLOCKED by plugin"
 
         # Refresh position info after any trades
         pos_info   = self.broker.get_position_info(symbol, price)

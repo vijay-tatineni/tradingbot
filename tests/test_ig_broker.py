@@ -805,3 +805,65 @@ def test_ensure_session_reconnects_on_expired():
     with patch.object(broker, 'reconnect') as mock_reconnect:
         broker._ensure_session()
         mock_reconnect.assert_called_once()
+
+
+# ── Position cache tests ─────────────────────────────────────
+
+def test_ig_position_cache_reuses_within_ttl():
+    """Two calls to get_all_positions() within TTL should only make one API call."""
+    broker = _make_connected_broker()
+    broker.ig.fetch_open_positions.return_value = pd.DataFrame([{
+        "epic": "KA.D.BARC.DAILY.IP", "dealId": "D1",
+        "direction": "BUY", "size": 400, "level": 250, "currency": "GBP",
+    }])
+    broker.cfg.active_instruments = [
+        {"symbol": "BARC", "ig_epic": "KA.D.BARC.DAILY.IP"}
+    ]
+
+    result1 = broker.get_all_positions()
+    result2 = broker.get_all_positions()
+
+    assert len(result1) == 1
+    assert len(result2) == 1
+    # fetch_open_positions should only be called once (cached on second call)
+    assert broker.ig.fetch_open_positions.call_count == 1
+
+
+def test_ig_position_cache_refreshes_after_ttl():
+    """Call after TTL expires should make a new API call."""
+    broker = _make_connected_broker()
+    broker._position_cache_ttl = 0  # expire immediately
+    broker.ig.fetch_open_positions.return_value = pd.DataFrame([{
+        "epic": "E1", "dealId": "D1",
+        "direction": "BUY", "size": 10, "level": 100, "currency": "USD",
+    }])
+    broker.cfg.active_instruments = []
+
+    broker.get_all_positions()
+    broker.get_all_positions()
+
+    # With TTL=0, both calls should hit the API
+    assert broker.ig.fetch_open_positions.call_count == 2
+
+
+def test_ig_position_cache_invalidated_after_order():
+    """After place_order(), the cache should be cleared."""
+    broker = _make_connected_broker()
+    broker.ig.fetch_open_positions.return_value = pd.DataFrame()
+    broker.cfg.active_instruments = []
+
+    # Populate cache
+    broker.get_all_positions()
+    assert broker._position_cache is not None
+
+    # Place order — should invalidate
+    broker.ig.create_open_position.return_value = {
+        "dealReference": "REF", "dealStatus": "ACCEPTED",
+    }
+    broker.ig.fetch_deal_by_deal_reference.return_value = {
+        "dealStatus": "ACCEPTED", "level": 100.0, "size": 10,
+    }
+    inst = {"ig_epic": "KA.D.TEST.DAILY.IP", "currency": "USD"}
+    broker.place_order(inst, "BUY", 10, "TEST")
+
+    assert broker._position_cache is None  # cache invalidated
