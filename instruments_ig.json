@@ -1,0 +1,59 @@
+{
+    "_readme": "IG Markets configuration. Set broker to 'ig' to use this.",
+    "_version": "3.0",
+    "settings": {
+        "broker": "ig",
+        "ig_username": "",
+        "ig_password": "",
+        "ig_api_key": "",
+        "ig_acc_type": "DEMO",
+        "ig_acc_number": "",
+        "host": "127.0.0.1",
+        "port": 0,
+        "client_id": 0,
+        "account": "",
+        "check_interval_mins": 1,
+        "portfolio_loss_limit": 10000,
+        "web_dir": "web",
+        "alligator_min_gap_pct": 0.003,
+        "ma200_period": 200,
+        "williams_r_period": 14,
+        "williams_r_mid": -50,
+        "williams_r_oversold": -80,
+        "williams_r_overbought": -20,
+        "rsi_period": 14,
+        "rsi_oversold": 35,
+        "rsi_overbought": 70,
+        "adx_period": 14,
+        "adx_threshold": 20,
+        "unmanaged_positions": []
+    },
+    "layer1_active": [
+        {
+            "symbol": "BARC", "name": "Barclays", "flag": "\ud83c\udfe6",
+            "ig_epic": "KA.D.BARC.DAILY.IP",
+            "ig_expiry": "DFB",
+            "sec_type": "CFD", "exchange": "IG", "currency": "GBP", "market": "LSE",
+            "qty": 400, "loss_limit": 80, "long_only": true, "enabled": true,
+            "timeframe": "4hr",
+            "trail_stop_pct": 5.0, "take_profit_pct": 4.0,
+            "emergency_stop_pct": 10.0,
+            "reentry_recovery_pct": 0.8, "reentry_cooldown_mins": 15,
+            "notes": "IG CFD - Barclays"
+        },
+        {
+            "symbol": "SHEL", "name": "Shell", "flag": "\u26fd",
+            "ig_epic": "KA.D.SHEL.DAILY.IP",
+            "ig_expiry": "DFB",
+            "sec_type": "CFD", "exchange": "IG", "currency": "GBP", "market": "LSE",
+            "qty": 40, "loss_limit": 50, "long_only": true, "enabled": true,
+            "timeframe": "4hr",
+            "trail_stop_pct": 1.5, "take_profit_pct": 5.0,
+            "emergency_stop_pct": 5.0,
+            "reentry_recovery_pct": 0.5, "reentry_cooldown_mins": 15,
+            "notes": "IG CFD - Shell"
+        }
+    ],
+    "layer2_accumulation": [],
+    "layer3_silver": []
+}

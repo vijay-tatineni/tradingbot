@@ -165,8 +165,11 @@ def save(data):
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     shutil.copy(CONFIG_FILE, f'{BACKUP_DIR}/instruments_{ts}.json')
-    with open(CONFIG_FILE, 'w') as f:
+    # Atomic write: write to temp file then rename to avoid corrupt reads
+    tmp_path = CONFIG_FILE + '.tmp'
+    with open(tmp_path, 'w') as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp_path, CONFIG_FILE)
 
 
 # ── Protected routes ──────────────────────────────────

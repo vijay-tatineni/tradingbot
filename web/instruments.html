@@ -249,7 +249,7 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
 <div id="instrumentCards" style="margin-top:8px"></div>
 
 <script>
-const API = 'http://188.166.150.137:8082';
+const API = window.location.origin;
 const JWT_TOKEN = localStorage.getItem('jwt_token') || '';
 if (!JWT_TOKEN) window.location.href = 'login.html?redirect=instruments';
 

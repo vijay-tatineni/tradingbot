@@ -78,7 +78,7 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 </div>
 
 <script>
-const API = 'http://188.166.150.137:8082';
+const API = window.location.origin;
 
 function getRedirectTarget() {
   const params = new URLSearchParams(window.location.search);

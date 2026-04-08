@@ -214,3 +214,20 @@ def test_indicators_block_position_in_json(setup_api):
     barc = next(i for i in data['layer1_active'] if i['symbol'] == 'BARC')
     assert 'indicators' in barc
     assert barc['indicators']['rsi_period'] == 10
+
+
+def test_atomic_write_no_tmp_file_left(setup_api):
+    """After save(), no .tmp file should remain — it should be renamed atomically."""
+    client, token, config_file, _ = setup_api
+    client.post('/api/instruments/update',
+        headers=auth_headers(token),
+        data=json.dumps({"changes": [
+            {"symbol": "BARC", "trail_stop_pct": 6.0}
+        ]}))
+    # The .tmp file should have been renamed to the real file
+    assert not os.path.exists(config_file + '.tmp'), \
+        "Temp file should not exist after atomic write"
+    # The real file should still be valid JSON
+    data = _load_json(config_file)
+    barc = next(i for i in data['layer1_active'] if i['symbol'] == 'BARC')
+    assert barc['trail_stop_pct'] == 6.0

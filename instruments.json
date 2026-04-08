@@ -427,10 +427,18 @@
       "reentry_recovery_pct": 1,
       "sec_type": "STK",
       "symbol": "CVX",
-      "take_profit_pct": 15,
+      "take_profit_pct": 3,
       "timeframe": "daily",
-      "trail_stop_pct": 2,
-      "emergency_stop_pct": 5.0
+      "trail_stop_pct": 1,
+      "emergency_stop_pct": 5.0,
+      "indicators": {
+        "rsi_period": 7,
+        "rsi_oversold": 30,
+        "rsi_overbought": 65,
+        "williams_r_period": 10,
+        "adx_threshold": 25,
+        "ma200_period": 200
+      }
     },
     {
       "currency": "USD",

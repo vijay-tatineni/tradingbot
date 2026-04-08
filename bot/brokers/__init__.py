@@ -13,9 +13,8 @@ def create_broker(broker_type: str, cfg) -> BaseBroker:
     if broker_type == "ibkr":
         from bot.brokers.ibkr import IBKRBroker
         return IBKRBroker(cfg)
-    # Future:
-    # elif broker_type == "metaapi":
-    #     from bot.brokers.metaapi import MetaApiBroker
-    #     return MetaApiBroker(cfg)
+    elif broker_type == "ig":
+        from bot.brokers.ig import IGBroker
+        return IGBroker(cfg)
     else:
         raise ValueError(f"Unknown broker type: {broker_type}")

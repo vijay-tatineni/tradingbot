@@ -46,8 +46,10 @@ class Dashboard:
             'instrument_count':    {'active': len(self.cfg.active_instruments), 'accum': len(self.cfg.accum_instruments)},
         }
         path = os.path.join(self.data_dir, 'data.json')
-        with open(path, 'w') as f:
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w') as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
         log(f"Dashboard updated — cycle #{cycle}")
 
     def _write_html(self):
