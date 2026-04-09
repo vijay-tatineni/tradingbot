@@ -40,20 +40,23 @@ class Accumulation:
         if not mkt_open:
             return {'symbol': symbol, 'name': inst['name'],
                     'flag': inst.get('flag',''), 'price': 0,
-                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--'}
+                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--',
+                    'currency': inst.get('currency', 'USD')}
 
         df = self.broker.fetch_bars(inst['contract'])
         if df is None:
             return {'symbol': symbol, 'name': inst['name'],
                     'flag': inst.get('flag',''), 'price': 0,
-                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--'}
+                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--',
+                    'currency': inst.get('currency', 'USD')}
 
         ind_settings = self.cfg.get_indicator_settings(inst)
         bundle = self.indics.calculate(df, indicator_settings=ind_settings)
         if bundle is None:
             return {'symbol': symbol, 'name': inst['name'],
                     'flag': inst.get('flag',''), 'price': bundle.price if bundle else 0,
-                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--'}
+                    'rsi': 50, 'wr': 0, 'pos': 0, 'action': '--',
+                    'currency': inst.get('currency', 'USD')}
 
         price = bundle.price
         rsi   = bundle.rsi
@@ -86,4 +89,5 @@ class Accumulation:
         return {
             'symbol': symbol, 'name': inst['name'], 'flag': inst.get('flag',''),
             'price': price, 'rsi': rsi, 'wr': wr, 'pos': pos, 'action': action,
+            'currency': inst.get('currency', 'USD'),
         }

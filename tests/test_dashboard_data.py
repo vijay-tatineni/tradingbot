@@ -1,6 +1,6 @@
 """
 tests/test_dashboard_data.py
-Test the data that feeds the dashboard — P&L colour logic and data integration.
+Test the data that feeds the dashboard — P&L colour logic, currency formatting, and data integration.
 """
 
 import json
@@ -21,6 +21,60 @@ def pnl_text(pnl: float) -> str:
     """Replicate the dashboard JS P&L text formatting."""
     sign = '+' if pnl >= 0 else ''
     return f"{sign}${abs(pnl):.2f}"
+
+
+# ── Currency formatting (mirrors JS formatPrice/formatEntry/formatPnl) ──
+
+def ccy_symbol(currency: str) -> str:
+    """Return currency symbol: £ for GBP, € for EUR, $ for USD."""
+    return {'GBP': '£', 'EUR': '€'}.get(currency, '$')
+
+
+def is_gbp_pence(currency: str) -> bool:
+    return currency == 'GBP'
+
+
+def format_price(price: float, currency: str) -> str:
+    """Format a market price with currency indicator.
+    GBP prices are in pence: show '3,453p (£34.53)' for >= 1000, '950p' otherwise.
+    USD/EUR: show '$367.44' or '€254.60'.
+    """
+    if price <= 0:
+        return '--'
+    if is_gbp_pence(currency):
+        p = round(price)
+        if p >= 1000:
+            return f"{p:,}p (£{price/100:.2f})"
+        return f"{p:,}p"
+    return f"{ccy_symbol(currency)}{price:,.2f}"
+
+
+def format_entry(cost: float, currency: str) -> str:
+    """Format an entry price — always in major currency units.
+    GBP pence converted to pounds: 3481.785p -> '£34.82'.
+    """
+    if cost <= 0:
+        return '--'
+    if is_gbp_pence(currency):
+        return f"£{cost/100:.2f}"
+    return f"{ccy_symbol(currency)}{cost:,.2f}"
+
+
+def format_pnl(pnl: float, currency: str) -> str:
+    """Format P&L with sign and currency symbol: '+$25.77', '-£12.40'."""
+    if pnl == 0:
+        return '--'
+    sign = '+' if pnl >= 0 else '-'
+    return f"{sign}{ccy_symbol(currency)}{abs(pnl):.2f}"
+
+
+def format_pos_price(cost: float, currency: str) -> str:
+    """Format position price for the Open Positions box.
+    GBP: '3481p'. USD/EUR: '$367.44'.
+    """
+    if is_gbp_pence(currency):
+        return f"{round(cost)}p"
+    return f"{ccy_symbol(currency)}{cost:,.2f}"
 
 
 def test_total_pnl_colour_positive():
@@ -92,3 +146,131 @@ def test_data_json_structure():
     assert 'risk_pct' in data
     # P&L colour should be based on total_pnl, not risk_pct
     assert pnl_class(data['total_pnl']) == 'pnl-pos'
+
+
+# ── Currency formatting tests ─────────────────────────────────
+
+class TestFormatPrice:
+    def test_usd_price(self):
+        assert format_price(367.44, 'USD') == '$367.44'
+
+    def test_eur_price(self):
+        assert format_price(254.60, 'EUR') == '€254.60'
+
+    def test_gbp_pence_under_1000(self):
+        assert format_price(950, 'GBP') == '950p'
+
+    def test_gbp_pence_over_1000_shows_both(self):
+        result = format_price(3453, 'GBP')
+        assert '3,453p' in result
+        assert '£34.53' in result
+
+    def test_zero_price_returns_placeholder(self):
+        assert format_price(0, 'USD') == '--'
+
+    def test_negative_price_returns_placeholder(self):
+        assert format_price(-1, 'GBP') == '--'
+
+    def test_gbp_exactly_1000(self):
+        result = format_price(1000, 'GBP')
+        assert '1,000p' in result
+        assert '£10.00' in result
+
+
+class TestFormatEntry:
+    def test_usd_entry(self):
+        assert format_entry(367.44, 'USD') == '$367.44'
+
+    def test_eur_entry(self):
+        assert format_entry(254.60, 'EUR') == '€254.60'
+
+    def test_gbp_pence_to_pounds(self):
+        """GBP entry prices in pence should display as pounds."""
+        assert format_entry(3481.785, 'GBP') == '£34.82'
+
+    def test_gbp_small_pence(self):
+        assert format_entry(150, 'GBP') == '£1.50'
+
+    def test_zero_entry(self):
+        assert format_entry(0, 'USD') == '--'
+
+
+class TestFormatPnl:
+    def test_positive_usd(self):
+        assert format_pnl(25.77, 'USD') == '+$25.77'
+
+    def test_negative_gbp(self):
+        assert format_pnl(-12.40, 'GBP') == '-£12.40'
+
+    def test_positive_eur(self):
+        assert format_pnl(5.20, 'EUR') == '+€5.20'
+
+    def test_zero_pnl(self):
+        assert format_pnl(0, 'USD') == '--'
+
+    def test_negative_usd(self):
+        assert format_pnl(-100.50, 'USD') == '-$100.50'
+
+
+class TestFormatPosPrice:
+    def test_gbp_shows_pence(self):
+        assert format_pos_price(3481, 'GBP') == '3481p'
+
+    def test_usd_shows_dollar(self):
+        assert format_pos_price(367.44, 'USD') == '$367.44'
+
+    def test_eur_shows_euro(self):
+        assert format_pos_price(254.60, 'EUR') == '€254.60'
+
+    def test_gbp_rounds_to_nearest_pence(self):
+        assert format_pos_price(3481.785, 'GBP') == '3482p'
+
+
+class TestCcySymbol:
+    def test_gbp(self):
+        assert ccy_symbol('GBP') == '£'
+
+    def test_eur(self):
+        assert ccy_symbol('EUR') == '€'
+
+    def test_usd(self):
+        assert ccy_symbol('USD') == '$'
+
+    def test_unknown_defaults_to_dollar(self):
+        assert ccy_symbol('CHF') == '$'
+
+
+class TestPnlByCurrency:
+    def test_breakdown_aggregation(self):
+        """Simulate the pnl_by_currency aggregation from dashboard.py."""
+        signal_rows = [
+            {'currency': 'USD', 'unreal_pnl': 50.0},
+            {'currency': 'USD', 'unreal_pnl': -10.0},
+            {'currency': 'GBP', 'unreal_pnl': 25.0},
+            {'currency': 'EUR', 'unreal_pnl': -12.0},
+            {'currency': 'USD', 'unreal_pnl': 0},  # zero — should be excluded
+        ]
+        pnl_by_ccy = {}
+        for r in signal_rows:
+            ccy = r.get('currency', 'USD')
+            pnl_val = r.get('unreal_pnl', 0)
+            if pnl_val != 0:
+                pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
+
+        assert pnl_by_ccy == {'USD': 40.0, 'GBP': 25.0, 'EUR': -12.0}
+
+    def test_single_currency_no_breakdown(self):
+        """When all positions are same currency, breakdown has one key."""
+        signal_rows = [
+            {'currency': 'USD', 'unreal_pnl': 50.0},
+            {'currency': 'USD', 'unreal_pnl': -10.0},
+        ]
+        pnl_by_ccy = {}
+        for r in signal_rows:
+            ccy = r.get('currency', 'USD')
+            pnl_val = r.get('unreal_pnl', 0)
+            if pnl_val != 0:
+                pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
+
+        assert len(pnl_by_ccy) == 1
+        assert pnl_by_ccy['USD'] == 40.0

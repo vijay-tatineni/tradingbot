@@ -129,6 +129,44 @@ tr:hover td { background:#1c2128; }
 </div>
 
 <script>
+function ccySymbol(c) { return c==='GBP'?'£':c==='EUR'?'€':'$'; }
+function isGBPPence(c) { return c==='GBP'; }
+
+function formatPrice(price, currency) {
+  if (price <= 0) return '<span class="muted">--</span>';
+  if (isGBPPence(currency)) {
+    const p = Math.round(price);
+    if (p >= 1000) {
+      return p.toLocaleString() + 'p (£' + (price/100).toFixed(2) + ')';
+    }
+    return p.toLocaleString() + 'p';
+  }
+  return ccySymbol(currency) + price.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function formatEntry(cost, currency) {
+  if (cost <= 0) return '<span class="muted">--</span>';
+  if (isGBPPence(currency)) {
+    return '£' + (cost/100).toFixed(2);
+  }
+  return ccySymbol(currency) + cost.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function formatPnl(pnl, currency) {
+  if (pnl === 0) return '<span class="muted">--</span>';
+  const sign = pnl >= 0 ? '+' : '';
+  const cls = pnl >= 0 ? 'green' : 'red';
+  const sym = ccySymbol(currency);
+  return `<span class="${cls}">${sign}${sym}${Math.abs(pnl).toFixed(2)}</span>`;
+}
+
+function formatPosPrice(cost, currency) {
+  if (isGBPPence(currency)) {
+    return Math.round(cost) + 'p';
+  }
+  return ccySymbol(currency) + cost.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
 async function load() {
   try {
     const r = await fetch('data.json?t=' + Date.now());
@@ -141,8 +179,17 @@ async function load() {
 
     const pnl   = d.total_pnl;
     const pnlEl = document.getElementById('pnl');
-    pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2);
-    pnlEl.className   = 'card-value ' + (pnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+    const pnlByCcy = d.pnl_by_currency || {};
+    const ccyKeys = Object.keys(pnlByCcy);
+    if (ccyKeys.length > 1) {
+      pnlEl.innerHTML = ccyKeys.map(c => {
+        const v = pnlByCcy[c];
+        return `<span class="${v>=0?'pnl-pos':'pnl-neg'}">${ccySymbol(c)}${v>=0?'+':''}${Math.abs(v).toFixed(2)}</span>`;
+      }).join(' <span class="muted">|</span> ');
+    } else {
+      pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2) + ' (converted)';
+    }
+    pnlEl.className = 'card-value ' + (pnl >= 0 ? 'pnl-pos' : 'pnl-neg');
     document.getElementById('riskPct').textContent = 'Risk: ' + d.risk_pct + '% of $' + d.loss_limit + ' limit';
     const fill = document.getElementById('riskFill');
     fill.style.width = d.risk_pct + '%';
@@ -157,10 +204,10 @@ async function load() {
     document.getElementById('positions').innerHTML = d.positions.length
       ? d.positions.map(p => {
           const pnlStr = p.unreal_pnl !== 0
-            ? ` <span class="${p.unreal_pnl>=0?'green':'red'}">${p.unreal_pnl>=0?'+':''}$${p.unreal_pnl.toFixed(2)}</span>` : '';
+            ? ' ' + formatPnl(p.unreal_pnl, p.currency) : '';
           return `<div class="pos-item">
             <span class="pos-sym">${p.symbol}</span>
-            <span class="pos-detail">${p.qty} @ ${p.avg_cost} ${p.currency}</span>${pnlStr}
+            <span class="pos-detail">${p.qty} @ ${formatPosPrice(p.avg_cost, p.currency)} ${p.currency}</span>${pnlStr}
           </div>`;
         }).join('')
       : '<span class="muted">No open positions</span>';
@@ -178,19 +225,17 @@ async function load() {
       const rsiColor  = s.rsi > 70 ? 'red' : s.rsi < 35 ? 'green' : '';
       const dot       = isOpen ? '<span style="color:#22c55e;font-size:0.55rem;margin-right:4px">●</span>' : '';
 
+      const ccy = s.currency || 'USD';
       const entryStr = s.avg_cost > 0
-        ? `<span class="entry-price">${s.currency==='GBP'?'£':'$'}${s.avg_cost.toLocaleString()}</span>`
+        ? `<span class="entry-price">${formatEntry(s.avg_cost, ccy)}</span>`
         : '<span class="muted">--</span>';
 
-      const pnlStr = s.unreal_pnl !== 0
-        ? `<span class="${s.unreal_pnl>=0?'green':'red'}">${s.unreal_pnl>=0?'+':''}$${s.unreal_pnl.toFixed(2)}</span>`
-        : '<span class="muted">--</span>';
-
+      const pnlStr = formatPnl(s.unreal_pnl, ccy);
       const pctStr = s.pnl_pct !== 0
         ? `<span class="${s.pnl_pct>=0?'green':'red'}">${s.pnl_pct>=0?'+':''}${s.pnl_pct.toFixed(2)}%</span>`
         : '<span class="muted">--</span>';
 
-      const priceStr = s.price > 0 ? s.price.toLocaleString() : '<span class="muted">--</span>';
+      const priceStr = formatPrice(s.price, ccy);
       const posStr   = s.pos !== 0 ? `<span class="pos-badge">${s.pos}</span>` : '<span class="muted">0</span>';
       const actColor = s.action&&s.action.includes('BOUGHT') ? 'green'
                      : s.action&&s.action.includes('CLOSED') ? 'red'
@@ -231,9 +276,10 @@ async function load() {
     document.getElementById('layer2').innerHTML = d.accum.map(e => {
       const rsiColor = e.rsi > 70 ? 'red' : e.rsi < 35 ? 'green' : '';
       const wrColor  = e.wr < -80 ? 'red' : e.wr > -20 ? 'green' : 'muted';
+      const ccy = e.currency || 'USD';
       return `<tr>
         <td><div class="asset-name">${e.flag} ${e.symbol}</div><div class="asset-sub">${e.name}</div></td>
-        <td>${e.price > 0 ? e.price.toLocaleString() : '--'}</td>
+        <td>${formatPrice(e.price, ccy)}</td>
         <td class="${rsiColor}">${e.rsi}</td>
         <td class="${wrColor}">${e.wr}</td>
         <td>${e.pos !== 0 ? '<span class="pos-badge">'+e.pos+'</span>' : '0'}</td>

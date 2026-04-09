@@ -67,6 +67,7 @@ class IBKRBroker(BaseBroker):
                 barSizeSetting='1 min',
                 whatToShow='TRADES',
                 useRTH=True,
+                timeout=15,
             )
             if bars:
                 return bars[-1].close
