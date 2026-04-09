@@ -15,8 +15,13 @@ def _make_llm(response: str):
     return llm
 
 
+def _inst(symbol="BARC", name="Barclays", currency="GBP"):
+    """Helper to build a minimal instrument dict."""
+    return {"symbol": symbol, "name": name, "currency": currency}
+
+
 def test_collect_news_returns_list():
-    """collect_news('BARC') returns list of headline dicts."""
+    """collect_news() returns list of headline dicts."""
     from bot.llm.news_collector import collect_news
     with patch("bot.llm.news_collector._collect_google_news") as mock_google, \
          patch("bot.llm.news_collector._collect_finnhub_news") as mock_fh:
@@ -25,7 +30,7 @@ def test_collect_news_returns_list():
              "published": "2024-01-15", "origin": "google"}
         ]
         mock_fh.return_value = []
-        result = collect_news("BARC")
+        result = collect_news(_inst("BARC", "Barclays", "GBP"))
 
     assert isinstance(result, list)
     assert len(result) >= 1
@@ -41,7 +46,7 @@ def test_headline_has_required_fields():
              "origin": "google"}
         ]
         mock_fh.return_value = []
-        result = collect_news("BARC")
+        result = collect_news(_inst("BARC", "Barclays", "GBP"))
 
     for h in result:
         assert "headline" in h
@@ -57,27 +62,80 @@ def test_google_news_uses_search_terms():
     assert GOOGLE_SEARCH_TERMS["MSFT"] == "Microsoft stock"
 
 
-def test_finnhub_uses_symbol_mapping():
-    """BARC should query Finnhub as 'BARC.L' (LSE suffix)."""
-    from bot.llm.news_collector import FINNHUB_SYMBOLS
-    assert FINNHUB_SYMBOLS["BARC"] == "BARC.L"
-    assert FINNHUB_SYMBOLS["SHEL"] == "SHEL.L"
+def test_finnhub_used_for_usd_stocks():
+    """USD-denominated stocks should use Finnhub."""
+    from bot.llm.news_collector import _should_use_finnhub
+    assert _should_use_finnhub({"symbol": "MSFT", "currency": "USD"}) is True
+    assert _should_use_finnhub({"symbol": "AAPL", "currency": "USD"}) is True
+
+
+def test_finnhub_skipped_for_gbp():
+    """GBP instruments should NOT use Finnhub."""
+    from bot.llm.news_collector import _should_use_finnhub
+    assert _should_use_finnhub({"symbol": "BARC", "currency": "GBP"}) is False
+    assert _should_use_finnhub({"symbol": "SHEL", "currency": "GBP"}) is False
+
+
+def test_finnhub_skipped_for_eur():
+    """EUR instruments should NOT use Finnhub."""
+    from bot.llm.news_collector import _should_use_finnhub
+    assert _should_use_finnhub({"symbol": "SU", "currency": "EUR"}) is False
 
 
 def test_finnhub_skips_commodities():
-    """XAUUSD should not query Finnhub (no company news for gold)."""
-    from bot.llm.news_collector import _collect_finnhub_news
-    with patch.dict(os.environ, {"FINNHUB_API_KEY": "test-key"}):
-        result = _collect_finnhub_news("XAUUSD")
-    assert result == []
+    """XAUUSD/XAGUSD should not use Finnhub (commodity pairs)."""
+    from bot.llm.news_collector import _should_use_finnhub
+    assert _should_use_finnhub({"symbol": "XAUUSD", "currency": "USD"}) is False
+    assert _should_use_finnhub({"symbol": "XAGUSD", "currency": "USD"}) is False
 
 
 def test_finnhub_skips_without_api_key():
     """If FINNHUB_API_KEY not set, Finnhub returns empty list."""
     from bot.llm.news_collector import _collect_finnhub_news
     with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
-        result = _collect_finnhub_news("BARC")
+        result = _collect_finnhub_news("MSFT")
     assert result == []
+
+
+def test_finnhub_uses_symbol_directly():
+    """Finnhub now receives the raw symbol (no mapping)."""
+    from bot.llm.news_collector import _collect_finnhub_news
+    with patch.dict(os.environ, {"FINNHUB_API_KEY": "test-key"}), \
+         patch("bot.llm.news_collector.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        _collect_finnhub_news("MSFT")
+
+        called_url = mock_get.call_args[0][0]
+        assert "symbol=MSFT" in called_url
+
+
+def test_collect_news_skips_finnhub_for_non_usd():
+    """collect_news with GBP instrument should not call _collect_finnhub_news."""
+    from bot.llm.news_collector import collect_news
+    with patch("bot.llm.news_collector._collect_google_news") as mock_google, \
+         patch("bot.llm.news_collector._collect_finnhub_news") as mock_fh:
+        mock_google.return_value = []
+        mock_fh.return_value = []
+        collect_news(_inst("BARC", "Barclays", "GBP"))
+
+    mock_fh.assert_not_called()
+
+
+def test_collect_news_uses_finnhub_for_usd():
+    """collect_news with USD instrument should call _collect_finnhub_news."""
+    from bot.llm.news_collector import collect_news
+    with patch("bot.llm.news_collector._collect_google_news") as mock_google, \
+         patch("bot.llm.news_collector._collect_finnhub_news") as mock_fh:
+        mock_google.return_value = []
+        mock_fh.return_value = []
+        collect_news(_inst("MSFT", "Microsoft", "USD"))
+
+    mock_fh.assert_called_once_with("MSFT")
 
 
 def test_deduplication():
@@ -85,6 +143,7 @@ def test_deduplication():
     from bot.llm.news_collector import collect_news
     headline = "Barclays reports record profits in Q4"
     with patch("bot.llm.news_collector._collect_google_news") as mock_google, \
+         patch("bot.llm.news_collector._should_use_finnhub", return_value=True), \
          patch("bot.llm.news_collector._collect_finnhub_news") as mock_fh:
         mock_google.return_value = [
             {"headline": headline, "source": "Reuters", "published": "2024-01-15",
@@ -94,7 +153,7 @@ def test_deduplication():
             {"headline": headline, "source": "Finnhub", "published": "2024-01-15",
              "origin": "finnhub"}
         ]
-        result = collect_news("BARC")
+        result = collect_news(_inst("MSFT", "Microsoft", "USD"))
 
     assert len(result) == 1  # Deduplicated
 
@@ -175,6 +234,6 @@ def test_max_ten_headlines():
             for i in range(15)
         ]
         mock_fh.return_value = []
-        result = collect_news("BARC")
+        result = collect_news(_inst("BARC", "Barclays", "GBP"))
 
     assert len(result) <= 10

@@ -3,7 +3,7 @@ News headline collector using Google News RSS + Finnhub API.
 
 Two sources for comprehensive coverage:
 - Google News RSS: Free, general press coverage, no API key needed
-- Finnhub: Free tier (60 calls/min), financial/analyst news with summaries
+- Finnhub: Free tier (60 calls/min), US stock news only (currency=USD)
 
 Collects headlines for each instrument every 4 hours.
 Headlines are scored by the LLM for sentiment and stored in news.db.
@@ -47,15 +47,26 @@ GOOGLE_SEARCH_TERMS = {
     "XAGUSD": "silver price",
 }
 
-# Map bot symbols to Finnhub symbols
-FINNHUB_SYMBOLS = {
-    "BARC": "BARC.L",
-    "SHEL": "SHEL.L",
-    "ANTO": "ANTO.L",
-    "SGLN": "SGLN.L",
-    "SSLN": "SSLN.L",
-    "SU": "SU.PA",
-}
+
+def _is_commodity(symbol: str) -> bool:
+    """Check if a symbol is a commodity pair (e.g. XAUUSD, XAGUSD)."""
+    return "USD" in symbol and symbol != "USD" and len(symbol) > 3 and not symbol.endswith("USD") is False and symbol.upper().startswith("X")
+
+
+def _should_use_finnhub(instrument: dict) -> bool:
+    """
+    Determine if Finnhub should be used for this instrument.
+    Only use Finnhub for USD-denominated stocks (US equities).
+    Skip commodities (symbol contains USD as a pair like XAUUSD).
+    """
+    symbol = instrument.get("symbol", "")
+
+    # Skip commodity pairs — symbols like XAUUSD, XAGUSD
+    if re.match(r'^X[A-Z]{2}USD$', symbol):
+        return False
+
+    currency = instrument.get("currency", "").upper()
+    return currency == "USD"
 
 
 def init_news_db(db_path: str = NEWS_DB) -> None:
@@ -82,20 +93,26 @@ def init_news_db(db_path: str = NEWS_DB) -> None:
     conn.close()
 
 
-def collect_news(symbol: str, company_name: str = None) -> list:
+def collect_news(instrument: dict) -> list:
     """
-    Fetch recent news headlines from both sources.
+    Fetch recent news headlines from available sources.
+
+    Args:
+        instrument: Instrument dict with at least 'symbol', 'name', 'currency' keys.
 
     Returns combined, deduplicated list:
     [{"headline": "...", "source": "...", "published": "...", "origin": "google|finnhub"}, ...]
     """
+    symbol = instrument.get("symbol", "")
+    company_name = instrument.get("name", symbol)
     headlines = []
 
-    # Source 1: Google News RSS
+    # Source 1: Google News RSS (always)
     headlines.extend(_collect_google_news(symbol, company_name))
 
-    # Source 2: Finnhub API
-    headlines.extend(_collect_finnhub_news(symbol))
+    # Source 2: Finnhub API (USD stocks only, skip commodities)
+    if _should_use_finnhub(instrument):
+        headlines.extend(_collect_finnhub_news(symbol))
 
     # Deduplicate by headline similarity (exact match on first 50 chars)
     seen = set()
@@ -133,6 +150,11 @@ def _collect_google_news(symbol: str, company_name: str = None) -> list:
                 "published": published,
                 "origin": "google",
             })
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 403:
+            logger.debug(f"Google News RSS 403 for {symbol}: {e}")
+        else:
+            logger.warning(f"Google News RSS failed for {symbol}: {e}")
     except Exception as e:
         logger.warning(f"Google News RSS failed for {symbol}: {e}")
 
@@ -140,16 +162,9 @@ def _collect_google_news(symbol: str, company_name: str = None) -> list:
 
 
 def _collect_finnhub_news(symbol: str) -> list:
-    """Fetch from Finnhub company news API."""
+    """Fetch from Finnhub company news API. Symbol should be a US ticker."""
     api_key = os.environ.get("FINNHUB_API_KEY", "")
     if not api_key:
-        return []
-
-    # Map to Finnhub symbol
-    fh_symbol = FINNHUB_SYMBOLS.get(symbol, symbol)
-
-    # Skip commodities — Finnhub doesn't have company news for them
-    if symbol in ("XAUUSD", "XAGUSD"):
         return []
 
     headlines = []
@@ -159,7 +174,7 @@ def _collect_finnhub_news(symbol: str) -> list:
 
         url = (
             f"https://finnhub.io/api/v1/company-news"
-            f"?symbol={fh_symbol}&from={week_ago}&to={today}&token={api_key}"
+            f"?symbol={symbol}&from={week_ago}&to={today}&token={api_key}"
         )
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -176,8 +191,13 @@ def _collect_finnhub_news(symbol: str) -> list:
                     "summary": item.get("summary", "")[:200],
                     "origin": "finnhub",
                 })
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 403:
+            logger.debug(f"Finnhub 403 for {symbol}: {e}")
+        else:
+            logger.warning(f"Finnhub failed for {symbol}: {e}")
     except Exception as e:
-        logger.warning(f"Finnhub failed for {symbol} ({fh_symbol}): {e}")
+        logger.warning(f"Finnhub failed for {symbol}: {e}")
 
     return headlines
 

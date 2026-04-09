@@ -246,10 +246,7 @@ class TradingBot:
             from bot.logger import log
             log("[News] Collecting headlines...")
             for inst in self.cfg.active_instruments:
-                headlines = collect_news(
-                    inst['symbol'],
-                    inst.get('name', inst['symbol'])
-                )
+                headlines = collect_news(inst)
                 scored = score_headlines(self.llm, inst['symbol'], headlines)
                 save_headlines(inst['symbol'], scored)
             self._last_news_collection = _t.time()
