@@ -403,7 +403,7 @@ class ActiveTrading:
             'avg_cost':   pos_info.avg_cost,
             'unreal_pnl': pos_info.unreal_pnl,
             'pnl_pct':    pos_info.pnl_pct,
-            'currency':   pos_info.currency,
+            'currency':   inst.get('currency', pos_info.currency),
             'stop_level': round(stop_level, 4),
             'peak_price': round(peak_price, 4),
             'watching':   round(watch_info.recovery_pct, 2) if watch_info else 0,
