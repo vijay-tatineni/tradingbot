@@ -46,6 +46,7 @@ from bot.plugins.learning_loop import LearningLoop
 from bot.plugins.sentiment     import SentimentEngine
 from bot.alerts                import TelegramAlerts
 from bot.watchdog              import Watchdog
+from bot.llm                   import create_llm
 
 # ── Future plugins (uncomment to activate) ────────────────────
 # from bot.plugins.macro_filter import MacroFilter
@@ -68,8 +69,31 @@ class TradingBot:
         self.hours   = MarketHours()
         self.plugins : list = []
 
+        # ── LLM providers ─────────────────────────────────────
+        settings = self.cfg._raw.get('settings', {})
+        try:
+            self.llm = create_llm(settings.get('llm_provider', 'groq'))
+        except Exception:
+            self.llm = None
+        try:
+            self.llm_review = create_llm(
+                settings.get('llm_provider_review',
+                             settings.get('llm_provider', 'groq')))
+        except Exception:
+            self.llm_review = None
+        try:
+            self.llm_advisor = create_llm(
+                settings.get('llm_provider_advisor',
+                             settings.get('llm_provider', 'groq')))
+        except Exception:
+            self.llm_advisor = None
+
+        # News collection state
+        self._last_news_collection = 0
+        self._advisor_ran_this_week = False
+
         # ── Register active plugins ───────────────────────────
-        self.register_plugin(LearningLoop(self.cfg))
+        self.register_plugin(LearningLoop(self.cfg, llm=self.llm_review))
 
         self.alerts = TelegramAlerts(self.cfg)
         self.register_plugin(self.alerts)
@@ -84,7 +108,8 @@ class TradingBot:
         self.broker.set_alerts(self.alerts)
 
         # ── Pass plugins to layer1 ────────────────────────────
-        self.l1   = ActiveTrading(self.cfg, self.broker, self.plugins, alerts=self.alerts)
+        self.l1   = ActiveTrading(self.cfg, self.broker, self.plugins,
+                                  alerts=self.alerts, llm=self.llm)
         self.l2   = Accumulation(self.cfg, self.broker)
         self.l3   = SilverScalper(self.cfg, self.broker, alerts=self.alerts)
         self.dash = Dashboard(self.cfg)
@@ -181,6 +206,12 @@ class TradingBot:
                     plugin.on_cycle_end(cycle, self.l1.signal_rows,
                                         self.l1.total_pnl)
 
+                # ── News collection (every N hours) ──────────
+                self._maybe_collect_news()
+
+                # ── Weekly advisor (Sunday 20:00 UTC) ────────
+                self._maybe_run_advisor(now)
+
                 # ── Watchdog heartbeat ────────────────────────
                 self.watchdog.heartbeat(cycle)
 
@@ -194,6 +225,109 @@ class TradingBot:
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
                 self.broker.reconnect()
+
+    def _maybe_collect_news(self) -> None:
+        """Collect news headlines every N hours."""
+        import time as _t
+        settings = self.cfg._raw.get('settings', {})
+        if not settings.get('llm_news_collection_enabled', False):
+            return
+        if not self.llm or not self.llm.is_available():
+            return
+
+        interval = settings.get('llm_news_interval_hours', 4) * 3600
+        if _t.time() - self._last_news_collection < interval:
+            return
+
+        try:
+            from bot.llm.news_collector import (
+                collect_news, score_headlines, save_headlines
+            )
+            from bot.logger import log
+            log("[News] Collecting headlines...")
+            for inst in self.cfg.active_instruments:
+                headlines = collect_news(
+                    inst['symbol'],
+                    inst.get('name', inst['symbol'])
+                )
+                scored = score_headlines(self.llm, inst['symbol'], headlines)
+                save_headlines(inst['symbol'], scored)
+            self._last_news_collection = _t.time()
+            log(f"[News] Collection complete for "
+                f"{len(self.cfg.active_instruments)} instruments")
+        except Exception as e:
+            from bot.logger import log
+            log(f"[News] Collection failed: {e}", "WARN")
+
+    def _maybe_run_advisor(self, now) -> None:
+        """Run weekly advisor on Sunday at 20:00 UTC."""
+        settings = self.cfg._raw.get('settings', {})
+        if not settings.get('llm_advisor_enabled', False):
+            return
+        if not self.llm_advisor or not self.llm_advisor.is_available():
+            return
+
+        if now.weekday() == 6 and now.hour == 20 and not self._advisor_ran_this_week:
+            try:
+                from bot.llm.advisor import generate_weekly_report
+                from bot.logger import log
+                import sqlite3
+
+                # Fetch trades
+                ll_db = str(BASE_DIR / 'learning_loop.db')
+                trades = []
+                if os.path.exists(ll_db):
+                    conn = sqlite3.connect(ll_db)
+                    conn.execute("PRAGMA busy_timeout = 5000")
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute(
+                        "SELECT * FROM trades WHERE open=0 "
+                        "AND timestamp > datetime('now', '-7 days')"
+                    )
+                    trades = [dict(r) for r in cursor.fetchall()]
+                    conn.close()
+
+                report = generate_weekly_report(
+                    self.llm_advisor, trades, [], [],
+                    self.cfg.active_instruments
+                )
+
+                # Save report
+                advisor_db = str(BASE_DIR / 'advisor.db')
+                conn = sqlite3.connect(advisor_db)
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA busy_timeout = 5000")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS advisor_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        report_json TEXT NOT NULL
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO advisor_reports (timestamp, report_json) "
+                    "VALUES (?, ?)",
+                    (now.isoformat(), json.dumps(report))
+                )
+                conn.commit()
+                conn.close()
+
+                # Telegram summary
+                if self.alerts and report.get('summary'):
+                    self.alerts.send(
+                        f"<b>Weekly Advisor Report</b>\n{report['summary'][:500]}"
+                    )
+
+                self._advisor_ran_this_week = True
+                log(f"[Advisor] Weekly report generated")
+
+            except Exception as e:
+                from bot.logger import log
+                log(f"[Advisor] Failed: {e}", "WARN")
+
+        # Reset flag on Monday
+        if now.weekday() == 0:
+            self._advisor_ran_this_week = False
 
     def _shutdown(self, sig=None, frame=None) -> None:
         """Graceful shutdown — notify plugins, watchdog, log final state."""

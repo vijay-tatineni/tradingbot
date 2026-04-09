@@ -29,9 +29,11 @@ class LearningLoop(BasePlugin):
 
     name = "LearningLoop"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, llm=None):
         self.cfg = cfg
         self.db  = DB_FILE
+        self.llm = llm
+        self._review_enabled = getattr(cfg, '_raw', {}).get('settings', {}).get('llm_review_enabled', False)
         self._last_retrain_time = datetime.datetime.utcnow()
         self._init_db()
 
@@ -172,6 +174,12 @@ class LearningLoop(BasePlugin):
         log(f"[LearningLoop] Closed: {symbol}  P&L: ${pnl:.2f}  "
             f"Outcome: {outcome}  Hold: {hold_days}d  Reason: {exit_reason}")
 
+        # LLM trade review
+        if self._review_enabled and self.llm and self.llm.is_available():
+            self._run_trade_review(trade_id, symbol, entry_price_db,
+                                   exit_price, pnl, outcome, hold_days,
+                                   exit_reason, trade_action, entry_ts)
+
     # ── Backup exit detection ─────────────────────────────────
 
     def _check_exits(self, signal_rows: list) -> None:
@@ -263,6 +271,96 @@ class LearningLoop(BasePlugin):
             return
         log("[LearningLoop] TODO: Train Random Forest model — Phase 2")
 
+    # ── LLM Trade Review ────────────────────────────────────────
+
+    def _run_trade_review(self, trade_id: int, symbol: str,
+                          entry_price: float, exit_price: float,
+                          pnl: float, outcome: str, hold_days: int,
+                          exit_reason: str, action: str, entry_ts: str) -> None:
+        """Run LLM review on a completed trade."""
+        try:
+            from bot.llm.reviewer import review_trade
+
+            bars_at_entry = self._get_bars_from_db(symbol, entry_ts, 10)
+            bars_at_exit = self._get_bars_from_db(
+                symbol, datetime.datetime.utcnow().isoformat(), 10
+            )
+
+            if bars_at_entry is None or bars_at_exit is None:
+                log(f"[LearningLoop] Skipping trade review — no OHLCV data in backtest.db")
+                return
+
+            trade_data = {
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "outcome": outcome,
+                "hold_days": hold_days,
+                "exit_reason": exit_reason,
+                "action": action,
+                "indicators_at_entry": {},
+            }
+
+            review = review_trade(self.llm, trade_data, bars_at_entry, bars_at_exit)
+            self._save_review(trade_id, symbol, review)
+            log(f"[LearningLoop] Trade review: {review.get('analysis', 'N/A')[:100]}")
+
+        except Exception as e:
+            log(f"[LearningLoop] Trade review failed: {e}", "WARN")
+
+    def _get_bars_from_db(self, symbol: str, around_time: str,
+                          lookback: int = 10) -> list | None:
+        """Get OHLCV bars from backtest.db around a given time."""
+        try:
+            backtest_db = str(BASE_DIR / 'backtest.db')
+            if not os.path.exists(backtest_db):
+                return None
+
+            conn = sqlite3.connect(backtest_db)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT datetime, open, high, low, close, volume "
+                "FROM bars WHERE symbol = ? AND datetime <= ? "
+                "ORDER BY datetime DESC LIMIT ?",
+                (symbol, around_time[:10], lookback)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                return None
+
+            return [dict(row) for row in reversed(rows)]
+
+        except Exception:
+            return None
+
+    def _save_review(self, trade_id: int, symbol: str, review: dict) -> None:
+        """Save trade review to learning_loop.db."""
+        try:
+            conn = self._connect()
+            conn.execute("""
+                INSERT INTO trade_reviews
+                (trade_id, symbol, timestamp, analysis, entry_quality,
+                 exit_quality, pattern_at_entry, lesson, raw_response)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_id, symbol,
+                datetime.datetime.utcnow().isoformat(),
+                review.get("analysis", ""),
+                review.get("entry_quality", ""),
+                review.get("exit_quality", ""),
+                review.get("pattern_at_entry", ""),
+                review.get("suggestion", ""),
+                review.get("raw_response", ""),
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log(f"[LearningLoop] Failed to save review: {e}", "WARN")
+
     # ── Database init ─────────────────────────────────────────
 
     def _init_db(self) -> None:
@@ -290,6 +388,21 @@ class LearningLoop(BasePlugin):
                 exit_reason     TEXT,
                 open            INTEGER DEFAULT 1,
                 currency        TEXT DEFAULT 'USD'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                analysis TEXT,
+                entry_quality TEXT,
+                exit_quality TEXT,
+                pattern_at_entry TEXT,
+                lesson TEXT,
+                raw_response TEXT,
+                FOREIGN KEY (trade_id) REFERENCES trades(id)
             )
         """)
         # Add currency column to existing databases

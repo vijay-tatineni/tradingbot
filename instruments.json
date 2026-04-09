@@ -634,6 +634,15 @@
     "williams_r_mid": -50,
     "williams_r_overbought": -20,
     "williams_r_oversold": -80,
-    "williams_r_period": 14
+    "williams_r_period": 14,
+    "llm_provider": "claude-haiku",
+    "llm_provider_review": "claude-sonnet",
+    "llm_provider_advisor": "claude-sonnet",
+    "llm_sentiment_enabled": true,
+    "llm_sentiment_reject_threshold": 0.7,
+    "llm_review_enabled": true,
+    "llm_advisor_enabled": true,
+    "llm_news_collection_enabled": true,
+    "llm_news_interval_hours": 4
   }
 }

@@ -89,6 +89,8 @@ def generate_signals(
     indicator_settings: dict,
     symbol: str = "",
     start_from: int = 0,
+    llm=None,
+    llm_filter: bool = False,
 ) -> list[Signal]:
     """
     Run the bot's exact indicator + signal logic on every bar in df.
@@ -132,19 +134,49 @@ def generate_signals(
         result = engine.evaluate(bundle)
 
         if result.signal == 1:
+            direction = "BUY"
+            if llm_filter and llm:
+                from bot.llm.pattern_analyzer import analyze_pattern
+                lookback_start = max(0, i - 10)
+                lookback_bars = [
+                    {"date": str(df.iloc[j]["datetime"])[:10],
+                     "open": df.iloc[j]["open"], "high": df.iloc[j]["high"],
+                     "low": df.iloc[j]["low"], "close": df.iloc[j]["close"],
+                     "volume": df.iloc[j].get("volume", 0)}
+                    for j in range(lookback_start, i)
+                ]
+                verdict = analyze_pattern(llm, symbol, lookback_bars, direction)
+                if verdict == "REJECT":
+                    continue  # LLM rejected this entry
+
             signals.append(Signal(
                 datetime=str(df.iloc[i]["datetime"]),
                 bar_index=i,
-                direction="BUY",
+                direction=direction,
                 price=bundle.price,
                 symbol=symbol,
                 indicators=_bundle_to_dict(bundle),
             ))
         elif result.signal == -1:
+            direction = "SELL"
+            if llm_filter and llm:
+                from bot.llm.pattern_analyzer import analyze_pattern
+                lookback_start = max(0, i - 10)
+                lookback_bars = [
+                    {"date": str(df.iloc[j]["datetime"])[:10],
+                     "open": df.iloc[j]["open"], "high": df.iloc[j]["high"],
+                     "low": df.iloc[j]["low"], "close": df.iloc[j]["close"],
+                     "volume": df.iloc[j].get("volume", 0)}
+                    for j in range(lookback_start, i)
+                ]
+                verdict = analyze_pattern(llm, symbol, lookback_bars, direction)
+                if verdict == "REJECT":
+                    continue
+
             signals.append(Signal(
                 datetime=str(df.iloc[i]["datetime"]),
                 bar_index=i,
-                direction="SELL",
+                direction=direction,
                 price=bundle.price,
                 symbol=symbol,
                 indicators=_bundle_to_dict(bundle),

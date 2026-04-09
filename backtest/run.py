@@ -98,6 +98,10 @@ def parse_args():
         help="Take profit %% for backtest mode (default: from instruments.json)"
     )
     parser.add_argument(
+        "--llm-filter", action="store_true",
+        help="Enable LLM pattern analysis filter (slow — validates each signal with LLM)"
+    )
+    parser.add_argument(
         "--train-months", type=int, default=DEFAULT_TRAIN_MONTHS,
         help=f"Training window size in months (default: {DEFAULT_TRAIN_MONTHS})"
     )

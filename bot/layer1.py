@@ -31,15 +31,22 @@ from bot.sizing            import calculate_qty
 class ActiveTrading:
 
     def __init__(self, cfg: Config, broker: BaseBroker,
-                 plugins: list = None, alerts=None):
+                 plugins: list = None, alerts=None,
+                 llm=None):
         self.cfg       = cfg
         self.broker    = broker
         self.plugins   = plugins or []
         self.alerts    = alerts
+        self.llm       = llm
         self.hours     = MarketHours()
         self.indics    = Indicators(cfg)
         self.engine    = SignalEngine()
         self.tracker   = PositionTracker(cfg)
+
+        # LLM sentiment settings
+        settings = cfg._raw.get('settings', {})
+        self._sentiment_enabled = settings.get('llm_sentiment_enabled', False)
+        self._reject_threshold = settings.get('llm_sentiment_reject_threshold', 0.7)
 
         self.signal_rows : list  = []
         self.total_pnl   : float = 0.0
@@ -318,6 +325,9 @@ class ActiveTrading:
                     action = "ENTRY BLOCKED (position limit)"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
+                    if allowed and not self._llm_sentiment_check(inst, "BUY", df):
+                        allowed = False
+                        action = "BLOCKED by LLM sentiment"
                     if allowed:
                         action, fill_result = self.broker.handle_signal(
                             inst, result.signal, result.confidence, pos)
@@ -515,6 +525,45 @@ class ActiveTrading:
                     symbol, pos_info.avg_cost, pos_info.qty,
                     trail_pct, currency
                 )
+
+    def _llm_sentiment_check(self, inst: dict, signal_direction: str,
+                               df) -> bool:
+        """
+        Run LLM sentiment check. Returns True if trade should proceed.
+        Always returns True on error or if disabled.
+        """
+        if not self._sentiment_enabled or not self.llm or not self.llm.is_available():
+            return True
+
+        try:
+            from bot.llm.sentiment import analyze_sentiment
+            from bot.llm.news_collector import get_aggregate_sentiment
+
+            symbol = inst['symbol']
+            recent_bars = df.tail(20) if df is not None and len(df) >= 20 else df
+
+            # Get news sentiment if available
+            news_sentiment = get_aggregate_sentiment(symbol)
+
+            sentiment = analyze_sentiment(
+                self.llm, symbol, recent_bars, signal_direction,
+                news_sentiment=news_sentiment
+            )
+
+            if sentiment["verdict"] == "REJECT" and sentiment["confidence"] >= self._reject_threshold:
+                log(f"  [{symbol}] LLM rejected entry: {sentiment['reason']}", "WARN")
+                return False
+
+            if sentiment["verdict"] == "CAUTION":
+                log(f"  [{symbol}] LLM caution: {sentiment['reason']}")
+
+            log(f"  [{symbol}] LLM sentiment: {sentiment['verdict']} "
+                f"({sentiment['confidence']:.1f})")
+            return True
+
+        except Exception as e:
+            log(f"  [{inst['symbol']}] LLM sentiment error: {e} — proceeding", "WARN")
+            return True
 
     @staticmethod
     def _signal_str(signal: int) -> str:

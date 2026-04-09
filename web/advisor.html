@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>AI Advisor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100..800&display=swap" rel="stylesheet">
+<style>
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('JetBrainsMono.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+}
+:root {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2128;
+  --green:#22c55e; --red:#ef4444; --gold:#f5c842;
+  --blue:#38bdf8; --muted:#8b949e; --border:#30363d;
+  --text:#ffffff; --navy:#0f3460;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.8rem; }
+.navbar { display:flex; align-items:center; padding:10px 24px; background:var(--bg2); border-bottom:1px solid var(--border); gap:8px; }
+.navbar a, .navbar span { font-size:0.72rem; text-decoration:none; padding:6px 14px; border-radius:4px; font-family:'JetBrains Mono',monospace; }
+.navbar a { color:var(--muted); border:1px solid transparent; }
+.navbar a:hover { color:var(--text); border-color:var(--border); }
+.navbar a.active { color:var(--gold); border:1px solid var(--gold); }
+.nav-logo { color:var(--gold); font-weight:700; font-size:0.82rem; margin-right:8px; }
+.nav-spacer { flex:1; }
+.nav-user { color:var(--green); font-size:0.65rem; padding:6px 0; }
+.nav-logout { color:var(--red) !important; border:1px solid var(--red) !important; cursor:pointer; background:none; font-weight:600; }
+.header { padding:16px 24px; border-bottom:1px solid var(--border); }
+.header h1 { color:var(--gold); font-size:1.4rem; font-weight:700; }
+.content { padding:16px 24px; max-width:1200px; }
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:16px; }
+.card h2 { color:var(--blue); font-size:0.9rem; margin-bottom:12px; }
+.card h3 { color:var(--gold); font-size:0.8rem; margin-bottom:8px; }
+.btn { padding:8px 16px; border-radius:4px; border:1px solid var(--border); background:var(--bg3); color:var(--text); cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:0.72rem; }
+.btn:hover { border-color:var(--blue); color:var(--blue); }
+.btn.primary { border-color:var(--gold); color:var(--gold); }
+.btn:disabled { opacity:0.5; cursor:not-allowed; }
+table { width:100%; border-collapse:collapse; font-size:0.72rem; }
+th { text-align:left; padding:8px; color:var(--muted); border-bottom:1px solid var(--border); }
+td { padding:8px; border-bottom:1px solid var(--border); }
+.badge { padding:2px 8px; border-radius:4px; font-size:0.65rem; font-weight:700; }
+.badge-good { background:#064e3b; color:var(--green); }
+.badge-fair { background:#422006; color:var(--gold); }
+.badge-poor { background:#450a0a; color:var(--red); }
+.badge-keep { background:#064e3b; color:var(--green); }
+.badge-disable { background:#450a0a; color:var(--red); }
+.badge-adjust { background:#422006; color:var(--gold); }
+.warning { background:#450a0a; border:1px solid var(--red); border-radius:4px; padding:8px 12px; margin:4px 0; color:var(--red); font-size:0.72rem; }
+.pattern { background:var(--bg3); border-radius:4px; padding:8px 12px; margin:4px 0; font-size:0.72rem; }
+.loading { color:var(--muted); font-style:italic; }
+.sentiment-pos { color:var(--green); }
+.sentiment-neg { color:var(--red); }
+.sentiment-neu { color:var(--muted); }
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="nav-logo">CogniflowAI</span>
+  <a href="dashboard.html">Dashboard</a>
+  <a href="instruments.html">Instruments</a>
+  <a href="tests.html">Tests</a>
+  <a href="advisor.html" class="active">Advisor</a>
+  <div class="nav-spacer"></div>
+  <span class="nav-user">Logged in as: <span id="navUser">--</span></span>
+  <button class="nav-logout" onclick="logout()">Logout</button>
+</nav>
+
+<div class="header">
+  <h1>AI Strategy Advisor</h1>
+  <div style="color:var(--muted);font-size:0.7rem;margin-top:4px;" id="reportDate">No report loaded</div>
+</div>
+
+<div class="content">
+  <!-- Generate Report Button -->
+  <div style="margin-bottom:16px;">
+    <button class="btn primary" id="generateBtn" onclick="generateReport()">Generate Report</button>
+    <span id="generateStatus" class="loading" style="margin-left:12px;display:none;"></span>
+  </div>
+
+  <!-- Summary Card -->
+  <div class="card" id="summaryCard" style="display:none;">
+    <h2>Weekly Summary</h2>
+    <div id="summaryText"></div>
+  </div>
+
+  <!-- Instrument Recommendations -->
+  <div class="card" id="recommendationsCard" style="display:none;">
+    <h2>Instrument Recommendations</h2>
+    <table>
+      <thead><tr><th>Symbol</th><th>Action</th><th>Reason</th></tr></thead>
+      <tbody id="recommendationsBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Parameter Suggestions -->
+  <div class="card" id="suggestionsCard" style="display:none;">
+    <h2>Parameter Suggestions</h2>
+    <table>
+      <thead><tr><th>Symbol</th><th>Parameter</th><th>Current</th><th>Suggested</th><th>Reason</th></tr></thead>
+      <tbody id="suggestionsBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Risk Warnings -->
+  <div class="card" id="warningsCard" style="display:none;">
+    <h2>Risk Warnings</h2>
+    <div id="warningsList"></div>
+  </div>
+
+  <!-- Pattern Observations -->
+  <div class="card" id="patternsCard" style="display:none;">
+    <h2>Patterns Observed</h2>
+    <div id="patternsList"></div>
+  </div>
+
+  <!-- Outlook -->
+  <div class="card" id="outlookCard" style="display:none;">
+    <h2>Next Week Outlook</h2>
+    <div id="outlookText"></div>
+  </div>
+
+  <!-- Trade Reviews -->
+  <div class="card">
+    <h2>Recent Trade Reviews</h2>
+    <div id="reviewsList" class="loading">Loading reviews...</div>
+  </div>
+
+  <!-- Sentiment Log -->
+  <div class="card">
+    <h2>Recent Sentiment Log</h2>
+    <div id="sentimentLog" class="loading">Loading sentiment data...</div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin.replace(':8082', ':8081');
+const token = localStorage.getItem('jwt_token');
+const user = localStorage.getItem('username');
+if (!token) { window.location.href = 'login.html'; }
+document.getElementById('navUser').textContent = user || '--';
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('username');
+  window.location.href = 'login.html';
+}
+
+const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+
+// Load latest report on page load
+async function loadLatestReport() {
+  try {
+    const resp = await fetch(API + '/api/advisor/latest', { headers });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.report) {
+      renderReport(data.report, data.timestamp);
+    }
+  } catch (e) {
+    console.error('Failed to load report:', e);
+  }
+}
+
+function renderReport(report, timestamp) {
+  if (timestamp) {
+    document.getElementById('reportDate').textContent = 'Report from: ' + new Date(timestamp).toLocaleString();
+  }
+
+  // Summary
+  if (report.summary) {
+    document.getElementById('summaryCard').style.display = '';
+    document.getElementById('summaryText').textContent = report.summary;
+  }
+
+  // Recommendations
+  const recs = report.instrument_recommendations || [];
+  if (recs.length) {
+    document.getElementById('recommendationsCard').style.display = '';
+    document.getElementById('recommendationsBody').innerHTML = recs.map(r =>
+      `<tr><td>${r.symbol}</td><td><span class="badge badge-${r.action}">${r.action}</span></td><td>${r.reason}</td></tr>`
+    ).join('');
+  }
+
+  // Suggestions
+  const sugs = report.parameter_suggestions || [];
+  if (sugs.length) {
+    document.getElementById('suggestionsCard').style.display = '';
+    document.getElementById('suggestionsBody').innerHTML = sugs.map(s =>
+      `<tr><td>${s.symbol}</td><td>${s.param}</td><td>${s.current}</td><td>${s.suggested}</td><td>${s.reason}</td></tr>`
+    ).join('');
+  }
+
+  // Warnings
+  const warns = report.risk_warnings || [];
+  if (warns.length) {
+    document.getElementById('warningsCard').style.display = '';
+    document.getElementById('warningsList').innerHTML = warns.map(w =>
+      `<div class="warning">${w}</div>`
+    ).join('');
+  }
+
+  // Patterns
+  const pats = report.patterns_observed || [];
+  if (pats.length) {
+    document.getElementById('patternsCard').style.display = '';
+    document.getElementById('patternsList').innerHTML = pats.map(p =>
+      `<div class="pattern">${p}</div>`
+    ).join('');
+  }
+
+  // Outlook
+  if (report.next_week_outlook) {
+    document.getElementById('outlookCard').style.display = '';
+    document.getElementById('outlookText').textContent = report.next_week_outlook;
+  }
+}
+
+async function generateReport() {
+  const btn = document.getElementById('generateBtn');
+  const status = document.getElementById('generateStatus');
+  btn.disabled = true;
+  status.style.display = '';
+  status.textContent = 'Generating report... this may take a minute';
+
+  try {
+    const resp = await fetch(API + '/api/advisor/generate', { method: 'POST', headers });
+    const data = await resp.json();
+    if (data.error) {
+      status.textContent = 'Error: ' + data.error;
+    } else if (data.report) {
+      renderReport(data.report, new Date().toISOString());
+      status.style.display = 'none';
+    }
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+// Load reviews
+async function loadReviews() {
+  try {
+    const resp = await fetch(API + '/api/advisor/reviews', { headers });
+    const reviews = await resp.json();
+    const el = document.getElementById('reviewsList');
+    if (!reviews.length) {
+      el.innerHTML = '<span style="color:var(--muted);">No trade reviews yet</span>';
+      return;
+    }
+    el.innerHTML = '<table><thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Analysis</th><th>Pattern</th><th>Lesson</th></tr></thead><tbody>' +
+      reviews.map(r =>
+        `<tr>
+          <td>${r.symbol}</td>
+          <td><span class="badge badge-${(r.entry_quality||'fair').toLowerCase()}">${r.entry_quality||'?'}</span></td>
+          <td><span class="badge badge-${(r.exit_quality||'fair').toLowerCase()}">${r.exit_quality||'?'}</span></td>
+          <td style="max-width:300px;">${(r.analysis||'').substring(0,150)}</td>
+          <td>${r.pattern_at_entry||''}</td>
+          <td>${r.lesson||''}</td>
+        </tr>`
+      ).join('') + '</tbody></table>';
+  } catch (e) {
+    document.getElementById('reviewsList').innerHTML = '<span style="color:var(--red);">Failed to load reviews</span>';
+  }
+}
+
+// Load sentiment log
+async function loadSentiment() {
+  try {
+    const resp = await fetch(API + '/api/advisor/sentiment-log', { headers });
+    const headlines = await resp.json();
+    const el = document.getElementById('sentimentLog');
+    if (!headlines.length) {
+      el.innerHTML = '<span style="color:var(--muted);">No sentiment data yet</span>';
+      return;
+    }
+    el.innerHTML = '<table><thead><tr><th>Symbol</th><th>Headline</th><th>Score</th><th>Source</th><th>Collected</th></tr></thead><tbody>' +
+      headlines.slice(0, 50).map(h => {
+        const score = h.sentiment_score || 0;
+        const cls = score > 0 ? 'sentiment-pos' : score < 0 ? 'sentiment-neg' : 'sentiment-neu';
+        return `<tr>
+          <td>${h.symbol}</td>
+          <td style="max-width:400px;">${(h.headline||'').substring(0,80)}</td>
+          <td class="${cls}">${score > 0 ? '+' : ''}${score.toFixed(1)}</td>
+          <td>${h.source||''}</td>
+          <td>${(h.collected_at||'').substring(0,16)}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  } catch (e) {
+    document.getElementById('sentimentLog').innerHTML = '<span style="color:var(--red);">Failed to load sentiment data</span>';
+  }
+}
+
+// Init
+loadLatestReport();
+loadReviews();
+loadSentiment();
+</script>
+</body>
+</html>

@@ -1151,6 +1151,207 @@ def update_global_settings():
     return jsonify({'ok': True})
 
 
+# ── LLM Advisor routes ───────────────────────────────
+
+LEARNING_DB = str(BASE_DIR / 'learning_loop.db')
+NEWS_DB = str(BASE_DIR / 'news.db')
+ADVISOR_DB = str(BASE_DIR / 'advisor.db')
+
+
+def _init_advisor_db():
+    """Create advisor reports table."""
+    conn = _connect_db(ADVISOR_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS advisor_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            report_json TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@app.route('/api/advisor/latest', methods=['GET'])
+@require_auth
+def advisor_latest():
+    """Get the latest weekly advisor report."""
+    try:
+        _init_advisor_db()
+        conn = _connect_db(ADVISOR_DB)
+        cursor = conn.execute(
+            "SELECT timestamp, report_json FROM advisor_reports "
+            "ORDER BY id DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return jsonify({
+                'timestamp': row[0],
+                'report': json.loads(row[1]),
+            })
+        return jsonify({'report': None, 'message': 'No reports yet'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/advisor/generate', methods=['POST'])
+@require_auth
+def advisor_generate():
+    """Generate a weekly advisor report on demand."""
+    try:
+        from dotenv import load_dotenv as _load_env
+        _load_env(BASE_DIR / '.env')
+        from bot.llm import create_llm
+        from bot.llm.advisor import generate_weekly_report
+
+        data = load()
+        settings = data.get('settings', {})
+        provider = settings.get('llm_provider_advisor',
+                                settings.get('llm_provider', 'groq'))
+        llm = create_llm(provider)
+
+        # Fetch last 7 days of trades
+        trades = []
+        if os.path.exists(LEARNING_DB):
+            conn = _connect_db(LEARNING_DB)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM trades WHERE open=0 "
+                "AND timestamp > datetime('now', '-7 days') "
+                "ORDER BY timestamp DESC"
+            )
+            trades = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+
+        # Fetch trade reviews
+        reviews = []
+        if os.path.exists(LEARNING_DB):
+            conn = _connect_db(LEARNING_DB)
+            conn.row_factory = sqlite3.Row
+            try:
+                cursor = conn.execute(
+                    "SELECT * FROM trade_reviews "
+                    "WHERE timestamp > datetime('now', '-7 days') "
+                    "ORDER BY timestamp DESC"
+                )
+                reviews = [dict(row) for row in cursor.fetchall()]
+            except sqlite3.OperationalError:
+                pass  # table may not exist yet
+            conn.close()
+
+        # Fetch WF results
+        wf_results = []
+        if os.path.exists(BACKTEST_DB):
+            conn = _connect_db(BACKTEST_DB)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT DISTINCT run_date FROM wf_results "
+                "ORDER BY run_date DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor = conn.execute(
+                    "SELECT * FROM wf_results WHERE run_date = ?",
+                    (row['run_date'],)
+                )
+                wf_results = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+
+        instruments = data.get('layer1_active', [])
+
+        report = generate_weekly_report(llm, trades, reviews,
+                                        wf_results, instruments)
+
+        # Save report
+        _init_advisor_db()
+        conn = _connect_db(ADVISOR_DB)
+        conn.execute(
+            "INSERT INTO advisor_reports (timestamp, report_json) VALUES (?, ?)",
+            (datetime.datetime.utcnow().isoformat(), json.dumps(report))
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({'report': report})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/advisor/reviews', methods=['GET'])
+@require_auth
+def advisor_reviews():
+    """Get recent trade reviews."""
+    try:
+        if not os.path.exists(LEARNING_DB):
+            return jsonify([])
+        conn = _connect_db(LEARNING_DB)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM trade_reviews ORDER BY timestamp DESC LIMIT 50"
+            )
+            reviews = [dict(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError:
+            reviews = []
+        conn.close()
+        return jsonify(reviews)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/advisor/sentiment-log', methods=['GET'])
+@require_auth
+def advisor_sentiment_log():
+    """Get recent sentiment checks from news.db."""
+    try:
+        if not os.path.exists(NEWS_DB):
+            return jsonify([])
+        conn = _connect_db(NEWS_DB)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM headlines ORDER BY collected_at DESC LIMIT 100"
+            )
+            headlines = [dict(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError:
+            headlines = []
+        conn.close()
+        return jsonify(headlines)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/advisor/news', methods=['GET'])
+@require_auth
+def advisor_news():
+    """Get recent news for a symbol."""
+    symbol = request.args.get('symbol', '')
+    if not symbol:
+        return jsonify({'error': 'symbol parameter required'}), 400
+    try:
+        if not os.path.exists(NEWS_DB):
+            return jsonify([])
+        conn = _connect_db(NEWS_DB)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM headlines WHERE symbol = ? "
+                "ORDER BY collected_at DESC LIMIT 20",
+                (symbol,)
+            )
+            headlines = [dict(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError:
+            headlines = []
+        conn.close()
+        return jsonify(headlines)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     # Check users exist
     users = load_users()
