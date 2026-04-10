@@ -34,7 +34,7 @@ class Dashboard:
         for r in signal_rows:
             ccy = r.get('currency', 'USD')
             pnl_val = r.get('unreal_pnl', 0)
-            if pnl_val != 0:
+            if pnl_val != 0 or r.get('pos', 0) != 0:
                 pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
 
         data = {
