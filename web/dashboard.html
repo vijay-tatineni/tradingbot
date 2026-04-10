@@ -177,19 +177,23 @@ async function load() {
       '📋 Config: ' + d.config_file + ' — ' + d.instrument_count.active + ' active, ' + d.instrument_count.accum + ' accumulation';
     document.getElementById('cycleInterval').textContent = 'every ' + (d.check_interval_mins||15) + ' min';
 
-    const pnl   = d.total_pnl;
     const pnlEl = document.getElementById('pnl');
     const pnlByCcy = d.pnl_by_currency || {};
-    const ccyKeys = Object.keys(pnlByCcy);
-    if (ccyKeys.length > 1) {
-      pnlEl.innerHTML = ccyKeys.map(c => {
-        const v = pnlByCcy[c];
-        return `<span class="${v>=0?'pnl-pos':'pnl-neg'}">${ccySymbol(c)}${v>=0?'+':''}${Math.abs(v).toFixed(2)}</span>`;
-      }).join(' <span class="muted">|</span> ');
+    const entries = Object.entries(pnlByCcy).filter(([k, v]) => v !== 0);
+    let pnlHtml = '';
+    if (entries.length > 0) {
+      pnlHtml = entries.map(([ccy, val]) => {
+        const sign = val >= 0 ? '+' : '';
+        const sym = ccy === 'GBP' ? '£' : ccy === 'EUR' ? '€' : '$';
+        const color = val >= 0 ? '#27AE60' : '#E74C3C';
+        return `<span style="color:${color}">${sym}${sign}${val.toFixed(2)}</span>`;
+      }).join(' <span style="color:#8B949E">|</span> ');
     } else {
-      pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2) + ' (converted)';
+      const t = d.total_pnl || 0;
+      const color = t >= 0 ? '#27AE60' : '#E74C3C';
+      pnlHtml = `<span style="color:${color}">$${t.toFixed(2)}</span>`;
     }
-    pnlEl.className = 'card-value ' + (pnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+    pnlEl.innerHTML = pnlHtml;
     document.getElementById('riskPct').textContent = 'Risk: ' + d.risk_pct + '% of $' + d.loss_limit + ' limit';
     const fill = document.getElementById('riskFill');
     fill.style.width = d.risk_pct + '%';

@@ -412,7 +412,12 @@ class ActiveTrading:
         }
 
     def _closed_row(self, inst: dict, mkt_str: str) -> dict:
-        pos_info   = self.broker.get_position_info(inst['symbol'])
+        # Use last known price from previous cycle so P&L stays populated
+        last_price = 0.0
+        bundle = inst.get('_last_bundle')
+        if bundle:
+            last_price = bundle.price
+        pos_info   = self.broker.get_position_info(inst['symbol'], last_price)
         stop_level = self.tracker.get_stop_level(inst['symbol'])
         peak_price = self.tracker.get_peak(inst['symbol'])
         watch_info = self.tracker.watch_info(inst['symbol'])
@@ -421,7 +426,7 @@ class ActiveTrading:
             'name':       inst['name'],
             'flag':       inst.get('flag', ''),
             'market':     mkt_str,
-            'price':      0,
+            'price':      last_price,
             'alligator':  '--',
             'direction':  '--',
             'ma200':      '--',
@@ -431,8 +436,8 @@ class ActiveTrading:
             'signal':     'CLOSED',
             'pos':        pos_info.qty,
             'avg_cost':   pos_info.avg_cost,
-            'unreal_pnl': 0,
-            'pnl_pct':    0,
+            'unreal_pnl': pos_info.unreal_pnl,
+            'pnl_pct':    pos_info.pnl_pct,
             'currency':   inst.get('currency', 'USD'),
             'stop_level': stop_level,
             'peak_price': peak_price,

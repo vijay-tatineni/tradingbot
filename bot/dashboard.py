@@ -8,7 +8,26 @@ Entry price: bright white
 
 import json, os, datetime
 from bot.config import Config
+from bot.currency import convert_pnl_to_base, is_pence_instrument
 from bot.logger import log
+
+_PNL_CACHE_FILE = os.path.join(os.path.dirname(__file__), '..', 'web', 'pnl_cache.json')
+
+def _load_pnl_cache():
+    """Load cached P&L from disk (survives bot restart)."""
+    try:
+        with open(_PNL_CACHE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"total_pnl": 0, "pnl_by_currency": {}}
+
+def _save_pnl_cache(total_pnl, pnl_by_ccy):
+    """Save P&L to cache file."""
+    try:
+        with open(_PNL_CACHE_FILE, 'w') as f:
+            json.dump({"total_pnl": total_pnl, "pnl_by_currency": pnl_by_ccy}, f)
+    except Exception:
+        pass
 
 
 class Dashboard:
@@ -32,10 +51,30 @@ class Dashboard:
         ]
         pnl_by_ccy = {}
         for r in signal_rows:
+            pos = r.get('pos', 0)
+            if pos == 0:
+                continue
             ccy = r.get('currency', 'USD')
             pnl_val = r.get('unreal_pnl', 0)
-            if pnl_val != 0 or r.get('pos', 0) != 0:
-                pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
+            if pnl_val == 0:
+                # Fallback: compute from last known price vs entry
+                price = r.get('price', 0)
+                avg_cost = r.get('avg_cost', 0)
+                if price > 0 and avg_cost > 0:
+                    raw_pnl = (price - avg_cost) * pos
+                    if is_pence_instrument(ccy):
+                        raw_pnl = convert_pnl_to_base(raw_pnl, ccy)
+                    pnl_val = round(raw_pnl, 2)
+            pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
+        pnl_by_ccy = {k: v for k, v in pnl_by_ccy.items() if v != 0}
+
+        has_open_positions = any(r.get('pos', 0) != 0 for r in signal_rows)
+        if pnl_by_ccy:
+            _save_pnl_cache(total_pnl, pnl_by_ccy)
+        elif has_open_positions:
+            cached = _load_pnl_cache()
+            total_pnl = cached.get("total_pnl", 0)
+            pnl_by_ccy = cached.get("pnl_by_currency", {})
 
         data = {
             'last_updated':        datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
@@ -241,19 +280,23 @@ async function load() {{
       '📋 Config: ' + d.config_file + ' — ' + d.instrument_count.active + ' active, ' + d.instrument_count.accum + ' accumulation';
     document.getElementById('cycleInterval').textContent = 'every ' + (d.check_interval_mins||15) + ' min';
 
-    const pnl   = d.total_pnl;
     const pnlEl = document.getElementById('pnl');
     const pnlByCcy = d.pnl_by_currency || {{}};
-    const ccyKeys = Object.keys(pnlByCcy);
-    if (ccyKeys.length > 1) {{
-      pnlEl.innerHTML = ccyKeys.map(c => {{
-        const v = pnlByCcy[c];
-        return `<span class="${{v>=0?'pnl-pos':'pnl-neg'}}">${{ccySymbol(c)}}${{v>=0?'+':''}}${{Math.abs(v).toFixed(2)}}</span>`;
-      }}).join(' <span class="muted">|</span> ');
+    const entries = Object.entries(pnlByCcy).filter(([k, v]) => v !== 0);
+    let pnlHtml = '';
+    if (entries.length > 0) {{
+      pnlHtml = entries.map(([ccy, val]) => {{
+        const sign = val >= 0 ? '+' : '';
+        const sym = ccy === 'GBP' ? '£' : ccy === 'EUR' ? '€' : '$';
+        const color = val >= 0 ? '#27AE60' : '#E74C3C';
+        return `<span style="color:${{color}}">${{sym}}${{sign}}${{val.toFixed(2)}}</span>`;
+      }}).join(' <span style="color:#8B949E">|</span> ');
     }} else {{
-      pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2) + ' (converted)';
+      const t = d.total_pnl || 0;
+      const color = t >= 0 ? '#27AE60' : '#E74C3C';
+      pnlHtml = `<span style="color:${{color}}">$${{t.toFixed(2)}}</span>`;
     }}
-    pnlEl.className = 'card-value ' + (pnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+    pnlEl.innerHTML = pnlHtml;
     document.getElementById('riskPct').textContent = 'Risk: ' + d.risk_pct + '% of $' + d.loss_limit + ' limit';
     const fill = document.getElementById('riskFill');
     fill.style.width = d.risk_pct + '%';
