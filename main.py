@@ -64,8 +64,8 @@ class TradingBot:
 
     VERSION = "7.2"
 
-    def __init__(self, broker_override: str = None):
-        self.cfg     = Config()
+    def __init__(self, broker_override: str = None, config_path: str = None):
+        self.cfg     = Config(config_path) if config_path else Config()
         self.broker_type = broker_override or self.cfg._raw.get('settings', {}).get('broker', 'ibkr')
         self.broker  = create_broker(self.broker_type, self.cfg)
         self.hours   = MarketHours()
@@ -395,7 +395,7 @@ class TradingBot:
         sys.exit(0)
 
 
-def validate_environment() -> None:
+def validate_environment(config_file: str = None) -> None:
     """
     Pre-flight checks before starting the bot.
     Exits with clear message if anything is wrong.
@@ -403,7 +403,7 @@ def validate_environment() -> None:
     errors = []
 
     # 1. instruments.json exists and is valid JSON
-    config_path = BASE_DIR / 'instruments.json'
+    config_path = Path(config_file) if config_file else BASE_DIR / 'instruments.json'
     if not config_path.exists():
         errors.append(f"instruments.json not found at {config_path}")
     else:
@@ -464,8 +464,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="CogniflowAI Trading Bot")
     parser.add_argument("--broker", default=None,
                         help="Broker to use: ibkr or ig (overrides instruments.json)")
+    parser.add_argument("--config", default=None,
+                        help="Path to instruments JSON config (default: instruments.json)")
     args = parser.parse_args()
 
-    validate_environment()
-    bot = TradingBot(broker_override=args.broker)
+    validate_environment(config_file=args.config)
+    bot = TradingBot(broker_override=args.broker, config_path=args.config)
     bot.run()

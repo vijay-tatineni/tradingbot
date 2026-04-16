@@ -32,6 +32,8 @@ from flask_limiter.util import get_remote_address
 
 load_dotenv(Path(__file__).parent / '.env')
 
+import argparse as _argparse
+
 BASE_DIR    = Path(__file__).parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 BACKUP_DIR  = str(BASE_DIR / 'backups')
@@ -1362,6 +1364,14 @@ def advisor_news():
 
 
 if __name__ == '__main__':
+    _parser = _argparse.ArgumentParser(description="CogniflowAI API Server")
+    _parser.add_argument("--config", default=None,
+                         help="Path to instruments JSON config (default: instruments.json)")
+    _cli_args = _parser.parse_args()
+
+    if _cli_args.config:
+        CONFIG_FILE = str(Path(_cli_args.config).resolve())
+
     # Check users exist
     users = load_users()
     if not users:
