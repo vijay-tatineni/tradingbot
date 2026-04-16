@@ -54,3 +54,4 @@ backtest_2yr.py
 backtest_2yr_results.txt
 fix_gbp_pnl.py
 learning_loop.db.bak
+instruments_ig.json
