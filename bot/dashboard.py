@@ -91,12 +91,21 @@ class Dashboard:
         pnl_by_ccy = {k: v for k, v in pnl_by_ccy.items() if v != 0}
 
         has_open_positions = any(r.get('pos', 0) != 0 for r in signal_rows)
-        if pnl_by_ccy or total_pnl != 0:
+
+        cached = _load_pnl_cache()
+        cached_pnl = cached.get("pnl_by_currency", {})
+
+        for ccy, val in pnl_by_ccy.items():
+            if val != 0:
+                cached_pnl[ccy] = val
+
+        pnl_by_ccy = {k: v for k, v in cached_pnl.items() if v != 0}
+
+        if pnl_by_ccy:
+            total_pnl = sum(pnl_by_ccy.values())
+
+        if pnl_by_ccy or has_open_positions:
             _save_pnl_cache(total_pnl, pnl_by_ccy)
-        elif has_open_positions:
-            cached = _load_pnl_cache()
-            total_pnl = cached.get("total_pnl", 0)
-            pnl_by_ccy = cached.get("pnl_by_currency", {})
 
         data = {
             'last_updated':        datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
