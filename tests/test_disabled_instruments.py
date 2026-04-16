@@ -56,8 +56,8 @@ def test_disabled_shown_on_dashboard():
     disabled_rows = dash._disabled_instrument_rows()
 
     disabled_symbols = {r['symbol'] for r in disabled_rows}
-    assert 'CVX' in disabled_symbols
-    assert 'VRT' in disabled_symbols
+    all_disabled = [i for i in cfg._raw['layer1_active'] if not i.get('enabled', True)]
+    assert len(disabled_rows) == len(all_disabled)
     for row in disabled_rows:
         assert row['disabled'] is True
         assert row['action'] == 'DISABLED'

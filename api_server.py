@@ -48,7 +48,12 @@ if not JWT_SECRET:
 JWT_EXPIRY_HOURS = 24
 
 app = Flask(__name__)
-CORS(app, origins=['http://188.166.150.137:8082', 'http://127.0.0.1:8082'])
+_API_PORT = int(os.environ.get('API_PORT', 8081))
+_WEB_PORT = int(os.environ.get('WEB_PORT', 8082))
+CORS(app, origins=[
+    f'http://188.166.150.137:{_WEB_PORT}',
+    f'http://127.0.0.1:{_WEB_PORT}',
+])
 
 # Rate limiter — keyed by IP
 limiter = Limiter(get_remote_address, app=app, default_limits=[],
@@ -223,10 +228,10 @@ def validate_config(data: dict) -> list:
     elif not isinstance(data['settings'], dict):
         errors.append("'settings' must be a JSON object")
     else:
-        required_settings = [
-            'host', 'port', 'client_id', 'account',
-            'check_interval_mins', 'portfolio_loss_limit', 'web_dir',
-        ]
+        broker = data['settings'].get('broker', 'ibkr')
+        required_settings = ['check_interval_mins', 'portfolio_loss_limit', 'web_dir']
+        if broker == 'ibkr':
+            required_settings += ['host', 'port', 'client_id', 'account']
         for key in required_settings:
             if key not in data['settings']:
                 errors.append(f"Missing required setting: '{key}'")
@@ -237,7 +242,11 @@ def validate_config(data: dict) -> list:
     elif not isinstance(data['layer1_active'], list):
         errors.append("'layer1_active' must be a list")
     else:
-        required_inst_fields = ['symbol', 'name', 'sec_type', 'exchange', 'currency', 'qty']
+        broker = data.get('settings', {}).get('broker', 'ibkr')
+        if broker == 'ig':
+            required_inst_fields = ['symbol', 'name', 'ig_epic', 'currency']
+        else:
+            required_inst_fields = ['symbol', 'name', 'sec_type', 'exchange', 'currency', 'qty']
         for i, inst in enumerate(data['layer1_active']):
             if not isinstance(inst, dict):
                 errors.append(f"layer1_active[{i}] must be a JSON object")
@@ -1361,9 +1370,9 @@ if __name__ == '__main__':
         print()
 
     host = '127.0.0.1'
-    print(f'API server running on http://{host}:8081')
+    print(f'API server running on http://{host}:{_API_PORT}')
     print(f'Config file: {CONFIG_FILE}')
     print(f'Users: {len(users)} configured')
     print(f'JWT expiry: {JWT_EXPIRY_HOURS}h')
     print(f'Rate limit: 5 login attempts per minute per IP')
-    app.run(host=host, port=8081, debug=False)
+    app.run(host=host, port=_API_PORT, debug=False)

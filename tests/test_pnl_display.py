@@ -25,6 +25,7 @@ def _make_cfg(web_dir):
     cfg.active_instruments = []
     cfg.accum_instruments = []
     cfg.path = "test.yaml"
+    cfg.broker_type = "ibkr"
     return cfg
 
 

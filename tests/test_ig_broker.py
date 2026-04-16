@@ -218,14 +218,14 @@ def test_ig_fetch_bars_uses_mid_prices():
 
 
 def test_ig_fetch_bars_maps_timeframe():
-    """'4 hours' should map to 'HOUR_4', '1 day' to 'DAY'."""
+    """'4 hours' should map to '4h' (pandas offset format for trading_ig)."""
     broker = _make_connected_broker()
     broker.ig.fetch_historical_prices_by_epic.return_value = None
 
     broker.fetch_bars("KA.D.BARC.DAILY.IP", bar_size="4 hours")
     call_args = broker.ig.fetch_historical_prices_by_epic.call_args
-    assert call_args.kwargs.get("resolution") == "HOUR_4" or \
-           call_args[1].get("resolution") == "HOUR_4"
+    assert call_args.kwargs.get("resolution") == "4h" or \
+           call_args[1].get("resolution") == "4h"
 
 
 def test_ig_fetch_price_snapshot_returns_float():

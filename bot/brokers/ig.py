@@ -27,15 +27,14 @@ logger = logging.getLogger("ig_broker")
 
 # ── Resolution mapping ───────────────────────────────────────────
 _RESOLUTION_MAP = {
-    "1 min": "MINUTE",
-    "5 mins": "MINUTE_5",
-    "15 mins": "MINUTE_15",
-    "30 mins": "MINUTE_30",
-    "1 hour": "HOUR",
-    "4 hours": "HOUR_4",
-    "1 day": "DAY",
-    "1 week": "WEEK",
-    "1 month": "MONTH",
+    "1 min": "1min",
+    "5 mins": "5min",
+    "15 mins": "15min",
+    "30 mins": "30min",
+    "1 hour": "1h",
+    "4 hours": "4h",
+    "1 day": "D",
+    "1 week": "W",
 }
 
 # ── Minimum intervals between API calls (seconds) ───────────────
@@ -186,7 +185,7 @@ class IGBroker(BaseBroker):
             logger.error("fetch_bars: cannot resolve epic from %s", contract)
             return None
 
-        resolution = _RESOLUTION_MAP.get(bar_size, "DAY")
+        resolution = _RESOLUTION_MAP.get(bar_size, "D")
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
 
@@ -226,7 +225,7 @@ class IGBroker(BaseBroker):
             self._rate_limit("historical")
             response = self.ig.fetch_historical_prices_by_epic(
                 epic=epic,
-                resolution="MINUTE",
+                resolution="1min",
                 numpoints=1,
             )
             if response and "prices" in response:
@@ -547,7 +546,10 @@ class IGBroker(BaseBroker):
         self._last_request[request_type] = time.time()
 
     def _ensure_session(self) -> None:
-        """Re-create session if expired."""
+        """Connect if not yet connected, or re-create session if expired."""
+        if not self._connected or self.ig is None:
+            self.connect()
+            return
         try:
             self.ig.fetch_accounts()
         except Exception:

@@ -26,10 +26,11 @@ class Config:
         s = self._raw['settings']
 
         # ── Connection ────────────────────────────────────────
-        self.host       : str   = s['host']
-        self.port       : int   = s['port']
-        self.client_id  : int   = s['client_id']
-        self.account    : str   = s['account']
+        self.broker_type : str  = s.get('broker', 'ibkr')
+        self.host       : str   = s.get('host', '127.0.0.1')
+        self.port       : int   = s.get('port', 4001)
+        self.client_id  : int   = s.get('client_id', 1)
+        self.account    : str   = s.get('account', '')
 
         # ── Timing ────────────────────────────────────────────
         self.check_interval_mins : int = s['check_interval_mins']

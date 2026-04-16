@@ -27,6 +27,7 @@ import json
 import signal
 import sqlite3
 import datetime
+import argparse
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -63,10 +64,10 @@ class TradingBot:
 
     VERSION = "7.2"
 
-    def __init__(self):
+    def __init__(self, broker_override: str = None):
         self.cfg     = Config()
-        broker_type  = self.cfg._raw.get('settings', {}).get('broker', 'ibkr')
-        self.broker  = create_broker(broker_type, self.cfg)
+        self.broker_type = broker_override or self.cfg._raw.get('settings', {}).get('broker', 'ibkr')
+        self.broker  = create_broker(self.broker_type, self.cfg)
         self.hours   = MarketHours()
         self.plugins : list = []
 
@@ -172,7 +173,7 @@ class TradingBot:
 
             self.watchdog.set_sleep_mode(False)
             if not self.broker.is_connected():
-                log("Reconnecting to IBKR after weekend sleep...")
+                log(f"Reconnecting to {self.broker_type.upper()} after weekend sleep...")
                 self.broker.reconnect()
             cycle += 1
             separator(f"CYCLE #{cycle}  ·  "
@@ -390,7 +391,7 @@ class TradingBot:
             except Exception:
                 pass
         log(f"Final P&L: ${self.l1.total_pnl:+.2f}")
-        log("Positions remain open on IBKR. Use IBKR app to manage manually.")
+        log(f"Positions remain open on {self.broker_type.upper()}. Manage manually.")
         sys.exit(0)
 
 
@@ -431,15 +432,20 @@ def validate_environment() -> None:
         if db_path.exists() and not os.access(db_path, os.W_OK):
             errors.append(f"Database not writable: {db_path}")
 
-    # 5. IBKR connectivity (tested later during Config/IBConnection init)
-    #    Just check the port config is sensible
+    # 5. Broker-specific connectivity checks
     try:
         with open(config_path) as f:
             s = json.load(f).get('settings', {})
-        port = s.get('port', 0)
-        if port not in (4001, 4002, 7496, 7497, 4000):
-            log(f"WARNING: Unusual IBKR port {port} — "
-                f"expected 4001/4002 (Gateway) or 7496/7497 (TWS)", "WARN")
+        broker = s.get('broker', 'ibkr')
+        if broker == 'ibkr':
+            port = s.get('port', 0)
+            if port not in (4001, 4002, 7496, 7497, 4000):
+                log(f"WARNING: Unusual IBKR port {port} — "
+                    f"expected 4001/4002 (Gateway) or 7496/7497 (TWS)", "WARN")
+        elif broker == 'ig':
+            for var in ('IG_USERNAME', 'IG_PASSWORD', 'IG_API_KEY'):
+                if not os.environ.get(var):
+                    log(f"WARNING: {var} not set — IG broker will fail to connect", "WARN")
     except Exception:
         pass
 
@@ -455,6 +461,11 @@ def validate_environment() -> None:
 
 # ── Entry point ───────────────────────────────────────────────
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="CogniflowAI Trading Bot")
+    parser.add_argument("--broker", default=None,
+                        help="Broker to use: ibkr or ig (overrides instruments.json)")
+    args = parser.parse_args()
+
     validate_environment()
-    bot = TradingBot()
+    bot = TradingBot(broker_override=args.broker)
     bot.run()

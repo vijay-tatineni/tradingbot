@@ -68,7 +68,7 @@ tr:hover td { background:#1c2128; }
 
 <!-- Nav Bar -->
 <div style="display:flex;align-items:center;padding:10px 24px;background:#161b22;border-bottom:1px solid #30363d;gap:8px;">
-  <span style="color:#f5c842;font-weight:700;font-size:0.82rem;margin-right:8px;">CogniflowAI</span>
+  <span style="color:#f5c842;font-weight:700;font-size:0.82rem;margin-right:8px;">CogniflowAI</span><span id="navBroker" style="color:#38bdf8;font-size:0.68rem;margin-right:8px;"></span>
   <a href="dashboard.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#f5c842;border:1px solid #f5c842;font-family:'JetBrains Mono',monospace;">Dashboard</a>
   <a href="instruments.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#8b949e;border:1px solid transparent;font-family:'JetBrains Mono',monospace;">Instruments</a>
   <a href="tests.html" style="font-size:0.72rem;text-decoration:none;padding:6px 14px;border-radius:4px;color:#8b949e;border:1px solid transparent;font-family:'JetBrains Mono',monospace;">Tests</a>
@@ -173,6 +173,10 @@ async function load() {
     const d = await r.json();
 
     document.getElementById('updated').textContent = 'Last updated: ' + d.last_updated;
+    const brokerName = d.broker_name || 'IBKR';
+    document.querySelector('h1').textContent = 'Trading Bot Dashboard — ' + brokerName;
+    const navBroker = document.getElementById('navBroker');
+    if (navBroker) navBroker.textContent = '[' + brokerName + ']';
     document.getElementById('configBar').textContent =
       '📋 Config: ' + d.config_file + ' — ' + d.instrument_count.active + ' active, ' + d.instrument_count.accum + ' accumulation';
     document.getElementById('cycleInterval').textContent = 'every ' + (d.check_interval_mins||15) + ' min';
