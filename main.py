@@ -25,6 +25,7 @@ import sys
 import os
 import json
 import signal
+import sqlite3
 import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -91,11 +92,12 @@ class TradingBot:
         # News collection state
         self._last_news_collection = 0
         self._advisor_ran_this_week = False
+        self._daily_summary_sent = False
 
         # ── Register active plugins ───────────────────────────
-        self.register_plugin(LearningLoop(self.cfg, llm=self.llm_review))
-
         self.alerts = TelegramAlerts(self.cfg)
+
+        self.register_plugin(LearningLoop(self.cfg, llm=self.llm_review, alerts=self.alerts))
         self.register_plugin(self.alerts)
 
         self.register_plugin(SentimentEngine(self.cfg, alerts=self.alerts))
@@ -212,6 +214,13 @@ class TradingBot:
                 # ── Weekly advisor (Sunday 20:00 UTC) ────────
                 self._maybe_run_advisor(now)
 
+                # ── Daily P&L summary (21:00 UTC) ────────────
+                if now.hour == 21 and now.minute < self.cfg.check_interval_mins and not self._daily_summary_sent:
+                    self._send_daily_summary()
+                    self._daily_summary_sent = True
+                if now.hour == 22:
+                    self._daily_summary_sent = False
+
                 # ── Watchdog heartbeat ────────────────────────
                 self.watchdog.heartbeat(cycle)
 
@@ -225,6 +234,50 @@ class TradingBot:
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
                 self.broker.reconnect()
+
+    def _get_today_trades(self) -> list:
+        """Get today's closed trades from learning_loop.db."""
+        try:
+            ll_db = str(BASE_DIR / 'learning_loop.db')
+            if not os.path.exists(ll_db):
+                return []
+            conn = sqlite3.connect(ll_db)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT symbol, pnl_usd, outcome FROM trades
+                WHERE open = 0 AND outcome IS NOT NULL
+                AND date(timestamp) = date('now')
+            """)
+            trades = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            return trades
+        except Exception:
+            return []
+
+    def _send_daily_summary(self) -> None:
+        """Send end-of-day P&L summary via Telegram."""
+        try:
+            today_trades = self._get_today_trades()
+            daily_pnl = sum(t["pnl_usd"] for t in today_trades)
+            wins = sum(1 for t in today_trades if t["outcome"] == "WIN")
+            losses = sum(1 for t in today_trades if t["outcome"] == "LOSS")
+            open_count = len(self.l1.tracker.open)
+
+            msg = (
+                f"Daily Summary\n"
+                f"Trades today: {len(today_trades)} "
+                f"({wins}W / {losses}L)\n"
+                f"Daily P&L: ${daily_pnl:+.2f}\n"
+                f"Open positions: {open_count}\n"
+                f"Portfolio P&L: ${self.l1.total_pnl:+.2f}"
+            )
+
+            self.alerts.send(msg)
+            log(f"[DailySummary] Sent: {len(today_trades)} trades, "
+                f"P&L: ${daily_pnl:+.2f}")
+        except Exception as e:
+            log(f"[DailySummary] Failed: {e}", "WARN")
 
     def _maybe_collect_news(self) -> None:
         """Collect news headlines every N hours."""

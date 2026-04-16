@@ -17,6 +17,8 @@ v7.2 changes:
 """
 
 import datetime
+import sqlite3
+from pathlib import Path
 from bot.config           import Config
 from bot.brokers.base     import BaseBroker, FillResult
 from bot.market_hours     import MarketHours
@@ -26,6 +28,9 @@ from bot.position_tracker import PositionTracker
 from bot.bar_schedule     import is_bar_close, next_bar_close_str
 from bot.logger           import log, separator
 from bot.sizing            import calculate_qty
+from bot.order_validator  import validate_order, OrderValidationError
+
+_BASE_DIR = Path(__file__).parent.parent
 
 
 class ActiveTrading:
@@ -54,6 +59,14 @@ class ActiveTrading:
 
     def run(self) -> None:
         separator("LAYER 1: ACTIVE TRADING")
+
+        # Log disabled instruments on first run
+        if not self._synced:
+            for inst in self.cfg._raw.get('layer1_active', []):
+                if not inst.get('enabled', True):
+                    reason = inst.get('disabled_reason', 'no edge per walk-forward')
+                    log(f"  Skipping {inst['symbol']} — disabled ({reason})")
+
         self.total_pnl = self.broker.get_total_pnl()
         log(f"Portfolio P&L: ${self.total_pnl:+.2f}  |  Limit: -${self.cfg.portfolio_loss_limit}")
 
@@ -298,6 +311,8 @@ class ActiveTrading:
                 if should_reenter:
                     if not self._can_enter(symbol):
                         action = "RE-ENTRY BLOCKED (position limit)"
+                    elif not self._validate_entry(inst, inst['qty'], price, "BUY"):
+                        action = "RE-ENTRY BLOCKED (validation)"
                     else:
                         allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                         if allowed:
@@ -323,6 +338,8 @@ class ActiveTrading:
                 # Fresh entry
                 if not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                elif not self._validate_entry(inst, entry_qty, price, "BUY"):
+                    action = "ENTRY BLOCKED (validation)"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed and not self._llm_sentiment_check(inst, "BUY", df):
@@ -347,6 +364,8 @@ class ActiveTrading:
                 # Fresh short from flat
                 if not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                elif not self._validate_entry(inst, entry_qty, price, "SELL"):
+                    action = "ENTRY BLOCKED (validation)"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed:
@@ -383,6 +402,57 @@ class ActiveTrading:
 
         return self._build_row(inst, mkt_str, bundle, result,
                                pos_info, action, stop_level, peak_price, watch_info)
+
+    def _get_daily_pnl(self) -> float:
+        """Get today's realized P&L from closed trades."""
+        try:
+            db_path = str(_BASE_DIR / 'learning_loop.db')
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            result = conn.execute("""
+                SELECT COALESCE(SUM(pnl_usd), 0) FROM trades
+                WHERE outcome IS NOT NULL
+                AND date(timestamp) = date('now')
+            """).fetchone()
+            conn.close()
+            return result[0] if result else 0.0
+        except Exception:
+            return 0.0
+
+    def _get_weekly_pnl(self) -> float:
+        """Get this week's realized P&L from closed trades."""
+        try:
+            db_path = str(_BASE_DIR / 'learning_loop.db')
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            result = conn.execute("""
+                SELECT COALESCE(SUM(pnl_usd), 0) FROM trades
+                WHERE outcome IS NOT NULL
+                AND date(timestamp) >= date('now', 'weekday 0', '-7 days')
+            """).fetchone()
+            conn.close()
+            return result[0] if result else 0.0
+        except Exception:
+            return 0.0
+
+    def _validate_entry(self, inst: dict, qty: int, price: float,
+                        direction: str) -> bool:
+        """Run order validation. Returns True if order is allowed."""
+        try:
+            validate_order(
+                symbol=inst["symbol"],
+                qty=qty,
+                price=price,
+                direction=direction,
+                currency=inst.get("currency", "USD"),
+                settings=self.cfg._raw.get("settings", {}),
+                open_positions=len(self.tracker.open),
+                daily_pnl=self._get_daily_pnl(),
+                weekly_pnl=self._get_weekly_pnl(),
+            )
+            return True
+        except OrderValidationError:
+            return False
 
     def _build_row(self, inst, mkt_str, bundle, result,
                    pos_info, action, stop_level, peak_price, watch_info) -> dict:

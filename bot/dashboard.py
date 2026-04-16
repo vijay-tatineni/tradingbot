@@ -37,6 +37,7 @@ class Dashboard:
         self.data_dir = cfg.web_dir
         os.makedirs(self.data_dir, exist_ok=True)
         self._write_html()
+        log(f"P&L cache file: {os.path.abspath(_PNL_CACHE_FILE)}")
         log(f"Dashboard ready: {self.data_dir}/dashboard.html")
 
     def update(self, cycle, signal_rows, accum_rows,
@@ -69,7 +70,7 @@ class Dashboard:
         pnl_by_ccy = {k: v for k, v in pnl_by_ccy.items() if v != 0}
 
         has_open_positions = any(r.get('pos', 0) != 0 for r in signal_rows)
-        if pnl_by_ccy:
+        if pnl_by_ccy or total_pnl != 0:
             _save_pnl_cache(total_pnl, pnl_by_ccy)
         elif has_open_positions:
             cached = _load_pnl_cache()
@@ -87,7 +88,7 @@ class Dashboard:
             'lse_open':            lse_open,
             'us_open':             us_open,
             'positions':           pos_list,
-            'signals':             signal_rows,
+            'signals':             signal_rows + self._disabled_instrument_rows(),
             'accum':               accum_rows,
             'config_file':         self.cfg.path,
             'instrument_count':    {'active': len(self.cfg.active_instruments), 'accum': len(self.cfg.accum_instruments)},
@@ -98,6 +99,39 @@ class Dashboard:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, path)
         log(f"Dashboard updated — cycle #{cycle}")
+
+    def _disabled_instrument_rows(self) -> list:
+        """Generate greyed-out rows for disabled instruments."""
+        rows = []
+        for inst in self.cfg._raw.get('layer1_active', []):
+            if inst.get('enabled', True):
+                continue
+            rows.append({
+                'symbol':     inst['symbol'],
+                'name':       inst['name'],
+                'flag':       inst.get('flag', ''),
+                'market':     '--',
+                'price':      0.0,
+                'alligator':  '--',
+                'direction':  '--',
+                'ma200':      '--',
+                'wr':         0.0,
+                'rsi':        50.0,
+                'confidence': '--',
+                'signal':     'DISABLED',
+                'pos':        0,
+                'avg_cost':   0,
+                'unreal_pnl': 0,
+                'pnl_pct':    0,
+                'currency':   inst.get('currency', 'USD'),
+                'stop_level': 0,
+                'peak_price': 0,
+                'watching':   0,
+                'action':     'DISABLED',
+                'reason':     inst.get('disabled_reason', ''),
+                'disabled':   True,
+            })
+        return rows
 
     def _write_html(self):
         interval = self.cfg.check_interval_mins
@@ -319,15 +353,18 @@ async function load() {{
         }}).join('')
       : '<span class="muted">No open positions</span>';
 
-    // Sort: open positions first (by P&L% desc), then flat (alphabetical)
-    const openPos = d.signals.filter(s => s.pos !== 0).sort((a,b) => (b.pnl_pct||0) - (a.pnl_pct||0));
-    const flatPos = d.signals.filter(s => s.pos === 0).sort((a,b) => a.symbol.localeCompare(b.symbol));
-    const sorted  = [...openPos, ...flatPos];
+    // Sort: open positions first (by P&L% desc), then flat (alphabetical), then disabled
+    const openPos     = d.signals.filter(s => s.pos !== 0 && !s.disabled).sort((a,b) => (b.pnl_pct||0) - (a.pnl_pct||0));
+    const flatPos     = d.signals.filter(s => s.pos === 0 && !s.disabled).sort((a,b) => a.symbol.localeCompare(b.symbol));
+    const disabledPos = d.signals.filter(s => s.disabled).sort((a,b) => a.symbol.localeCompare(b.symbol));
+    const sorted      = [...openPos, ...flatPos, ...disabledPos];
 
     function renderRow(s, isOpen) {{
+      const isDisabled = s.disabled === true;
+      const rowStyle   = isDisabled ? 'opacity:0.4' : '';
       const mktClass  = s.market==='24/7' ? 'badge-247' : s.market==='OPEN' ? 'badge-open' : 'badge-closed';
       const confClass = s.confidence==='HIGH' ? 'badge-high' : s.confidence==='MEDIUM' ? 'badge-med' : 'badge-low';
-      const sigClass  = s.signal==='BUY' ? 'badge-buy' : s.signal==='SELL' ? 'badge-sell' : 'badge-hold';
+      const sigClass  = isDisabled ? 'badge-hold' : s.signal==='BUY' ? 'badge-buy' : s.signal==='SELL' ? 'badge-sell' : 'badge-hold';
       const wrColor   = s.wr >= -50 ? 'green' : 'red';
       const rsiColor  = s.rsi > 70 ? 'red' : s.rsi < 35 ? 'green' : '';
       const dot       = isOpen ? '<span style="color:#22c55e;font-size:0.55rem;margin-right:4px">●</span>' : '';
@@ -342,13 +379,14 @@ async function load() {{
         ? `<span class="${{s.pnl_pct>=0?'green':'red'}}">${{s.pnl_pct>=0?'+':''}}${{s.pnl_pct.toFixed(2)}}%</span>`
         : '<span class="muted">--</span>';
 
-      const priceStr = formatPrice(s.price, ccy);
+      const priceStr = isDisabled ? '<span class="muted">--</span>' : formatPrice(s.price, ccy);
       const posStr   = s.pos !== 0 ? `<span class="pos-badge">${{s.pos}}</span>` : '<span class="muted">0</span>';
-      const actColor = s.action&&s.action.includes('BOUGHT') ? 'green'
+      const actColor = isDisabled ? 'muted'
+                     : s.action&&s.action.includes('BOUGHT') ? 'green'
                      : s.action&&s.action.includes('CLOSED') ? 'red'
                      : s.action&&s.action.includes('BLOCKED') ? 'red' : 'muted';
 
-      return `<tr>
+      return `<tr style="${{rowStyle}}">
         <td>
           <div class="asset-name">${{dot}}${{s.flag}} ${{s.symbol}}</div>
           <div class="asset-sub">${{s.name}}</div>
@@ -364,7 +402,7 @@ async function load() {{
         <td class="${{wrColor}}">${{s.wr}}</td>
         <td class="${{rsiColor}}">${{s.rsi}}</td>
         <td><span class="badge ${{confClass}}">${{s.confidence}}</span></td>
-        <td><span class="badge ${{sigClass}}">${{s.signal}}</span></td>
+        <td><span class="badge ${{sigClass}}">${{isDisabled ? 'DISABLED' : s.signal}}</span></td>
         <td>${{posStr}}</td>
         <td>
           <span class="${{actColor}}">${{s.action}}</span>
@@ -378,6 +416,10 @@ async function load() {{
       rows.push('<tr class="divider-row"><td colspan="15" style="padding:0;border-bottom:2px solid #30363d"></td></tr>');
     }}
     rows = rows.concat(flatPos.map(s => renderRow(s, false)));
+    if (disabledPos.length > 0) {{
+      rows.push('<tr class="divider-row"><td colspan="15" style="padding:0;border-bottom:2px dashed #30363d"></td></tr>');
+      rows = rows.concat(disabledPos.map(s => renderRow(s, false)));
+    }}
     document.getElementById('layer1').innerHTML = rows.join('');
 
     document.getElementById('layer2').innerHTML = d.accum.map(e => {{

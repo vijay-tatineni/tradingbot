@@ -15,6 +15,7 @@ FIXED in v7.0:
 
 import sqlite3
 import datetime
+import json
 import os
 from pathlib import Path
 from bot.plugins.base_plugin import BasePlugin
@@ -29,10 +30,11 @@ class LearningLoop(BasePlugin):
 
     name = "LearningLoop"
 
-    def __init__(self, cfg, llm=None):
+    def __init__(self, cfg, llm=None, alerts=None):
         self.cfg = cfg
         self.db  = DB_FILE
         self.llm = llm
+        self.alerts = alerts
         self._review_enabled = getattr(cfg, '_raw', {}).get('settings', {}).get('llm_review_enabled', False)
         self._last_retrain_time = datetime.datetime.utcnow()
         self._init_db()
@@ -174,11 +176,76 @@ class LearningLoop(BasePlugin):
         log(f"[LearningLoop] Closed: {symbol}  P&L: ${pnl:.2f}  "
             f"Outcome: {outcome}  Hold: {hold_days}d  Reason: {exit_reason}")
 
+        # Check consecutive losses — auto-disable if threshold reached
+        if outcome == 'LOSS':
+            self._check_auto_disable(symbol)
+
         # LLM trade review
         if self._review_enabled and self.llm and self.llm.is_available():
             self._run_trade_review(trade_id, symbol, entry_price_db,
                                    exit_price, pnl, outcome, hold_days,
                                    exit_reason, trade_action, entry_ts)
+
+    # ── Consecutive loss auto-disable ────────────────────────
+
+    def _check_consecutive_losses(self, symbol: str) -> int:
+        """Count consecutive losses for a symbol (most recent first)."""
+        conn = self._connect()
+        rows = conn.execute("""
+            SELECT outcome FROM trades
+            WHERE symbol = ? AND outcome IS NOT NULL
+            ORDER BY id DESC LIMIT 5
+        """, (symbol,)).fetchall()
+        conn.close()
+
+        consecutive = 0
+        for row in rows:
+            if row[0] == "LOSS":
+                consecutive += 1
+            else:
+                break
+        return consecutive
+
+    def _check_auto_disable(self, symbol: str) -> None:
+        """After a loss, check if instrument should be auto-disabled."""
+        consecutive = self._check_consecutive_losses(symbol)
+        settings = getattr(self.cfg, '_raw', {}).get('settings', {})
+        max_consecutive = settings.get("max_consecutive_losses", 3)
+        if consecutive >= max_consecutive:
+            log(f"[LearningLoop] [{symbol}] {consecutive} consecutive losses "
+                f"— auto-disabling. Manual re-enable required.", "WARN")
+            self._disable_instrument(symbol)
+            self._send_alert(
+                f"[{symbol}] auto-disabled after {consecutive} consecutive losses"
+            )
+
+    def _disable_instrument(self, symbol: str) -> None:
+        """Set enabled=false in instruments.json for the given symbol."""
+        config_path = str(BASE_DIR / 'instruments.json')
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+
+            for inst in data.get('layer1_active', []):
+                if inst.get('symbol') == symbol:
+                    inst['enabled'] = False
+                    inst['disabled_reason'] = 'auto_disabled_consecutive_losses'
+                    break
+
+            # Atomic write
+            tmp_path = config_path + '.tmp'
+            with open(tmp_path, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, config_path)
+
+            log(f"[LearningLoop] Disabled {symbol} in instruments.json")
+        except Exception as e:
+            log(f"[LearningLoop] Failed to disable {symbol}: {e}", "ERROR")
+
+    def _send_alert(self, message: str) -> None:
+        """Send alert via Telegram if available."""
+        if self.alerts and hasattr(self.alerts, 'send'):
+            self.alerts.send(message)
 
     # ── Backup exit detection ─────────────────────────────────
 
