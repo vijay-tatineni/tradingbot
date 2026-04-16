@@ -84,6 +84,7 @@ class IGBroker(BaseBroker):
         self._connected = False
         self._alerts = None
         self._last_request: dict[str, float] = {}
+        self._consecutive_login_failures: int = 0
 
         # Position cache — avoids repeated API calls within same cycle
         self._position_cache: Optional[list[BrokerPosition]] = None
@@ -103,14 +104,23 @@ class IGBroker(BaseBroker):
             )
             self.ig.create_session()
             self._connected = True
+            self._consecutive_login_failures = 0
             logger.info(
                 "Connected to IG (%s) account %s",
                 self.acc_type, self.acc_number,
             )
         except Exception as e:
             self._connected = False
-            logger.error("IG connection failed: %s", e)
-            raise
+            self._consecutive_login_failures += 1
+            if self._consecutive_login_failures >= 3:
+                wait = 300
+            else:
+                wait = 60
+            logger.warning(
+                "IG login failed (%d consecutive): %s — waiting %ds before retry",
+                self._consecutive_login_failures, e, wait,
+            )
+            time.sleep(wait)
 
     def disconnect(self) -> None:
         if self.ig:

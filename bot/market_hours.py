@@ -70,7 +70,7 @@ class MarketHours:
 
     def is_open(self, inst: dict) -> bool:
         """Return True if this instrument's market is currently open."""
-        if inst['sec_type'] == 'CFD':
+        if inst.get('sec_type', 'STK') == 'CFD':
             return True
 
         now_utc = datetime.datetime.now(pytz.utc)
@@ -114,7 +114,7 @@ class MarketHours:
 
     def status(self, inst: dict) -> str:
         """Return human-readable market status string."""
-        if inst['sec_type'] == 'CFD':
+        if inst.get('sec_type', 'STK') == 'CFD':
             return '24/7'
         return 'OPEN' if self.is_open(inst) else 'CLOSED'
 

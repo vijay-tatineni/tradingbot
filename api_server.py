@@ -39,6 +39,15 @@ CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 BACKUP_DIR  = str(BASE_DIR / 'backups')
 USERS_FILE  = str(BASE_DIR / 'users.json')
 
+# Parse --config early so all route handlers see the correct file
+if __name__ == '__main__':
+    _parser = _argparse.ArgumentParser(description="CogniflowAI API Server")
+    _parser.add_argument("--config", default=None,
+                         help="Path to instruments JSON config (default: instruments.json)")
+    _cli_args = _parser.parse_args()
+    if _cli_args.config:
+        CONFIG_FILE = str(Path(_cli_args.config).resolve())
+
 # JWT secret — auto-generated on first run, persisted in .env
 JWT_SECRET = os.getenv('JWT_SECRET', '')
 if not JWT_SECRET:
@@ -1364,14 +1373,6 @@ def advisor_news():
 
 
 if __name__ == '__main__':
-    _parser = _argparse.ArgumentParser(description="CogniflowAI API Server")
-    _parser.add_argument("--config", default=None,
-                         help="Path to instruments JSON config (default: instruments.json)")
-    _cli_args = _parser.parse_args()
-
-    if _cli_args.config:
-        CONFIG_FILE = str(Path(_cli_args.config).resolve())
-
     # Check users exist
     users = load_users()
     if not users:
