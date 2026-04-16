@@ -6,26 +6,46 @@ Subtitle colour: blue (was green — avoids confusion with buy signals)
 Entry price: bright white
 """
 
-import json, os, datetime
+import json, os, datetime, sqlite3
+from pathlib import Path
 from bot.config import Config
 from bot.currency import convert_pnl_to_base, is_pence_instrument
 from bot.logger import log
 
-_PNL_CACHE_FILE = os.path.join(os.path.dirname(__file__), '..', 'web', 'pnl_cache.json')
+_PNL_DB = str(Path(__file__).parent.parent / 'positions.db')
 
-def _load_pnl_cache():
-    """Load cached P&L from disk (survives bot restart)."""
+def _pnl_connect(db_path=None):
+    conn = sqlite3.connect(db_path or _PNL_DB)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("""CREATE TABLE IF NOT EXISTS pnl_cache (
+        currency TEXT PRIMARY KEY,
+        pnl_value REAL NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+    return conn
+
+def _load_pnl_cache(db_path=None):
     try:
-        with open(_PNL_CACHE_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        conn = _pnl_connect(db_path)
+        rows = conn.execute("SELECT currency, pnl_value FROM pnl_cache").fetchall()
+        conn.close()
+        pnl_by_ccy = {r[0]: r[1] for r in rows}
+        return {"total_pnl": sum(pnl_by_ccy.values()), "pnl_by_currency": pnl_by_ccy}
+    except Exception:
         return {"total_pnl": 0, "pnl_by_currency": {}}
 
-def _save_pnl_cache(total_pnl, pnl_by_ccy):
-    """Save P&L to cache file."""
+def _save_pnl_cache(total_pnl, pnl_by_ccy, db_path=None):
     try:
-        with open(_PNL_CACHE_FILE, 'w') as f:
-            json.dump({"total_pnl": total_pnl, "pnl_by_currency": pnl_by_ccy}, f)
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        conn = _pnl_connect(db_path)
+        for ccy, val in pnl_by_ccy.items():
+            if val != 0:
+                conn.execute(
+                    "INSERT OR REPLACE INTO pnl_cache (currency, pnl_value, updated_at) VALUES (?, ?, ?)",
+                    (ccy, val, now))
+        conn.commit()
+        conn.close()
     except Exception:
         pass
 
@@ -37,7 +57,8 @@ class Dashboard:
         self.data_dir = cfg.web_dir
         os.makedirs(self.data_dir, exist_ok=True)
         self._write_html()
-        log(f"P&L cache file: {os.path.abspath(_PNL_CACHE_FILE)}")
+        _pnl_connect()
+        log(f"P&L cache: SQLite table in {_PNL_DB}")
         log(f"Dashboard ready: {self.data_dir}/dashboard.html")
 
     def update(self, cycle, signal_rows, accum_rows,
