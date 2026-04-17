@@ -28,6 +28,7 @@ import signal
 import sqlite3
 import datetime
 import argparse
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -95,8 +96,21 @@ class TradingBot:
         self._advisor_ran_this_week = False
         self._daily_summary_sent = False
 
+        # Heartbeat monitoring state
+        self._last_successful_cycle_ts = time.time()
+        self._last_successful_cycle_num = 0
+        self._heartbeat_alert_sent = False
+        self._error_count = 0
+
+        # Health summary state
+        self._last_health_summary_ts = time.time()
+
+        # Startup summary (sent once after first successful cycle)
+        self._startup_summary_sent = False
+
         # ── Register active plugins ───────────────────────────
         self.alerts = TelegramAlerts(self.cfg)
+        self.alerts.broker_label = self.broker_type.upper()
 
         self.register_plugin(LearningLoop(self.cfg, llm=self.llm_review, alerts=self.alerts))
         self.register_plugin(self.alerts)
@@ -167,14 +181,26 @@ class TradingBot:
                     self.broker.sleep(3600)
                 except (ConnectionError, OSError, Exception) as e:
                     log(f"Weekend sleep connection error: {e} — using fallback sleep", "WARN")
-                    import time as _time
-                    _time.sleep(3600)
+                    time.sleep(3600)
                 continue
 
             self.watchdog.set_sleep_mode(False)
             if not self.broker.is_connected():
                 log(f"Reconnecting to {self.broker_type.upper()} after weekend sleep...")
                 self.broker.reconnect()
+
+            # ── Heartbeat check ──────────────────────────
+            elapsed = time.time() - self._last_successful_cycle_ts
+            if elapsed >= 300 and not self._heartbeat_alert_sent:
+                last_t = datetime.datetime.fromtimestamp(
+                    self._last_successful_cycle_ts, tz=datetime.timezone.utc
+                ).strftime('%H:%M UTC')
+                self.alerts.send(
+                    f"\U0001f534 No heartbeat for 5 minutes. "
+                    f"Last cycle: #{self._last_successful_cycle_num} at {last_t}"
+                )
+                self._heartbeat_alert_sent = True
+
             cycle += 1
             separator(f"CYCLE #{cycle}  ·  "
                       f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -209,6 +235,10 @@ class TradingBot:
                     plugin.on_cycle_end(cycle, self.l1.signal_rows,
                                         self.l1.total_pnl)
 
+                # ── Startup summary (once, after first cycle) ─
+                if not self._startup_summary_sent:
+                    self._send_startup_summary(cycle)
+
                 # ── News collection (every N hours) ──────────
                 self._maybe_collect_news()
 
@@ -225,11 +255,27 @@ class TradingBot:
                 # ── Watchdog heartbeat ────────────────────────
                 self.watchdog.heartbeat(cycle)
 
+                # ── Heartbeat recovery ───────────────────────
+                if self._heartbeat_alert_sent:
+                    now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M UTC')
+                    self.alerts.send(
+                        f"\U0001f7e2 Bot recovered. "
+                        f"Cycle #{cycle} at {now_str}"
+                    )
+                    self._heartbeat_alert_sent = False
+                self._last_successful_cycle_ts = time.time()
+                self._last_successful_cycle_num = cycle
+
+                # ── Health summary (every 4 hours) ───────────
+                if time.time() - self._last_health_summary_ts >= 14400:
+                    self._send_health_summary(cycle)
+
                 log(f"Cycle #{cycle} complete. "
                     f"Next in {self.cfg.check_interval_mins} minutes.")
                 self.broker.sleep(self.cfg.check_interval)
 
             except Exception as e:
+                self._error_count += 1
                 log(f"Cycle error: {e}", "ERROR")
                 import traceback
                 log(traceback.format_exc(), "ERROR")
@@ -280,9 +326,62 @@ class TradingBot:
         except Exception as e:
             log(f"[DailySummary] Failed: {e}", "WARN")
 
+    def _send_startup_summary(self, cycle: int) -> None:
+        try:
+            rows = self.l1.signal_rows
+            open_pos = [r for r in rows if r.get('pos', 0) != 0]
+            symbols = ', '.join(r['symbol'] for r in open_pos)
+
+            pnl_by_ccy = {}
+            for r in open_pos:
+                ccy = r.get('currency', 'USD')
+                pnl_by_ccy[ccy] = pnl_by_ccy.get(ccy, 0.0) + r.get('unreal_pnl', 0.0)
+
+            ccy_symbols = {'USD': '$', 'EUR': '€', 'GBP': '£'}
+            pnl_parts = []
+            for ccy in ('USD', 'EUR', 'GBP'):
+                if ccy in pnl_by_ccy:
+                    sym = ccy_symbols.get(ccy, ccy + ' ')
+                    pnl_parts.append(f"{sym}{pnl_by_ccy[ccy]:+.2f}")
+            for ccy, val in sorted(pnl_by_ccy.items()):
+                if ccy not in ('USD', 'EUR', 'GBP'):
+                    pnl_parts.append(f"{ccy} {val:+.2f}")
+
+            lines = [
+                f"\U0001f7e2 <b>Bot started successfully</b>",
+                f"Cycle #{cycle} complete",
+                f"Active instruments: {len(self.cfg.active_instruments)}",
+            ]
+            if open_pos:
+                lines.append(f"Open positions: {len(open_pos)} ({symbols})")
+            else:
+                lines.append("Open positions: 0")
+            if pnl_parts:
+                lines.append(f"P&L: {' | '.join(pnl_parts)}")
+
+            self.alerts.send('\n'.join(lines))
+            self._startup_summary_sent = True
+            log("[Startup] Summary sent via Telegram")
+        except Exception as e:
+            log(f"[Startup] Summary failed: {e}", "WARN")
+            self._startup_summary_sent = True
+
+    def _send_health_summary(self, cycle: int) -> None:
+        try:
+            open_count = len(self.l1.tracker.open)
+            msg = (
+                f"\U0001f4ca Health Summary\n"
+                f"Cycles: {cycle} | Open: {open_count}\n"
+                f"P&L: ${self.l1.total_pnl:+.2f} | Errors: {self._error_count}"
+            )
+            self.alerts.send(msg)
+            self._last_health_summary_ts = time.time()
+            log(f"[Health] Summary sent")
+        except Exception as e:
+            log(f"[Health] Failed: {e}", "WARN")
+
     def _maybe_collect_news(self) -> None:
         """Collect news headlines every N hours."""
-        import time as _t
         settings = self.cfg._raw.get('settings', {})
         if not settings.get('llm_news_collection_enabled', False):
             return
@@ -290,7 +389,7 @@ class TradingBot:
             return
 
         interval = settings.get('llm_news_interval_hours', 4) * 3600
-        if _t.time() - self._last_news_collection < interval:
+        if time.time() - self._last_news_collection < interval:
             return
 
         try:
@@ -303,7 +402,7 @@ class TradingBot:
                 headlines = collect_news(inst)
                 scored = score_headlines(self.llm, inst['symbol'], headlines)
                 save_headlines(inst['symbol'], scored)
-            self._last_news_collection = _t.time()
+            self._last_news_collection = time.time()
             log(f"[News] Collection complete for "
                 f"{len(self.cfg.active_instruments)} instruments")
         except Exception as e:

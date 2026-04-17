@@ -29,7 +29,9 @@ class TelegramAlerts(BasePlugin):
         self.enabled  = bool(self.token and self.chat_id)
         self.trade_count       = 0
         self.daily_pnl         = 0.0
-        self._last_summary_date = None  # tracks last daily summary date to avoid dupes
+        self._last_summary_date = None
+        broker = cfg._raw.get('settings', {}).get('broker', 'ibkr')
+        self.broker_label = broker.upper()
 
     # ── Plugin lifecycle hooks ──────────────────────
 
@@ -38,7 +40,6 @@ class TelegramAlerts(BasePlugin):
             log("[Telegram] Not configured — set TELEGRAM_BOT_TOKEN "
                 "and TELEGRAM_CHAT_ID env vars")
             return
-        self.send("🟢 <b>Trading Bot started</b>")
         log("[Telegram] Alerts enabled")
 
     def post_trade(self, inst: dict, signal: int,
@@ -75,19 +76,22 @@ class TelegramAlerts(BasePlugin):
 
     def on_shutdown(self) -> None:
         if self.enabled:
-            self.send(f"🔴 <b>Trading Bot stopped</b>\n"
-                      f"P&L: ${self.daily_pnl:+.2f}")
+            if self.daily_pnl != 0.0:
+                self.send(f"🔴 <b>Trading Bot stopped</b>\n"
+                          f"P&L: ${self.daily_pnl:+.2f}")
+            else:
+                self.send("🔴 <b>Trading Bot stopped</b>")
 
     # ── Public send methods ─────────────────────────
 
     def send(self, message: str) -> bool:
-        """Send a message via Telegram Bot API. Returns True on success."""
         if not self.enabled:
             return False
+        prefixed = f"<b>[{self.broker_label}]</b> {message}"
         url     = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = json.dumps({
             'chat_id':    self.chat_id,
-            'text':       message,
+            'text':       prefixed,
             'parse_mode': 'HTML',
         }).encode()
         req = urllib.request.Request(

@@ -140,7 +140,7 @@ td { padding:8px; border-bottom:1px solid var(--border); }
 </div>
 
 <script>
-const API = window.location.origin.replace(':8082', ':8081');
+const API = window.location.origin;
 const token = localStorage.getItem('jwt_token');
 const user = localStorage.getItem('username');
 if (!token) { window.location.href = 'login.html'; }
