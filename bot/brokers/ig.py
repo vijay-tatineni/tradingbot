@@ -58,26 +58,28 @@ class IGBroker(BaseBroker):
         self.cfg = cfg
         self._settings = cfg._settings if hasattr(cfg, "_settings") else {}
 
-        # Credentials: settings block → env vars → empty string
+        # Credentials: if key is present in settings, use that value
+        # (even if empty string). Only fall back to env vars when key
+        # is absent from settings entirely.
         self.username = (
-            self._settings.get("ig_username")
-            or os.environ.get("IG_USERNAME", "")
+            self._settings["ig_username"] if "ig_username" in self._settings
+            else os.environ.get("IG_USERNAME", "")
         )
         self.password = (
-            self._settings.get("ig_password")
-            or os.environ.get("IG_PASSWORD", "")
+            self._settings["ig_password"] if "ig_password" in self._settings
+            else os.environ.get("IG_PASSWORD", "")
         )
         self.api_key = (
-            self._settings.get("ig_api_key")
-            or os.environ.get("IG_API_KEY", "")
+            self._settings["ig_api_key"] if "ig_api_key" in self._settings
+            else os.environ.get("IG_API_KEY", "")
         )
         self.acc_type = (
-            self._settings.get("ig_acc_type")
-            or os.environ.get("IG_ACC_TYPE", "DEMO")
+            self._settings["ig_acc_type"] if "ig_acc_type" in self._settings
+            else os.environ.get("IG_ACC_TYPE", "DEMO")
         )
         self.acc_number = (
-            self._settings.get("ig_acc_number")
-            or os.environ.get("IG_ACC_NUMBER", "")
+            self._settings["ig_acc_number"] if "ig_acc_number" in self._settings
+            else os.environ.get("IG_ACC_NUMBER", "")
         )
 
         self.ig: Optional[IGService] = None
