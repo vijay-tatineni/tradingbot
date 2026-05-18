@@ -1,0 +1,11 @@
+{
+  "description": "Fallback: confidence=0.0 retains state completely",
+  "initial_regime": "TRENDING",
+  "initial_days": 5,
+  "classifications": [
+    {"raw_regime": "RANGING", "confidence": 0.0}
+  ],
+  "expected_states": [
+    {"effective_regime": "TRENDING", "days_in_regime": 5, "pending_regime": null}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "description": "Pending promotion: TRENDING for 5 days, then 2 days of RANGING promotes",
+  "initial_regime": "TRENDING",
+  "initial_days": 5,
+  "classifications": [
+    {"raw_regime": "RANGING", "confidence": 0.80},
+    {"raw_regime": "RANGING", "confidence": 0.82}
+  ],
+  "expected_states": [
+    {"effective_regime": "TRENDING", "days_in_regime": 5, "pending_regime": "RANGING", "pending_days": 1},
+    {"effective_regime": "RANGING", "days_in_regime": 1, "pending_regime": null, "pending_days": 0}
+  ]
+}

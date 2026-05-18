@@ -1,0 +1,27 @@
+{
+  "input": {
+    "instrument": "SGLN.L",
+    "trading_date": "2026-01-15",
+    "features": {
+      "adx_14": 15.0,
+      "atr_14": 2.1,
+      "atr_pct": 1.1,
+      "ma_200_slope_pct_per_day": 0.01,
+      "range_efficiency": 0.15,
+      "realized_volatility_20d": 10.2,
+      "close_above_ma200": true,
+      "distance_to_ma200_pct": 0.8
+    }
+  },
+  "tool_response": {
+    "regime": "RANGING",
+    "confidence": 0.85,
+    "rationale": "Low ADX at 15, low range efficiency, price near MA200",
+    "key_features": ["adx_14", "range_efficiency", "distance_to_ma200_pct"]
+  },
+  "expected": {
+    "raw_regime": "RANGING",
+    "confidence": 0.85,
+    "cache_hit": false
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Hysteresis: TRENDING→RANGING blocked at 0.72 confidence (needs 0.75)",
+  "initial_regime": "TRENDING",
+  "initial_days": 5,
+  "classifications": [
+    {"raw_regime": "RANGING", "confidence": 0.72}
+  ],
+  "expected_states": [
+    {"effective_regime": "TRENDING", "days_in_regime": 5, "pending_regime": null}
+  ]
+}

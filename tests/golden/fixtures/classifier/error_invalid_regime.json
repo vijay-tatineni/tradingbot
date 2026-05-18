@@ -1,0 +1,27 @@
+{
+  "input": {
+    "instrument": "BARC.L",
+    "trading_date": "2026-01-15",
+    "features": {
+      "adx_14": 30.0,
+      "atr_14": 5.0,
+      "atr_pct": 2.5,
+      "ma_200_slope_pct_per_day": 0.05,
+      "range_efficiency": 0.45,
+      "realized_volatility_20d": 15.0,
+      "close_above_ma200": true,
+      "distance_to_ma200_pct": 3.5
+    }
+  },
+  "tool_response": {
+    "regime": "BULLISH",
+    "confidence": 0.9,
+    "rationale": "Invalid regime value",
+    "key_features": []
+  },
+  "expected": {
+    "raw_regime": "UNCLEAR",
+    "confidence": 0.0,
+    "cache_hit": false
+  }
+}
