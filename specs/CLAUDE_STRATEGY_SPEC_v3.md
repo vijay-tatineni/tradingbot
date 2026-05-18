@@ -1095,7 +1095,7 @@ No auto-recovery anywhere.
 ## 14. Integration into Main Loop (v2 decoupled gates)
 
 ```python
-# Daily pre-market
+# Daily post-close (§9.2: classifier runs after market close)
 for instrument in instruments:
     if flags.enable_classifier_shadow:
         classification = classifier.classify(instrument)
