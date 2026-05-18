@@ -60,6 +60,24 @@ The spec references `claude-sonnet-4-20250514` which is deprecated
 documentation checked 2026-05-18. Pricing confirmed: $3/MTok input,
 $15/MTok output.
 
+## Earnings overlay deferred
+
+**Status:** Deferred — revisit after 60 days of shadow data
+**Spec:** §10.2, §3.1
+
+The earnings overlay (originally specified in §10.2 of v3) is not being
+built in this work. No evidence yet that earnings gaps have hurt the bot's
+actual trading; building protection against an unconfirmed problem carries
+ongoing maintenance cost for no measured benefit.
+
+**Revisit criteria:** After 60 days of shadow data collected post-merge,
+query `shadow_decisions` for entries on individual stocks (non-ETF
+instruments) within 1-2 trading days of known earnings dates. If 3+ such
+entries are recorded in the 60-day window, build the earnings overlay as a
+follow-up PR. Use manual calendar entry pattern (like macro), no external
+data source needed for the scale of ~15 instruments × ~4 earnings/year.
+If shadow data shows zero such entries, no further action needed.
+
 ## Pre-existing test-ordering issue: test_ig_broker.py
 
 **Status:** Pre-existing, not caused by claude-strategy

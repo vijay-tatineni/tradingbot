@@ -141,6 +141,8 @@ Add `docs/TECH_DEBT.md` (new file) listing known compromises this PR is taking o
 
 Claude Code should add any further compromises it makes during implementation to this file, with rationale.
 
+- **Earnings overlay deferred** — The earnings overlay (originally specified in §10.2 of v3) is not being built in this work. We don't yet have evidence that earnings gaps have hurt the bot's actual trading; building protection against an unconfirmed problem carries ongoing maintenance cost for no measured benefit. Revisit criteria: after 60 days of shadow data collected post-merge, query `shadow_decisions` for entries on individual stocks (non-ETF instruments) within 1-2 trading days of known earnings dates. If 3+ such entries are recorded in the 60-day window, build the earnings overlay as a follow-up PR. Use manual calendar entry pattern (like macro), no external data source needed for the scale of ~15 instruments × ~4 earnings/year. If shadow data shows zero such entries, the overlay is solving a problem the strategy doesn't have, and no further action is needed.
+
 ---
 
 ## 4. Directory Layout
@@ -516,18 +518,9 @@ class MacroEvent:
     severity: Literal["high", "medium", "low"]
     notes: str
 
-@dataclass(frozen=True)
-class EarningsEvent:
-    id: int
-    instrument: str
-    date: str
-    time_utc: str | None             # null if unknown
-    source: Literal["finnhub", "manual_override", "manual_addition"]
-    finnhub_original_date: str | None  # set when source=="manual_override"
-    notes: str
 ```
 
-The `source` field is critical: it tells the overlay code whether this row is from Finnhub (which gets refreshed regularly), a manual override (which wins over Finnhub for that ticker+date), or a manual addition (which Finnhub doesn't know about).
+**EarningsEvent dataclass: DEFERRED.** See §3.1 tech debt log for revisit criteria.
 
 ---
 
@@ -763,11 +756,7 @@ class OverlayCheck:
 
 ### 10.2 Overlays
 
-**`earnings_lockout.py`** (uses Finnhub + manual overrides/additions from calendar DB)
-- Resolution order: manual_override > finnhub > manual_addition
-- Active: from close of bar-day −1 through end of bar-day +1 relative to earnings date
-- `data_quality_strict_mode`: −2 through +2
-- Earnings dates refreshed from Finnhub daily; manual entries persist independently
+**`earnings_lockout.py`** — **DEFERRED.** See §3.1 tech debt log for revisit criteria.
 
 **`macro_lockout.py`** (uses manual macro calendar from DB, edited via §15.4 UI)
 - Active: from 2 hours before event through close of event day
@@ -787,14 +776,14 @@ class OverlayCheck:
 ### 10.3 Precedence
 1. `DATA_QUALITY` → short-circuit, NoOpEngine, no trading
 2. `LOW_LIQUIDITY` → classify, but `allow_new_entries=False`
-3. `EARNINGS_LOCKOUT`, `MACRO_LOCKOUT` → classify, `allow_new_entries=False`, exits continue
+3. `MACRO_LOCKOUT` → classify, `allow_new_entries=False`, exits continue
 4. None active → route per §9.8
 
 ### 10.4 Registry
 ```python
 def active_overlays(instrument, now, ctx) -> list[OverlayCheck]:
     results = []
-    for overlay in [DataQuality, EarningsLockout, MacroLockout, LowLiquidity]:
+    for overlay in [DataQuality, MacroLockout, LowLiquidity]:
         check = overlay.check(instrument, now, ctx)
         if check.is_active:
             results.append(check)
@@ -809,7 +798,6 @@ Entries gated by overlays. Exits NEVER blocked by overlays. Test: `tests/invaria
 def instruments_affected_by_overlay(overlay_name: str) -> list[str]:
     """Instruments whose entries depend on this overlay being functional."""
 ```
-- `EARNINGS_LOCKOUT`: individual stocks (ETFs opt out via config)
 - `MACRO_LOCKOUT`: all instruments
 - `LOW_LIQUIDITY`: all instruments (per-instrument profile)
 - `DATA_QUALITY`: all instruments
@@ -1035,6 +1023,8 @@ def compute_exit(rows, state) -> ExitDecision:
 | DB logging | Retry once, in-memory queue | Pause new trades, existing positions continue |
 | Calendar UI write | Return 500 to client | No trading impact (UI is informational); critical alert about DB write failures |
 
+**Rationale for asymmetric overlay behaviour (v2):** Classifier, router, and mean-reversion hard-failures disable their own flag, which reverts the system to a *safer* legacy path — no new capability means no new risk. Overlays are different: disabling an overlay flag *removes* a safety check, making the system *less* safe. Therefore overlay hard-failures pause instruments instead of disabling flags. Recovery requires explicit human action (`bot recover-overlay`) to verify the overlay is functional before re-enabling entries. This asymmetry is tested by `tests/invariants/test_overlay_hard_failure_semantics.py`.
+
 ### 13.4 Instrument pause registry
 ```python
 class InstrumentPauseRegistry:
@@ -1222,21 +1212,7 @@ CREATE TABLE IF NOT EXISTS macro_calendar (
 
 CREATE INDEX idx_macro_calendar_date ON macro_calendar(date);
 
-CREATE TABLE IF NOT EXISTS earnings_calendar (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  instrument TEXT NOT NULL,
-  date TEXT NOT NULL,
-  time_utc TEXT,                       -- nullable
-  source TEXT NOT NULL,                -- 'finnhub' | 'manual_override' | 'manual_addition'
-  finnhub_original_date TEXT,          -- set when source='manual_override'
-  notes TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (instrument, date, source)
-);
-
-CREATE INDEX idx_earnings_calendar_instrument_date
-  ON earnings_calendar(instrument, date);
+-- earnings_calendar table: DEFERRED. See §3.1 tech debt log.
 
 CREATE TABLE IF NOT EXISTS calendar_edit_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1258,20 +1234,7 @@ Audit row is written in the **same transaction** as the calendar change. If the 
 
 #### 15.4.3 Earnings resolution semantics
 
-When the overlay queries earnings for instrument `X` on date `D`:
-
-1. Look for `(instrument=X, date=D, source='manual_override')` — if exists, this is the canonical date for this earnings event. Use it.
-2. Look for `(instrument=X, date=D, source='manual_addition')` — if exists, use it.
-3. Look for `(instrument=X, date=D, source='finnhub')` — if exists, use it.
-
-Manual overrides win over Finnhub. Manual additions cover tickers Finnhub doesn't have. Finnhub is the bulk source for everything else.
-
-When Finnhub refreshes (daily background job), it:
-- Inserts new `(instrument, date, source='finnhub')` rows it didn't have before
-- Updates existing `finnhub` rows if Finnhub now reports a different date (rare but happens)
-- Does NOT touch `manual_override` or `manual_addition` rows
-
-Manual overrides become stale if Finnhub's reported date changes. Surface this in the UI: when displaying an earnings row, if `source='manual_override'` and the latest Finnhub row for that instrument has a different date, show a "Finnhub now reports X" indicator. The operator can either delete the override (let Finnhub take over) or update the override (acknowledging the new Finnhub date).
+**DEFERRED.** See §3.1 tech debt log for revisit criteria.
 
 #### 15.4.4 HTTP API
 
@@ -1288,15 +1251,7 @@ POST   /api/calendar/macro/import          → bulk import from CSV (multipart/f
 DELETE /api/calendar/macro/bulk            → bulk delete (requires X-Confirm-Count header matching count)
 ```
 
-**Earnings endpoints:**
-```
-GET    /api/calendar/earnings              → list (queryable by instrument, date range)
-GET    /api/calendar/earnings/<id>         → single event
-POST   /api/calendar/earnings              → create manual_addition or manual_override
-PUT    /api/calendar/earnings/<id>         → update (only manual_* rows; finnhub rows are read-only via UI)
-DELETE /api/calendar/earnings/<id>         → delete (only manual_* rows; requires X-Confirm-Event header)
-POST   /api/calendar/earnings/import       → bulk import CSV (creates manual_addition rows)
-```
+**Earnings endpoints:** DEFERRED. See §3.1 tech debt log.
 
 **Audit endpoint:**
 ```
@@ -1314,13 +1269,7 @@ Macro event:
 - `notes` max 500 chars
 - Uniqueness on `(date, time_utc, event, region)` — duplicate returns 409 Conflict
 
-Earnings event:
-- `instrument` non-empty, matches a known instrument from `instruments.json` or `instruments_ig.json` (warn if not found but allow — instrument lists change)
-- `date` matches `YYYY-MM-DD`, parses as valid date
-- `time_utc` nullable, if present matches `HH:MM`
-- `source` in `{"manual_override", "manual_addition"}` for POST/PUT (UI cannot create `finnhub` rows)
-- For `source='manual_override'`: `finnhub_original_date` must be supplied and match the current Finnhub row's date for that instrument
-- `notes` max 500 chars
+Earnings event validation: DEFERRED. See §3.1 tech debt log.
 
 Validation errors return 400 with body:
 ```json
@@ -1337,8 +1286,6 @@ The UI implements destructive-action confirmation client-side. Server-side enfor
 
 - `DELETE /api/calendar/macro/<id>` requires header `X-Confirm-Event: <event_name>` matching the event being deleted. Missing or mismatched → 400.
 - `DELETE /api/calendar/macro/bulk` requires header `X-Confirm-Count: <N>` matching the count to be deleted. Missing or mismatched → 400.
-- `DELETE /api/calendar/earnings/<id>` requires header `X-Confirm-Event: <instrument>:<date>` matching the row. Missing or mismatched → 400.
-
 PUT (update) does NOT require confirmation header. Edits are recoverable from audit; deletes are harder to notice retroactively.
 
 POST (create) does NOT require confirmation. Adding a wrong entry is recoverable.
@@ -1350,12 +1297,6 @@ Macro CSV:
 date,time_utc,event,region,severity,notes
 2026-06-18,18:00,FOMC_RATE_DECISION,US,high,Powell press conference
 2026-06-20,11:00,BOE_RATE_DECISION,UK,high,
-```
-
-Earnings CSV (always imports as `source='manual_addition'`):
-```
-instrument,date,time_utc,notes
-BARC.L,2026-07-30,06:00,Q2 earnings
 ```
 
 Import behaviour:
@@ -1377,10 +1318,10 @@ Import behaviour:
 
 Static HTML/CSS/JS in `bot/calendar_ui/static/`. Simple table layout per the user's preference. No SPA framework; vanilla JS or htmx to keep dependencies low.
 
-Top of page: tabs for "Macro Calendar" / "Earnings Calendar" / "Audit Log".
+Top of page: tabs for "Macro Calendar" / "Audit Log".
 
 Each tab:
-- Filter controls (date range, region/instrument)
+- Filter controls (date range, region)
 - Table of events with inline Edit / Delete buttons
 - "Add Event" button → modal form
 - "Import CSV" button → file upload
@@ -1388,21 +1329,11 @@ Each tab:
 
 Delete confirmation: modal asks user to type the event name (or count, for bulk). Submit disabled until match.
 
-Earnings tab additionally shows `source` column and "stale override" indicator per §15.4.3.
-
 Audit tab: paginated table, filterable by calendar type / action / date range. Each row shows before/after JSON in expandable panels for forensic review.
 
 #### 15.4.9 Background tasks
 
-A nightly job (cron or systemd timer) refreshes Finnhub earnings data:
-```
-30 22 * * *  python -m bot.overlays.earnings_finnhub_sync
-```
-- Pulls earnings dates for all instruments in `instruments.json` ∪ `instruments_ig.json` from Finnhub
-- Inserts new rows
-- Updates existing `finnhub` rows when Finnhub reports a different date
-- Logs to `logs/calendar_edits/` and writes audit row with `action='finnhub_sync'`
-- Telegram alert on hard-failure (3 consecutive failures)
+**Nightly Finnhub earnings sync: DEFERRED.** See §3.1 tech debt log for revisit criteria.
 
 ---
 
@@ -1590,7 +1521,7 @@ For v3, build the scaffolding (script, schema for divergence reports, CLI entry 
 - [ ] Dataclasses with v2 fields (`cache_hit`, `fill_id`)
 - [ ] StrategyEngine ABC + TripleConfirmationEngine wrapper + MeanReversionEngine skeleton + NoOpEngine + registry
 - [ ] Regime layer (features, classifier matching `sentiment.py` tool-use pattern, prompt V1, schema, cache with `cache_hit`, cost tracker, smoothing, router with §9.8 unambiguous table)
-- [ ] Overlays (earnings with Finnhub + override semantics, macro from DB, low_liquidity computed, data_quality), precedence, registry, instrument dependency map
+- [ ] Overlays (macro from DB, low_liquidity computed, data_quality — earnings deferred, see §3.1), precedence, registry, instrument dependency map
 - [ ] Shadow simulator + counterfactual logger + hypothetical trades table
 - [ ] Position metadata with composite `(position_id, fill_id)` PK + partial fill support + exit policy
 - [ ] Degradation framework with v2 overlay-pause semantics
@@ -1604,9 +1535,7 @@ For v3, build the scaffolding (script, schema for divergence reports, CLI entry 
 - [ ] `bot/overlays/macro_calendar_monitor.py` with weekly/monthly/startup checks (§10.7)
 - [ ] Systemd timers or cron entries for weekly and monthly macro alerts
 - [ ] Calendar UI module `bot/calendar_ui/` with routes, store, audit, validators, static assets (§15.4)
-- [ ] SQLite schemas for `macro_calendar`, `earnings_calendar`, `calendar_edit_audit`
-- [ ] Finnhub earnings sync nightly job
-- [ ] Earnings override resolution semantics (manual_override > finnhub, with stale-override detection)
+- [ ] SQLite schemas for `macro_calendar`, `calendar_edit_audit` (earnings_calendar deferred, see §3.1)
 - [ ] Confirmation header enforcement on DELETE endpoints
 - [ ] CSV import endpoints with per-row validation and transaction rollback
 - [ ] Audit log UI tab with before/after JSON viewer
@@ -1652,7 +1581,7 @@ All previously open questions answered as of v3:
 1. ✅ `bot/llm/sentiment.py` uses tool-use for structured JSON. New classifier matches.
 2. ✅ Main loop in `bot/layer1.py`. Orchestrator extraction logged in `docs/TECH_DEBT.md`.
 3. ✅ Confidence thresholds 0.85 / 0.70 / 0.75 confirmed as defaults.
-4. ✅ Earnings calendar: Finnhub (already in use for news) with manual override/addition semantics per §15.4.3.
+4. ⏸️ Earnings calendar: **deferred** — not building earnings overlay in this work. No evidence yet that earnings gaps have hurt actual trading. Revisit after 60 days of shadow data (see §3.1).
 5. ✅ Macro calendar: manually maintained in SQLite, edited via §15.4 UI, freshness monitored per §10.7.
 6. ✅ Low-liquidity: bot computes 20-day median per instrument per time-of-day bucket.
 7. ✅ `max_daily_cost_usd = 5.0` confirmed.
@@ -1661,5 +1590,5 @@ All previously open questions answered as of v3:
 10. ✅ Telegram channel: reuse `CogniflowAI_Trading_Alerts_Bot` for all alert types including calendar maintenance.
 11. ✅ Broker fill IDs: use IBKR/IG execution IDs when supplied, fall back to `position_id-seq` for either broker as needed.
 12. ✅ Overlay recovery: CLI command `bot recover-overlay <name>` confirmed.
-13. ✅ Earnings UI editability: both overrides and additions, with stale-override detection.
+13. ⏸️ Earnings UI editability: **deferred** — earnings overlay not being built in this work (see §3.1).
 14. ✅ Calendar storage: Claude Code's choice between SQLite-only or SQLite+JSON-cache, defaulting to SQLite-only unless profiling shows otherwise.

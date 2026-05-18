@@ -1,0 +1,52 @@
+[
+  {
+    "name": "clean_no_overlays",
+    "instrument": "AAPL",
+    "ctx": {},
+    "expected_active": []
+  },
+  {
+    "name": "stale_bar_triggers_data_quality",
+    "instrument": "AAPL",
+    "ctx": {
+      "last_bar_time_offset_minutes": -45
+    },
+    "expected_active": ["DATA_QUALITY"]
+  },
+  {
+    "name": "low_volume",
+    "instrument": "AAPL",
+    "ctx": {
+      "median_volume_for_bucket": 1000,
+      "current_cumulative_volume": 300
+    },
+    "expected_active": ["LOW_LIQUIDITY"]
+  },
+  {
+    "name": "macro_event_active",
+    "instrument": "AAPL",
+    "ctx": {
+      "macro_event_offset_hours": 1
+    },
+    "expected_active": ["MACRO_LOCKOUT"]
+  },
+  {
+    "name": "multiple_overlays",
+    "instrument": "AAPL",
+    "ctx": {
+      "last_bar_time_offset_minutes": -45,
+      "median_volume_for_bucket": 1000,
+      "current_cumulative_volume": 300
+    },
+    "expected_active": ["DATA_QUALITY", "LOW_LIQUIDITY"]
+  },
+  {
+    "name": "strict_mode_data_quality",
+    "instrument": "AAPL",
+    "ctx": {
+      "last_bar_time_offset_minutes": -20,
+      "data_quality_strict_mode": true
+    },
+    "expected_active": ["DATA_QUALITY"]
+  }
+]
