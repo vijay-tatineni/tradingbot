@@ -81,10 +81,6 @@ def route(smoothed: SmoothedRegimeState,
         allow = False
         reason = f"Unknown regime: {regime}"
 
-    # Invariant: NoOpEngine never allows new entries
-    assert not (engine == "NoOpEngine" and allow), \
-        "Routing invariant violated: NoOpEngine must never allow new entries"
-
     earliest_expiry = None
     if has_overlays:
         expiries = []
@@ -95,7 +91,7 @@ def route(smoothed: SmoothedRegimeState,
         if expiries:
             earliest_expiry = min(expiries)
 
-    return RoutingDecision(
+    decision = RoutingDecision(
         instrument=smoothed.instrument,
         decided_at=datetime.now(timezone.utc),
         effective_regime=regime,
@@ -106,3 +102,9 @@ def route(smoothed: SmoothedRegimeState,
         block_reason=reason,
         flag_snapshot=flags,
     )
+
+    # §9.8 invariant: defensive assert on the constructed object
+    assert not (decision.selected_engine == "NoOpEngine" and decision.allow_new_entries), \
+        "NoOp invariant violated"
+
+    return decision
