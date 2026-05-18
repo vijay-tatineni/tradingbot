@@ -17,16 +17,19 @@ from bot.regime.models import PositionMetadata
 
 
 SHADOW_TABLES = {"shadow_decisions", "shadow_hypothetical_trades"}
-LIVE_TABLES = {"position_metadata"}
+LIVE_TABLES = {
+    "position_metadata",
+    "regime_classification_cache",
+    "instrument_entry_pauses",
+    "degradation_events",
+    "macro_events",
+}
 
 
 def _count_rows(db_path: str, table: str) -> int:
     conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
-        count = cursor.fetchone()[0]
-    except sqlite3.OperationalError:
-        count = 0
+    cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
+    count = cursor.fetchone()[0]
     conn.close()
     return count
 
@@ -51,6 +54,29 @@ def _ensure_all_tables(db_path: str) -> None:
         exit_price REAL, exit_reason TEXT, pnl REAL, pnl_pct REAL, status TEXT
     )""")
     conn.execute(PM_CREATE)
+    conn.execute("""CREATE TABLE IF NOT EXISTS regime_classification_cache (
+        instrument TEXT NOT NULL, trading_date TEXT NOT NULL,
+        input_hash TEXT NOT NULL, classification_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (instrument, trading_date, input_hash)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS instrument_entry_pauses (
+        instrument TEXT PRIMARY KEY, paused_at TEXT NOT NULL,
+        paused_by_overlay TEXT NOT NULL, reason TEXT NOT NULL,
+        cleared_at TEXT, cleared_by TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS degradation_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+        component TEXT NOT NULL, severity TEXT NOT NULL,
+        trigger_reason TEXT NOT NULL, action_taken TEXT NOT NULL,
+        flag_disabled TEXT, instruments_paused TEXT, recovery_instructions TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS macro_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, event_date TEXT NOT NULL,
+        event_time TEXT, name TEXT NOT NULL, source TEXT NOT NULL,
+        impact TEXT DEFAULT 'medium', created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
     conn.commit()
     conn.close()
 
@@ -70,8 +96,9 @@ def test_counterfactual_logger_writes_only_shadow_tables(tmp_path):
 
     assert _count_rows(db_path, "shadow_decisions") >= 1, \
         "Shadow logger should have written to shadow_decisions"
-    assert _count_rows(db_path, "position_metadata") == 0, \
-        "Shadow logger must NOT write to position_metadata (live table)"
+    for table in LIVE_TABLES:
+        assert _count_rows(db_path, table) == 0, \
+            f"Shadow logger must NOT write to {table} (live table)"
 
 
 def test_counterfactual_logger_hypothetical_writes_only_shadow(tmp_path):
@@ -87,8 +114,9 @@ def test_counterfactual_logger_hypothetical_writes_only_shadow(tmp_path):
     )
 
     assert _count_rows(db_path, "shadow_hypothetical_trades") >= 1
-    assert _count_rows(db_path, "position_metadata") == 0, \
-        "Shadow hypothetical must NOT write to live tables"
+    for table in LIVE_TABLES:
+        assert _count_rows(db_path, table) == 0, \
+            f"Shadow hypothetical must NOT write to {table} (live table)"
 
 
 def test_position_metadata_store_writes_only_live_tables(tmp_path):
@@ -173,6 +201,10 @@ def test_cross_contamination_end_to_end(tmp_path):
     assert shadow_decision_count == 1, "Expected 1 shadow decision"
     assert shadow_trade_count == 1, "Expected 1 shadow hypothetical"
     assert live_count == 1, "Expected 1 live position metadata"
+
+    for table in LIVE_TABLES - {"position_metadata"}:
+        assert _count_rows(db_path, table) == 0, \
+            f"Shadow code must NOT write to {table}"
 
 
 def test_assertion_catches_simulated_contamination(tmp_path):
