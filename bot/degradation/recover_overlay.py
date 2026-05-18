@@ -2,7 +2,7 @@
 Recovery CLI for overlay hard-failures — §13.6 of CLAUDE_STRATEGY_SPEC_v3.
 
 Usage:
-  python -m bot.degradation.recover_overlay EARNINGS_LOCKOUT
+  python -m bot.degradation.recover_overlay MACRO_LOCKOUT
   python -m bot.degradation.recover_overlay --list
 
 Runs overlay self-test, clears pauses on success, logs cleared_by.
@@ -79,7 +79,7 @@ if __name__ == "__main__":
         prog="bot recover-overlay",
     )
     parser.add_argument("overlay_name", nargs="?",
-                        help="Name of overlay to recover (e.g. EARNINGS_LOCKOUT)")
+                        help="Name of overlay to recover (e.g. MACRO_LOCKOUT)")
     parser.add_argument("--list", action="store_true",
                         help="List all currently paused instruments")
     parser.add_argument("--db", default=DEFAULT_DB_PATH,
