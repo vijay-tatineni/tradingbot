@@ -41,6 +41,14 @@ from bot.layer2        import Accumulation
 from bot.layer3_silver import SilverScalper
 from bot.dashboard     import Dashboard
 from bot.logger        import log, banner, separator
+from bot.regime.flags  import FeatureFlags
+from bot.regime.orchestrator import RegimeOrchestrator
+from bot.regime.log_setup    import setup_regime_logging
+from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
+from bot.overlays.registry import active_overlays as overlay_active_overlays
+from bot.regime.router     import route as regime_route
+from bot.shadow.counterfactual_logger import CounterfactualLogger
+from bot.shadow.position_metadata_store import PositionMetadataStore
 
 BASE_DIR = Path(__file__).parent
 
@@ -120,6 +128,29 @@ class TradingBot:
         # ── Uncomment to activate future plugins ──────────────
         # self.register_plugin(MacroFilter(self.cfg))
         # self.register_plugin(MLOverride(self.cfg))
+
+        # ── Regime orchestrator (§14) ─────────────────────────
+        flag_config = self.cfg._raw.get('settings', {}).get('feature_flags', {})
+        self.flags = FeatureFlags(flag_config)
+
+        regime_db = str(BASE_DIR / 'regime.db')
+        self.pause_registry = InstrumentPauseRegistry(regime_db)
+        self.cf_logger = CounterfactualLogger(regime_db)
+        self.pm_store = PositionMetadataStore(regime_db)
+
+        self.orchestrator = RegimeOrchestrator(
+            flags=self.flags,
+            pause_registry=self.pause_registry,
+            overlay_registry_fn=overlay_active_overlays,
+            router_fn=regime_route,
+            counterfactual_logger=self.cf_logger,
+            position_metadata_store=self.pm_store,
+            telegram_alerts=self.alerts,
+            config_path=config_path,
+        )
+        self.register_plugin(self.orchestrator)
+
+        setup_regime_logging(str(BASE_DIR))
 
         # ── Wire alerts to broker for order failure notifications ─
         self.broker.set_alerts(self.alerts)

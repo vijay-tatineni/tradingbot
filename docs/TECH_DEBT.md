@@ -78,6 +78,28 @@ follow-up PR. Use manual calendar entry pattern (like macro), no external
 data source needed for the scale of ~15 instruments × ~4 earnings/year.
 If shadow data shows zero such entries, no further action needed.
 
+## /root/trading-ig/ is a stale full copy
+
+**Status:** Noted (PR4)
+
+`/root/trading-ig/` is a full copy of the codebase from April 16-17, used
+by the IG broker systemd service (`ExecStart=/usr/bin/python3 /root/trading-ig/main.py --broker ig`).
+It has an identical `main.py` but is missing all regime modules (degradation,
+overlays, regime, shadow, strategies). It needs to be either:
+- Converted to use `/root/trading/` as the single source (symlink or shared install), or
+- Manually synced after each release.
+
+The regime orchestrator wiring in `/root/trading/main.py` does NOT
+automatically apply to `/root/trading-ig/`. The IG instance will continue
+running without regime integration until this is addressed.
+
+## /root/trading/trading_v6/ is dead code
+
+**Status:** Noted (PR4)
+
+`trading_v6/` contains an old v6 version of the bot. It's not referenced
+by any systemd service or startup script. Safe to delete in a cleanup PR.
+
 ## Pre-existing test-ordering issue: test_ig_broker.py
 
 **Status:** Pre-existing, not caused by claude-strategy
