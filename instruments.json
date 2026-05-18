@@ -109,7 +109,7 @@
       "long_only": true,
       "loss_limit": 150,
       "name": "Alphabet Class A",
-      "notes": "Google parent. 2yr backtest: +$287 PF 12.80 on daily bars — DISABLED: no edge per walk-forward",
+      "notes": "Google parent. 2yr backtest: +$287 PF 12.80 on daily bars \u2014 DISABLED: no edge per walk-forward",
       "qty": 5,
       "reentry_cooldown_mins": 20,
       "reentry_recovery_pct": 1,
@@ -525,6 +525,30 @@
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
       "emergency_stop_pct": 5.0
+    },
+    {
+      "symbol": "NVTS",
+      "name": "Navitas Semiconductor",
+      "emoji": "\u26a1",
+      "currency": "USD",
+      "exchange": "NASDAQ",
+      "primaryExchange": "NASDAQ",
+      "sec_type": "STK",
+      "timeframe": "4hr",
+      "enabled": true,
+      "target_notional": 1000,
+      "stop_pct": 5.0,
+      "take_profit_pct": 3,
+      "emergency_stop_pct": 10.0,
+      "indicators": {
+        "rsi_period": 7,
+        "rsi_oversold": 30,
+        "rsi_overbought": 65,
+        "adx_threshold": 25,
+        "ma200_period": 150
+      },
+      "qty": 100,
+      "trail_stop_pct": 1
     }
   ],
   "layer2_accumulation": [
