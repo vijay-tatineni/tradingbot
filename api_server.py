@@ -1372,6 +1372,30 @@ def advisor_news():
         return jsonify({'error': str(e)}), 500
 
 
+# ── Calendar UI routes (§15.4) ─────────────────────────
+def _maybe_register_calendar():
+    """Register calendar blueprint if enable_calendar_ui is true."""
+    try:
+        cfg_path = Path(CONFIG_FILE)
+        if cfg_path.exists():
+            with open(cfg_path) as f:
+                data = json.load(f)
+            flag = data.get('settings', {}).get('feature_flags', {}).get(
+                'enable_calendar_ui', True)
+        else:
+            flag = True
+
+        if flag:
+            from bot.calendar_ui.routes import calendar_bp, init_calendar_routes
+            regime_db = str(BASE_DIR / 'regime.db')
+            init_calendar_routes(regime_db, JWT_SECRET)
+            app.register_blueprint(calendar_bp)
+    except Exception as e:
+        print(f"[Calendar UI] Failed to register: {e}")
+
+_maybe_register_calendar()
+
+
 if __name__ == '__main__':
     # Check users exist
     users = load_users()
