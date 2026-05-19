@@ -241,3 +241,118 @@ The two codebases now have identical regime dashboards. They will drift
 again on the next change to `/root/trading/`. PR 7 should consolidate
 to a single source using `main.py`'s `--config` / `--broker` flags from
 commit `7a9dd06`, eliminating the rsync ritual entirely.
+
+## Classifier cache-hit rate not surfaced
+
+**Status:** Open (PR6)
+
+The `cache_hit` column was dropped from the Regime dashboard tab during
+PR 6 design because it's a per-call runtime metric, not a per-state
+attribute persisted in `regime_classification_cache`. The classifier's
+cache-hit rate is operationally useful (it controls daily Anthropic API
+spend) but isn't currently exposed in the dashboard.
+
+Future work: add a `regime_cache_metrics` table or extend
+`regime_classification_log` to track hit/miss per call, then surface
+aggregate cache-hit % and daily cost on a "Classifier ops" panel.
+Defer until shadow data reveals it's needed.
+
+## Overlays dashboard tab limited to MACRO_LOCKOUT
+
+**Status:** Open (PR6)
+
+The `/api/overlays/active` endpoint calls
+`bot.overlays.registry.active_overlays()` from the API server process.
+This works for `MACRO_LOCKOUT` (reads from `macro_events` via the DB)
+but NOT for `DATA_QUALITY` or `LOW_LIQUIDITY`, which require market
+data ctx that only exists in the trading bot's process memory.
+
+The Overlays tab will show `MACRO_LOCKOUT` events when active.
+`DATA_QUALITY` and `LOW_LIQUIDITY` pauses surface via the Pauses tab
+if they hard-fail and trigger instrument pauses.
+
+Future work: have the trading bot write an `active_overlays_snapshot`
+table on each cycle, dashboard reads from it. Defer until shadow phase
+shows whether the limitation is operationally painful.
+
+## Anthropic API pricing requires periodic re-verification
+
+**Status:** Recurring task
+
+`bot/regime/cost_tracker.py` hardcodes pricing for `claude-sonnet-4-6`
+confirmed 2026-05-18: $3/MTok input, $15/MTok output. Pricing changes
+occasionally; the existing constants will silently produce wrong cost
+numbers if Anthropic adjusts rates.
+
+Re-verify against https://docs.claude.com on each significant
+maintenance window (quarterly at minimum). The `cost_tracker` comment
+notes the verification date; update it whenever pricing is re-checked.
+
+## PR 7: codebase consolidation
+
+**Status:** Planned
+
+`/root/trading/` and `/root/trading-ig/` are two copies of the codebase
+kept in sync via manual rsync. This has bitten the project twice during
+PR 6 (PR 4 sync gaps, PR 6 sync gaps), and will continue to bite on
+every change touching `bot/`, `main.py`, or `api_server.py`.
+
+PR 7 should consolidate to a single codebase using `main.py`'s existing
+`--config` / `--broker` flags from commit `7a9dd06`:
+
+- `/root/trading-ig/` becomes a thin directory holding only
+  `instruments_ig.json`, `.env`, `TASK_SPEC_IG_INSTANCE.md`, and
+  runtime state (DBs, logs).
+- IG systemd service updates to
+  `ExecStart=/usr/bin/python3 /root/trading/main.py --broker ig --config /root/trading-ig/instruments_ig.json --data-dir /root/trading-ig/data`.
+- `main.py` extended to accept `--data-dir` so DBs and logs go to
+  instance-specific locations.
+- Test plan: run both services side-by-side from the consolidated
+  codebase, confirm no shared-state issues.
+
+Estimated 4-6 hours of focused work. Worth doing once shadow phase is
+underway and PR 6 has stabilised.
+
+## Mean-reversion engine is a skeleton only
+
+**Status:** Deferred
+
+`bot/strategies/mean_reversion.py` exists as a skeleton from PR 1 to
+satisfy the `StrategyEngine` ABC. It is NOT a functional strategy. The
+router will dispatch `RANGING` regimes to `MeanReversionEngine` when
+`enable_mean_reversion_live=true`, but with no real implementation
+behind it, those entries would be no-ops.
+
+Validation and full implementation of mean-reversion logic (entry
+signal, position sizing, exit conditions, parameter tuning) is its own
+substantial research and development effort. Keep
+`enable_mean_reversion_live=false` and
+`enable_mean_reversion_shadow=true` only until a real implementation
+lands.
+
+## Integration-gap pattern (operational note)
+
+**Status:** Mitigated, not eliminated
+
+Across PRs 1-6, six "tests pass but production integration missing"
+bugs were caught in review: IG broker test ordering (PR 1),
+orchestrator not wired into `main.py` (PR 4), overlay ctx bridge
+missing (PR 5), nginx route for `calendar.html` (PR 5),
+`specs/prompts/` missing in IG sync (post-PR 5), `api_server.service`
+not restarted after code changes (PR 6).
+
+The pattern is consistent: code is written correctly, unit tests pass,
+but the running production system doesn't actually use the new code
+because some glue (service restart, file copy, route registration,
+runtime initialisation) is missing.
+
+Mitigation added in PR 6: deploy protocol in `CLAUDE.md` requires
+service restart + curl verification after any code change affecting a
+long-running service. This catches the most common subset
+(service-restart gaps) but not all (runtime initialisation gaps,
+missing static files, route registration).
+
+Going forward, the discipline that worked across PRs 1-6 should
+continue: after each PR, run `grep -rn` for the new component's name
+in production code, run end-to-end curl/browser verification, not just
+test-suite green.
