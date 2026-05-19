@@ -1,0 +1,358 @@
+# Tech Debt Log
+
+Known compromises made during `claude-strategy` implementation, with rationale.
+
+---
+
+## Main loop orchestration in bot/layer1.py
+
+**Status:** Deferred
+**Spec:** §3.1
+
+Orchestration and signal logic are co-located in `bot/layer1.py`. The right
+structure is `bot/orchestrator.py` for orchestration and `bot/layer1.py` for
+signal logic only. This refactor is deferred to keep PR scope manageable.
+Plan to address in a follow-up PR after `claude-strategy` ships and stabilises.
+
+## TripleConfirmationEngine wrapping decisions
+
+**Status:** Active (PR1)
+**Spec:** §8.1
+
+The `TripleConfirmationEngine` wraps `SignalEngine.evaluate()` for candidate
+generation. The existing `SignalEngine` in `bot/signals.py` is a clean,
+stateless, pure-function engine — it was the natural seam.
+
+Exit management (`manage_exit`) returns HOLD and defers to the legacy exit
+path in `bot/layer1.py` (two-tier stop system in `PositionTracker`). The
+legacy path remains authoritative until `enable_position_tagged_exit_policy`
+is flipped live. Extracting the exit logic into `TripleConfirmationEngine`
+would require decoupling the `PositionTracker` state machine, which is too
+invasive for this PR.
+
+## bot/llm/sentiment.py uses regex parsing for structured output
+
+**Status:** Deferred
+**Spec:** Q1 answer
+
+`bot/llm/sentiment.py` uses regex parsing for structured LLM output.
+Consider migrating to tool-use following the pattern established in
+`bot/regime/classifier.py`. The classifier demonstrates the correct
+approach: Anthropic API tool-use with Pydantic schema validation.
+
+## Feature flags module location
+
+**Status:** Active (PR1)
+
+The spec directory layout shows `bot/config/flags.py`, but `bot/config.py`
+already exists as a module file (not a package). Creating `bot/config/`
+as a package would shadow the existing `bot/config.py` import and break
+all existing code. Flags are placed at `bot/regime/flags.py` instead.
+Consider renaming `bot/config.py` → `bot/config/main.py` in a future
+cleanup PR to enable `bot/config/flags.py` per the spec layout.
+
+## Model ID: claude-sonnet-4-20250514 → claude-sonnet-4-6
+
+**Status:** Active (PR1)
+
+The spec references `claude-sonnet-4-20250514` which is deprecated
+(retiring 2026-06-15). Updated to `claude-sonnet-4-6` per Anthropic
+documentation checked 2026-05-18. Pricing confirmed: $3/MTok input,
+$15/MTok output.
+
+## Earnings overlay deferred
+
+**Status:** Deferred — revisit after 60 days of shadow data
+**Spec:** §10.2, §3.1
+
+The earnings overlay (originally specified in §10.2 of v3) is not being
+built in this work. No evidence yet that earnings gaps have hurt the bot's
+actual trading; building protection against an unconfirmed problem carries
+ongoing maintenance cost for no measured benefit.
+
+**Revisit criteria:** After 60 days of shadow data collected post-merge,
+query `shadow_decisions` for entries on individual stocks (non-ETF
+instruments) within 1-2 trading days of known earnings dates. If 3+ such
+entries are recorded in the 60-day window, build the earnings overlay as a
+follow-up PR. Use manual calendar entry pattern (like macro), no external
+data source needed for the scale of ~15 instruments × ~4 earnings/year.
+If shadow data shows zero such entries, no further action needed.
+
+## /root/trading-ig/ is a stale full copy
+
+**Status:** Noted (PR4)
+
+`/root/trading-ig/` is a full copy of the codebase from April 16-17, used
+by the IG broker systemd service (`ExecStart=/usr/bin/python3 /root/trading-ig/main.py --broker ig`).
+It has an identical `main.py` but is missing all regime modules (degradation,
+overlays, regime, shadow, strategies). It needs to be either:
+- Converted to use `/root/trading/` as the single source (symlink or shared install), or
+- Manually synced after each release.
+
+The regime orchestrator wiring in `/root/trading/main.py` does NOT
+automatically apply to `/root/trading-ig/`. The IG instance will continue
+running without regime integration until this is addressed.
+
+## /root/trading/trading_v6/ is dead code
+
+**Status:** Noted (PR4)
+
+`trading_v6/` contains an old v6 version of the bot. It's not referenced
+by any systemd service or startup script. Safe to delete in a cleanup PR.
+
+## Pre-existing test-ordering issue: test_ig_broker.py
+
+**Status:** Pre-existing, not caused by claude-strategy
+
+`tests/test_ig_broker.py::test_create_broker_ig_without_credentials` fails
+when run as part of the full suite but passes in isolation. This is a
+test-ordering state pollution issue that pre-dates this branch. 486 of 487
+existing tests pass; this one failure is not a regression.
+
+## Per-bot macro calendars not shared
+
+**Status:** Open question (PR4)
+
+IBKR and IG each have their own `regime.db` with their own `macro_events`
+table. Macro events entered via IBKR's calendar UI are not visible to IG's
+`MACRO_LOCKOUT` overlay. Three resolution paths exist:
+
+1. Enable calendar UI on IG too (manual duplication, currently disabled).
+2. Disable macro overlay on IG (accept no macro protection).
+3. Share the macro calendar DB across both bots (architectural change for
+   PR 6 or later).
+
+Currently neither bot has macro events populated and
+`enable_event_overlays_live` is false on both, so this question doesn't
+bite yet. Revisit before promoting `enable_event_overlays_live=true` on
+either bot.
+
+## IG sync 2026-05-19 (one-time bridge)
+
+**Status:** Noted (PR4)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` covering `bot/`,
+`tests/`, `main.py`, `api_server.py`, `CLAUDE.md`, and `specs/prompts/`.
+Plus an explicit `feature_flags` block was added to
+`/root/trading-ig/instruments_ig.json` matching `SAFE_DEFAULTS`.
+
+The two codebases are now identical except for:
+- Instance config: `instruments_ig.json`, `.env`, `TASK_SPEC_IG_INSTANCE.md`
+- Runtime state: `*.db`, `*.log`
+
+This is a one-time bridge. The codebases will drift again on the next
+change to `/root/trading/`. PR 6 should consolidate to a single source
+using `main.py`'s existing `--config` and `--broker` flags from commit
+`7a9dd06`.
+
+## IBKR config missing explicit feature_flags block
+
+**Status:** Open (PR4)
+
+`/root/trading/instruments.json` has no explicit `feature_flags` block;
+the IBKR bot runs on `FeatureFlags.SAFE_DEFAULTS`. Add an explicit block
+matching its current implicit state before any live flag promotion. Same
+diff as applied to the IG side on 2026-05-19.
+
+## IG demo data-permission errors are pre-existing
+
+**Status:** Pre-existing, not caused by PR4
+
+`bot_stderr.log` shows ~398 historical instances of
+`'NoneType' object has no attribute 'fetch_market_by_epic'` plus ~20 per
+restart cycle. The IG demo account lacks a data subscription for certain
+UK epics (e.g. `KA.D.BARC.CASH.IP`); other instruments fail epic
+verification at startup. The bot operates cleanly otherwise and trades
+on permitted instruments only.
+
+Not a regime/sync issue. A separate decision is needed on whether to
+upgrade the IG market-data subscription or prune the instrument universe.
+
+## Sync-target test redundancy
+
+**Status:** Noted (PR4)
+
+`tests/regime/test_classifier.py::TestPromptSync::test_prompt_sync` reads
+from `specs/prompts/classifier_v1.md` to verify the in-code prompt matches
+its documented mirror. The test is structurally meaningless on a
+sync-target codebase like `/root/trading-ig/` — if the source-of-truth
+side passes, the target side passes automatically via rsync.
+
+Two fixes possible:
+- (a) Add `pytest.skip("Sync test only meaningful on source-of-truth side")`
+  when `specs/prompts/classifier_v1.md` is absent.
+- (b) Eliminate IG-side test runs entirely once PR 6 consolidates codebases.
+
+The 2026-05-19 sync also surfaced that the inventory step missed `specs/`
+entirely — PR 6 should explicitly enumerate which top-level directories
+are needed for runtime vs documentation vs source-of-truth.
+
+## Dashboard rendering uses dual source of truth
+
+**Status:** Noted (PR6)
+
+`bot/dashboard.py:_write_html()` is an f-string template that regenerates
+`web/dashboard.html` every time `Dashboard.__init__` runs — on bot
+startup and on every test that instantiates `Dashboard(cfg)`. The
+committed `web/dashboard.html` is therefore a build artifact, not an
+authoritative source. Manual edits to `web/dashboard.html` survive only
+until the next regeneration.
+
+This bit PR 6: hours were lost discovering that
+`tests/test_disabled_instruments.py::test_disabled_shown_on_dashboard`
+was silently overwriting in-progress edits to `web/dashboard.html` by
+instantiating `Dashboard(cfg)` against the real config.
+
+PR 6's regime tabs are embedded directly in the f-string template
+alongside the existing Layer 1 / P&L sections. The f-string escaping
+(`{{` `}}` for literal braces, `${{var}}` for JS template literals) is
+fragile — `tests/regime/test_dashboard_template.py::TestFStringEscaping`
+guards against regressions but a future refactor should eliminate the
+approach.
+
+Future work: extract the template to a separate file (Jinja2 or read
+raw `web/dashboard.template.html`), have `_write_html()` substitute
+runtime fields by name. Then `web/dashboard.html` becomes a true cached
+copy of an authoritative template, and the template can be edited
+directly without `{{` escaping.
+
+## IG sync 2026-05-19 (PR 6 dashboard tabs)
+
+**Status:** Noted (PR6)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` to pick up the
+PR 6 regime dashboard tabs:
+
+- `bot/regime/dashboard_data.py`
+- `api_server.py` (six new JWT endpoints + `init_overlay_registry`
+  at module import)
+- `bot/dashboard.py` (f-string template with regime CSS / HTML / JS)
+- `web/dashboard.html` (regenerated build artifact)
+- `tests/regime/test_dashboard_data.py`
+- `tests/regime/test_dashboard_endpoints.py`
+- `tests/regime/test_dashboard_template.py`
+
+After rsync: `cogniflowai-ig-api.service` and `cogniflowai-ig-bot.service`
+both restarted; 67 dashboard tests pass on IG side; all six endpoints
+return 401 unauthenticated at both ports 8084 (api direct) and 8083
+(nginx). IG bot cycle #1 completed cleanly in shadow mode.
+
+The two codebases now have identical regime dashboards. They will drift
+again on the next change to `/root/trading/`. PR 7 should consolidate
+to a single source using `main.py`'s `--config` / `--broker` flags from
+commit `7a9dd06`, eliminating the rsync ritual entirely.
+
+## Classifier cache-hit rate not surfaced
+
+**Status:** Open (PR6)
+
+The `cache_hit` column was dropped from the Regime dashboard tab during
+PR 6 design because it's a per-call runtime metric, not a per-state
+attribute persisted in `regime_classification_cache`. The classifier's
+cache-hit rate is operationally useful (it controls daily Anthropic API
+spend) but isn't currently exposed in the dashboard.
+
+Future work: add a `regime_cache_metrics` table or extend
+`regime_classification_log` to track hit/miss per call, then surface
+aggregate cache-hit % and daily cost on a "Classifier ops" panel.
+Defer until shadow data reveals it's needed.
+
+## Overlays dashboard tab limited to MACRO_LOCKOUT
+
+**Status:** Open (PR6)
+
+The `/api/overlays/active` endpoint calls
+`bot.overlays.registry.active_overlays()` from the API server process.
+This works for `MACRO_LOCKOUT` (reads from `macro_events` via the DB)
+but NOT for `DATA_QUALITY` or `LOW_LIQUIDITY`, which require market
+data ctx that only exists in the trading bot's process memory.
+
+The Overlays tab will show `MACRO_LOCKOUT` events when active.
+`DATA_QUALITY` and `LOW_LIQUIDITY` pauses surface via the Pauses tab
+if they hard-fail and trigger instrument pauses.
+
+Future work: have the trading bot write an `active_overlays_snapshot`
+table on each cycle, dashboard reads from it. Defer until shadow phase
+shows whether the limitation is operationally painful.
+
+## Anthropic API pricing requires periodic re-verification
+
+**Status:** Recurring task
+
+`bot/regime/cost_tracker.py` hardcodes pricing for `claude-sonnet-4-6`
+confirmed 2026-05-18: $3/MTok input, $15/MTok output. Pricing changes
+occasionally; the existing constants will silently produce wrong cost
+numbers if Anthropic adjusts rates.
+
+Re-verify against https://docs.claude.com on each significant
+maintenance window (quarterly at minimum). The `cost_tracker` comment
+notes the verification date; update it whenever pricing is re-checked.
+
+## PR 7: codebase consolidation
+
+**Status:** Planned
+
+`/root/trading/` and `/root/trading-ig/` are two copies of the codebase
+kept in sync via manual rsync. This has bitten the project twice during
+PR 6 (PR 4 sync gaps, PR 6 sync gaps), and will continue to bite on
+every change touching `bot/`, `main.py`, or `api_server.py`.
+
+PR 7 should consolidate to a single codebase using `main.py`'s existing
+`--config` / `--broker` flags from commit `7a9dd06`:
+
+- `/root/trading-ig/` becomes a thin directory holding only
+  `instruments_ig.json`, `.env`, `TASK_SPEC_IG_INSTANCE.md`, and
+  runtime state (DBs, logs).
+- IG systemd service updates to
+  `ExecStart=/usr/bin/python3 /root/trading/main.py --broker ig --config /root/trading-ig/instruments_ig.json --data-dir /root/trading-ig/data`.
+- `main.py` extended to accept `--data-dir` so DBs and logs go to
+  instance-specific locations.
+- Test plan: run both services side-by-side from the consolidated
+  codebase, confirm no shared-state issues.
+
+Estimated 4-6 hours of focused work. Worth doing once shadow phase is
+underway and PR 6 has stabilised.
+
+## Mean-reversion engine is a skeleton only
+
+**Status:** Deferred
+
+`bot/strategies/mean_reversion.py` exists as a skeleton from PR 1 to
+satisfy the `StrategyEngine` ABC. It is NOT a functional strategy. The
+router will dispatch `RANGING` regimes to `MeanReversionEngine` when
+`enable_mean_reversion_live=true`, but with no real implementation
+behind it, those entries would be no-ops.
+
+Validation and full implementation of mean-reversion logic (entry
+signal, position sizing, exit conditions, parameter tuning) is its own
+substantial research and development effort. Keep
+`enable_mean_reversion_live=false` and
+`enable_mean_reversion_shadow=true` only until a real implementation
+lands.
+
+## Integration-gap pattern (operational note)
+
+**Status:** Mitigated, not eliminated
+
+Across PRs 1-6, six "tests pass but production integration missing"
+bugs were caught in review: IG broker test ordering (PR 1),
+orchestrator not wired into `main.py` (PR 4), overlay ctx bridge
+missing (PR 5), nginx route for `calendar.html` (PR 5),
+`specs/prompts/` missing in IG sync (post-PR 5), `api_server.service`
+not restarted after code changes (PR 6).
+
+The pattern is consistent: code is written correctly, unit tests pass,
+but the running production system doesn't actually use the new code
+because some glue (service restart, file copy, route registration,
+runtime initialisation) is missing.
+
+Mitigation added in PR 6: deploy protocol in `CLAUDE.md` requires
+service restart + curl verification after any code change affecting a
+long-running service. This catches the most common subset
+(service-restart gaps) but not all (runtime initialisation gaps,
+missing static files, route registration).
+
+Going forward, the discipline that worked across PRs 1-6 should
+continue: after each PR, run `grep -rn` for the new component's name
+in production code, run end-to-end curl/browser verification, not just
+test-suite green.

@@ -1,0 +1,111 @@
+"""§15.5: Assert the regime tab scaffolding is rendered into dashboard.html.
+
+bot/dashboard.py:_write_html() is the source of truth for web/dashboard.html;
+this test reads what the template writes and checks for the regime tab
+markers. If a future PR refactors the template (e.g., to a Jinja file)
+this test still passes provided the output keeps the same markers.
+"""
+import os
+from pathlib import Path
+
+import pytest
+
+from bot.dashboard import Dashboard
+
+
+class _StubConfig:
+    """Minimal config for Dashboard instantiation. Avoids real instruments.json
+    side effects on the canonical web/dashboard.html."""
+    def __init__(self, web_dir: str):
+        self.web_dir = web_dir
+        self.check_interval_mins = 5
+        self.path = "stub.json"
+        self.portfolio_loss_limit = 1000
+        self.broker_type = "stub"
+        self.active_instruments = []
+        self.accum_instruments = []
+        self._raw = {"layer1_active": [], "layer2_accumulation": []}
+
+
+@pytest.fixture
+def rendered_html(tmp_path):
+    cfg = _StubConfig(str(tmp_path))
+    Dashboard(cfg)
+    out = Path(tmp_path) / "dashboard.html"
+    assert out.exists(), "Dashboard.__init__ did not write dashboard.html"
+    return out.read_text()
+
+
+class TestRegimeScaffolding:
+    """The six panes and the nav exist as static markup."""
+
+    def test_nav_present(self, rendered_html):
+        assert 'id="regimeNav"' in rendered_html
+        assert '// REGIME LAYER' in rendered_html
+
+    @pytest.mark.parametrize("pane_id", [
+        "regime-pane-regime",
+        "regime-pane-overlays",
+        "regime-pane-routing",
+        "regime-pane-shadow",
+        "regime-pane-degradation",
+        "regime-pane-pauses",
+    ])
+    def test_pane_present(self, rendered_html, pane_id):
+        assert f'id="{pane_id}"' in rendered_html
+
+    @pytest.mark.parametrize("data_tab", [
+        "regime", "overlays", "routing", "shadow", "degradation", "pauses",
+    ])
+    def test_tab_button_present(self, rendered_html, data_tab):
+        assert f'data-tab="{data_tab}"' in rendered_html
+
+
+class TestEndpointUrls:
+    """The six fetch URLs appear in the rendered JS."""
+
+    @pytest.mark.parametrize("url", [
+        "/api/regime/states",
+        "/api/overlays/active",
+        "/api/routing/decisions",
+        "/api/shadow/comparison",
+        "/api/degradation/events",
+        "/api/pauses/list",
+    ])
+    def test_url_present(self, rendered_html, url):
+        assert f"'{url}'" in rendered_html
+
+
+class TestFStringEscaping:
+    """Catch f-string escape regressions: no stray {{ or }} in output, JS
+    template literals render as ${...} not ${{...}}."""
+
+    def test_no_unescaped_double_braces(self, rendered_html):
+        # double-braces in output would mean we forgot to escape a brace,
+        # OR escaped a literal that should've stayed literal. Either way it
+        # signals a template bug.
+        assert "{{" not in rendered_html
+        assert "}}" not in rendered_html
+
+    def test_template_literals_intact(self, rendered_html):
+        # Regime JS uses ${...} template literals heavily; if escaping went
+        # wrong they'd render as ${{...}}. Sample a few:
+        assert "${v}" in rendered_html  # from regimePill / enginePill
+        assert "${key}" in rendered_html  # from fetchRegimeTab querySelector
+        assert "${r.status}" in rendered_html  # from fetchRegimeTab error path
+
+
+class TestExistingDashboardIntact:
+    """Don't regress the Layer 1 / Layer 2 sections."""
+
+    def test_layer1_present(self, rendered_html):
+        assert "LAYER 1" in rendered_html
+        assert 'id="layer1"' in rendered_html
+
+    def test_layer2_present(self, rendered_html):
+        assert "LAYER 2" in rendered_html
+        assert 'id="layer2"' in rendered_html
+
+    def test_navbar_present(self, rendered_html):
+        assert 'id="navUser"' in rendered_html
+        assert "logout()" in rendered_html
