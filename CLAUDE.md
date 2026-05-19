@@ -32,3 +32,25 @@
 - Check instruments.html has nav bar
 - Verify no hardcoded ~/trading/ paths
 - Confirm port 8080 is not running
+
+## After Every Commit That Touches a Running Service
+A commit on disk is not a deployed change. The systemd services keep the
+old Python process running until they are restarted. Skipping this step
+means "the tests pass" and "the production server has the new code" are
+two different facts, and verification gives a false green.
+
+- If the commit touched `api_server.py`: restart `cogniflowai-api.service`
+  and curl the new/changed routes (e.g. `curl -sI
+  http://127.0.0.1:8081/api/<route>` — expect the route to exist).
+- If the commit touched `main.py` or any module the bot imports at
+  startup: restart `cogniflowai-bot.service` and confirm `systemctl
+  status` shows `active (running)` plus a fresh cycle in
+  `bot_stdout.log`.
+- If the commit touched `web/dashboard.html` or other static files served
+  by nginx: a service restart is not needed (nginx serves the file
+  directly) but a hard refresh in the browser is.
+- For the IG instance (`/root/trading-ig/`): after rsync from the source
+  side, restart `cogniflowai-ig-api.service` and `cogniflowai-ig-bot.service`,
+  then verify endpoints at port 8083.
+- Only after the service is restarted AND the route/cycle is verified
+  may a checkpoint be reported "complete".
