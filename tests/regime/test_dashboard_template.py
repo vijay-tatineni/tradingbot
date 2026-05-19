@@ -50,15 +50,59 @@ class TestRegimeScaffolding:
         "regime-pane-shadow",
         "regime-pane-degradation",
         "regime-pane-pauses",
+        "regime-pane-classify",
     ])
     def test_pane_present(self, rendered_html, pane_id):
         assert f'id="{pane_id}"' in rendered_html
 
     @pytest.mark.parametrize("data_tab", [
-        "regime", "overlays", "routing", "shadow", "degradation", "pauses",
+        "regime", "overlays", "routing", "shadow", "degradation",
+        "pauses", "classify",
     ])
     def test_tab_button_present(self, rendered_html, data_tab):
         assert f'data-tab="{data_tab}"' in rendered_html
+
+
+class TestClassifyTabScaffolding:
+    """Classify tab scaffold elements: dropdown, buttons, result/error
+    containers, modal markup, and the copy strings the user signed off on."""
+
+    @pytest.mark.parametrize("element_id", [
+        "classifyBudget",
+        "classifyInstrument",
+        "classifyCostEstimate",
+        "classifyTooltip",
+        "classifyBtn",
+        "classifyShowLastBtn",
+        "classifyProgress",
+        "classifyError",
+        "classifyResult",
+        "classifyModal",
+        "classifyModalBackdrop",
+        "classifyModalTitle",
+        "classifyModalBody",
+        "classifyModalCancel",
+        "classifyModalConfirm",
+    ])
+    def test_element_present(self, rendered_html, element_id):
+        assert f'id="{element_id}"' in rendered_html
+
+    def test_subtitle_copy(self, rendered_html):
+        assert "Re-classify an instrument using its most recent cached features." in rendered_html
+
+    def test_section_heading_copy(self, rendered_html):
+        assert ">Re-classify<" in rendered_html
+
+    def test_tooltip_copy(self, rendered_html):
+        # Key phrases from the agreed copy
+        assert "Re-runs Claude on the most recent cached features" in rendered_html
+        assert "low-confidence response" in rendered_html
+        assert "last daily scheduler run" in rendered_html
+
+    def test_classify_all_option_offered(self, rendered_html):
+        """JS will inject ALL INSTRUMENTS into the dropdown at runtime;
+        the static placeholder still hints at loading state."""
+        assert "Loading instruments..." in rendered_html
 
 
 class TestEndpointUrls:

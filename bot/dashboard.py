@@ -251,6 +251,40 @@ tr:hover td {{ background:#1c2128; }}
 .regime-pill.regime-RANGING {{ background:#1e3a5f; color:var(--blue); }}
 .regime-pill.regime-VOLATILE {{ background:#713f12; color:#fbbf24; }}
 .regime-pill.regime-UNCLEAR {{ background:#1f2937; color:var(--muted); }}
+/* ── Classify tab ── */
+.classify-subtitle {{ padding:14px 16px 4px; color:var(--muted); font-size:0.75rem; letter-spacing:0.5px; }}
+.classify-budget {{ padding:0 16px 14px; color:var(--text); font-size:0.78rem; font-weight:600; border-bottom:1px solid #1c2128; }}
+.classify-budget .classify-budget-spent {{ color:var(--muted); font-weight:400; margin-left:6px; }}
+.classify-budget.classify-budget-low {{ color:#fbbf24; }}
+.classify-budget.classify-budget-exhausted {{ color:var(--red); }}
+.classify-section-title {{ padding:14px 16px 6px; color:var(--gold); font-size:0.7rem; letter-spacing:1px; text-transform:uppercase; }}
+.classify-form {{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 16px; }}
+.classify-form label {{ color:var(--muted); font-size:0.72rem; letter-spacing:0.5px; }}
+.classify-form select {{ background:var(--bg3); color:var(--text); border:1px solid var(--border); padding:6px 10px; font-family:'JetBrains Mono',monospace; font-size:0.74rem; border-radius:4px; min-width:220px; }}
+.classify-cost-estimate {{ color:var(--muted); font-size:0.7rem; }}
+.classify-tooltip {{ padding:4px 16px 14px; color:var(--muted); font-size:0.68rem; font-style:italic; line-height:1.5; max-width:780px; }}
+.classify-buttons {{ display:flex; gap:10px; padding:0 16px 14px; }}
+.classify-btn-primary {{ background:var(--gold); color:#1a1a1a; border:1px solid var(--gold); padding:7px 18px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:700; letter-spacing:0.5px; cursor:pointer; border-radius:4px; }}
+.classify-btn-primary:hover:not(:disabled) {{ background:#f5d568; }}
+.classify-btn-primary:disabled {{ opacity:0.4; cursor:not-allowed; }}
+.classify-btn-secondary {{ background:transparent; color:var(--text); border:1px solid var(--border); padding:7px 14px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; cursor:pointer; border-radius:4px; }}
+.classify-btn-secondary:hover {{ border-color:var(--text); }}
+.classify-error {{ margin:0 16px 14px; padding:10px 14px; background:#3b0d0d; border:1px solid var(--red); color:#fecaca; font-size:0.72rem; border-radius:4px; line-height:1.5; }}
+.classify-progress {{ margin:0 16px 14px; padding:8px 14px; color:var(--blue); font-size:0.72rem; border:1px solid var(--border); border-radius:4px; background:var(--bg3); }}
+.classify-result {{ margin:0 16px 16px; }}
+.classify-result-card {{ padding:14px 16px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; font-size:0.74rem; line-height:1.65; margin-bottom:8px; }}
+.classify-result-card .classify-result-title {{ color:var(--green); font-weight:700; margin-bottom:8px; }}
+.classify-result-card .classify-result-row {{ display:flex; gap:8px; }}
+.classify-result-card .classify-result-label {{ color:var(--muted); min-width:130px; }}
+.classify-result-card .classify-result-rationale {{ color:var(--text); margin-top:6px; font-style:italic; padding-top:6px; border-top:1px dashed var(--border); }}
+.classify-result-card .classify-result-features-dated {{ color:var(--muted); font-size:0.66rem; margin-top:6px; }}
+.classify-modal {{ position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; }}
+.classify-modal.classify-modal-open {{ display:flex; }}
+.classify-modal-backdrop {{ position:absolute; inset:0; background:rgba(0,0,0,0.7); }}
+.classify-modal-content {{ position:relative; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:20px 22px; max-width:520px; width:92%; font-family:'JetBrains Mono',monospace; }}
+.classify-modal-title {{ color:var(--gold); font-size:0.82rem; font-weight:700; letter-spacing:1px; margin-bottom:12px; }}
+.classify-modal-body {{ color:var(--text); font-size:0.78rem; line-height:1.6; margin-bottom:18px; }}
+.classify-modal-buttons {{ display:flex; gap:10px; justify-content:flex-end; }}
 .engine-pill {{ display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#0c2461; color:var(--blue); }}
 .engine-pill.engine-NoOpEngine {{ background:#1f2937; color:var(--muted); }}
 </style>
@@ -329,6 +363,7 @@ tr:hover td {{ background:#1c2128; }}
     <button class="regime-tab" data-tab="shadow">Shadow vs Live</button>
     <button class="regime-tab" data-tab="degradation">Degradation</button>
     <button class="regime-tab" data-tab="pauses">Pauses</button>
+    <button class="regime-tab" data-tab="classify">Classify</button>
   </div>
   <div class="regime-meta" id="regimeMeta">Last refresh: --</div>
   <div class="regime-pane active" id="regime-pane-regime"><div class="regime-empty">Loading...</div></div>
@@ -337,6 +372,39 @@ tr:hover td {{ background:#1c2128; }}
   <div class="regime-pane" id="regime-pane-shadow"></div>
   <div class="regime-pane" id="regime-pane-degradation"></div>
   <div class="regime-pane" id="regime-pane-pauses"></div>
+  <div class="regime-pane" id="regime-pane-classify">
+    <div class="classify-subtitle">Re-classify an instrument using its most recent cached features.</div>
+    <div class="classify-budget" id="classifyBudget">Loading budget...</div>
+    <div class="classify-section-title">Re-classify</div>
+    <div class="classify-form">
+      <label for="classifyInstrument">Instrument:</label>
+      <select id="classifyInstrument" disabled>
+        <option value="" disabled selected>Loading instruments...</option>
+      </select>
+      <span class="classify-cost-estimate" id="classifyCostEstimate"></span>
+    </div>
+    <div class="classify-tooltip" id="classifyTooltip">
+      Re-runs Claude on the most recent cached features for this instrument. Use to re-roll after a low-confidence response or to inspect classifier behavior. Features come from the last daily scheduler run.
+    </div>
+    <div class="classify-buttons">
+      <button id="classifyBtn" class="classify-btn-primary" disabled>Classify</button>
+      <button id="classifyShowLastBtn" class="classify-btn-secondary" disabled>Show last classification</button>
+    </div>
+    <div id="classifyProgress" class="classify-progress" style="display:none"></div>
+    <div id="classifyError" class="classify-error" style="display:none"></div>
+    <div id="classifyResult" class="classify-result"></div>
+  </div>
+</div>
+<div id="classifyModal" class="classify-modal" role="dialog" aria-modal="true" aria-labelledby="classifyModalTitle">
+  <div class="classify-modal-backdrop" id="classifyModalBackdrop"></div>
+  <div class="classify-modal-content">
+    <div class="classify-modal-title" id="classifyModalTitle">Confirm re-classify</div>
+    <div class="classify-modal-body" id="classifyModalBody"></div>
+    <div class="classify-modal-buttons">
+      <button id="classifyModalCancel" class="classify-btn-secondary">Cancel</button>
+      <button id="classifyModalConfirm" class="classify-btn-primary">Confirm</button>
+    </div>
+  </div>
 </div>
 
 <script>
