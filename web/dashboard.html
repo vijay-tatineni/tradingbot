@@ -83,6 +83,40 @@ tr:hover td { background:#1c2128; }
 .regime-pill.regime-RANGING { background:#1e3a5f; color:var(--blue); }
 .regime-pill.regime-VOLATILE { background:#713f12; color:#fbbf24; }
 .regime-pill.regime-UNCLEAR { background:#1f2937; color:var(--muted); }
+/* ── Classify tab ── */
+.classify-subtitle { padding:14px 16px 4px; color:var(--muted); font-size:0.75rem; letter-spacing:0.5px; }
+.classify-budget { padding:0 16px 14px; color:var(--text); font-size:0.78rem; font-weight:600; border-bottom:1px solid #1c2128; }
+.classify-budget .classify-budget-spent { color:var(--muted); font-weight:400; margin-left:6px; }
+.classify-budget.classify-budget-low { color:#fbbf24; }
+.classify-budget.classify-budget-exhausted { color:var(--red); }
+.classify-section-title { padding:14px 16px 6px; color:var(--gold); font-size:0.7rem; letter-spacing:1px; text-transform:uppercase; }
+.classify-form { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 16px; }
+.classify-form label { color:var(--muted); font-size:0.72rem; letter-spacing:0.5px; }
+.classify-form select { background:var(--bg3); color:var(--text); border:1px solid var(--border); padding:6px 10px; font-family:'JetBrains Mono',monospace; font-size:0.74rem; border-radius:4px; min-width:220px; }
+.classify-cost-estimate { color:var(--muted); font-size:0.7rem; }
+.classify-tooltip { padding:4px 16px 14px; color:var(--muted); font-size:0.68rem; font-style:italic; line-height:1.5; max-width:780px; }
+.classify-buttons { display:flex; gap:10px; padding:0 16px 14px; }
+.classify-btn-primary { background:var(--gold); color:#1a1a1a; border:1px solid var(--gold); padding:7px 18px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:700; letter-spacing:0.5px; cursor:pointer; border-radius:4px; }
+.classify-btn-primary:hover:not(:disabled) { background:#f5d568; }
+.classify-btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
+.classify-btn-secondary { background:transparent; color:var(--text); border:1px solid var(--border); padding:7px 14px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; cursor:pointer; border-radius:4px; }
+.classify-btn-secondary:hover { border-color:var(--text); }
+.classify-error { margin:0 16px 14px; padding:10px 14px; background:#3b0d0d; border:1px solid var(--red); color:#fecaca; font-size:0.72rem; border-radius:4px; line-height:1.5; }
+.classify-progress { margin:0 16px 14px; padding:8px 14px; color:var(--blue); font-size:0.72rem; border:1px solid var(--border); border-radius:4px; background:var(--bg3); }
+.classify-result { margin:0 16px 16px; }
+.classify-result-card { padding:14px 16px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; font-size:0.74rem; line-height:1.65; margin-bottom:8px; }
+.classify-result-card .classify-result-title { color:var(--green); font-weight:700; margin-bottom:8px; }
+.classify-result-card .classify-result-row { display:flex; gap:8px; }
+.classify-result-card .classify-result-label { color:var(--muted); min-width:130px; }
+.classify-result-card .classify-result-rationale { color:var(--text); margin-top:6px; font-style:italic; padding-top:6px; border-top:1px dashed var(--border); }
+.classify-result-card .classify-result-features-dated { color:var(--muted); font-size:0.66rem; margin-top:6px; }
+.classify-modal { position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; }
+.classify-modal.classify-modal-open { display:flex; }
+.classify-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.7); }
+.classify-modal-content { position:relative; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:20px 22px; max-width:520px; width:92%; font-family:'JetBrains Mono',monospace; }
+.classify-modal-title { color:var(--gold); font-size:0.82rem; font-weight:700; letter-spacing:1px; margin-bottom:12px; }
+.classify-modal-body { color:var(--text); font-size:0.78rem; line-height:1.6; margin-bottom:18px; }
+.classify-modal-buttons { display:flex; gap:10px; justify-content:flex-end; }
 .engine-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#0c2461; color:var(--blue); }
 .engine-pill.engine-NoOpEngine { background:#1f2937; color:var(--muted); }
 </style>
@@ -161,6 +195,7 @@ tr:hover td { background:#1c2128; }
     <button class="regime-tab" data-tab="shadow">Shadow vs Live</button>
     <button class="regime-tab" data-tab="degradation">Degradation</button>
     <button class="regime-tab" data-tab="pauses">Pauses</button>
+    <button class="regime-tab" data-tab="classify">Classify</button>
   </div>
   <div class="regime-meta" id="regimeMeta">Last refresh: --</div>
   <div class="regime-pane active" id="regime-pane-regime"><div class="regime-empty">Loading...</div></div>
@@ -169,6 +204,39 @@ tr:hover td { background:#1c2128; }
   <div class="regime-pane" id="regime-pane-shadow"></div>
   <div class="regime-pane" id="regime-pane-degradation"></div>
   <div class="regime-pane" id="regime-pane-pauses"></div>
+  <div class="regime-pane" id="regime-pane-classify">
+    <div class="classify-subtitle">Re-classify an instrument using its most recent cached features.</div>
+    <div class="classify-budget" id="classifyBudget">Loading budget...</div>
+    <div class="classify-section-title">Re-classify</div>
+    <div class="classify-form">
+      <label for="classifyInstrument">Instrument:</label>
+      <select id="classifyInstrument" disabled>
+        <option value="" disabled selected>Loading instruments...</option>
+      </select>
+      <span class="classify-cost-estimate" id="classifyCostEstimate"></span>
+    </div>
+    <div class="classify-tooltip" id="classifyTooltip">
+      Re-runs Claude on the most recent cached features for this instrument. Use to re-roll after a low-confidence response or to inspect classifier behavior. Features come from the last daily scheduler run.
+    </div>
+    <div class="classify-buttons">
+      <button id="classifyBtn" class="classify-btn-primary" disabled>Classify</button>
+      <button id="classifyShowLastBtn" class="classify-btn-secondary" disabled>Show last classification</button>
+    </div>
+    <div id="classifyProgress" class="classify-progress" style="display:none"></div>
+    <div id="classifyError" class="classify-error" style="display:none"></div>
+    <div id="classifyResult" class="classify-result"></div>
+  </div>
+</div>
+<div id="classifyModal" class="classify-modal" role="dialog" aria-modal="true" aria-labelledby="classifyModalTitle">
+  <div class="classify-modal-backdrop" id="classifyModalBackdrop"></div>
+  <div class="classify-modal-content">
+    <div class="classify-modal-title" id="classifyModalTitle">Confirm re-classify</div>
+    <div class="classify-modal-body" id="classifyModalBody"></div>
+    <div class="classify-modal-buttons">
+      <button id="classifyModalCancel" class="classify-btn-secondary">Cancel</button>
+      <button id="classifyModalConfirm" class="classify-btn-primary">Confirm</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -554,7 +622,7 @@ async function fetchRegimeTab(key) {
 }
 
 function activateRegimeTab(key) {
-  if (!REGIME_TABS[key]) return;
+  if (key !== 'classify' && !REGIME_TABS[key]) return;
   _activeRegimeTab = key;
   document.querySelectorAll('.regime-tab').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === key);
@@ -562,8 +630,12 @@ function activateRegimeTab(key) {
   document.querySelectorAll('.regime-pane').forEach(p => {
     p.classList.toggle('active', p.id === 'regime-pane-' + key);
   });
-  fetchRegimeTab(key);
   if (_regimeRefreshTimer) clearInterval(_regimeRefreshTimer);
+  if (key === 'classify') {
+    initializeClassifyTab();
+    return;
+  }
+  fetchRegimeTab(key);
   _regimeRefreshTimer = setInterval(() => fetchRegimeTab(_activeRegimeTab), 30000);
 }
 
@@ -575,6 +647,297 @@ if (_regimeNav) {
   });
   activateRegimeTab('regime');
 }
+
+// ──────────────────────────────────────────────────────
+// Classify tab — operator-triggered re-roll of Claude on
+// the most recent cached features (commit 3 of 4)
+// ──────────────────────────────────────────────────────
+const _classifyState = { instruments: [], costPer: 0.02, initialized: false };
+
+function _classifyAuthHeaders() {
+  const token = localStorage.getItem('jwt_token') || '';
+  return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
+
+function _classifyShowError(msg) {
+  const el = document.getElementById('classifyError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function _classifyHideError() {
+  document.getElementById('classifyError').style.display = 'none';
+}
+
+function _classifyShowProgress(msg) {
+  const el = document.getElementById('classifyProgress');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function _classifyHideProgress() {
+  document.getElementById('classifyProgress').style.display = 'none';
+}
+
+async function _classifyRefreshBudget() {
+  try {
+    const r = await fetch('/api/regime/budget?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (!r.ok) return;
+    const b = await r.json();
+    const el = document.getElementById('classifyBudget');
+    const remainingPct = b.max_daily_cost_usd > 0
+      ? b.remaining_usd / b.max_daily_cost_usd : 0;
+    let cls = '';
+    if (b.remaining_usd <= 0) cls = ' classify-budget-exhausted';
+    else if (remainingPct < 0.2) cls = ' classify-budget-low';
+    el.className = 'classify-budget' + cls;
+    el.innerHTML = `Today's API budget: $${b.remaining_usd.toFixed(2)} of `
+      + `$${b.max_daily_cost_usd.toFixed(2)} remaining`
+      + ` <span class="classify-budget-spent">`
+      + `($${b.spent_today_usd.toFixed(4)} spent today)</span>`;
+  } catch (err) {
+    // Best-effort: leave the previous banner in place.
+  }
+}
+
+function _classifyPopulateDropdown() {
+  const select = document.getElementById('classifyInstrument');
+  const items = _classifyState.instruments;
+  let html = '<option value="" disabled selected>Select an instrument…</option>';
+  items.forEach(s => {
+    html += `<option value="${regimeEscape(s)}">${regimeEscape(s)}</option>`;
+  });
+  if (items.length > 0) {
+    html += `<option value="__ALL__">— ALL INSTRUMENTS (${items.length}) —</option>`;
+  }
+  select.innerHTML = html;
+  select.disabled = items.length === 0;
+  document.getElementById('classifyBtn').disabled = items.length === 0;
+  document.getElementById('classifyShowLastBtn').disabled = items.length === 0;
+  _classifyUpdateCostEstimate();
+}
+
+function _classifyUpdateCostEstimate() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  const el = document.getElementById('classifyCostEstimate');
+  if (sel === '__ALL__') {
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    el.textContent = `Cost estimate: ~$${cost} (${n} instruments)`;
+  } else if (sel) {
+    el.textContent = `Cost estimate: ~$${_classifyState.costPer.toFixed(2)}`;
+  } else {
+    el.textContent = '';
+  }
+}
+
+async function initializeClassifyTab() {
+  _classifyHideError();
+  _classifyHideProgress();
+  await _classifyRefreshBudget();
+
+  try {
+    const r = await fetch('/api/regime/instruments?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (r.status === 401) {
+      _classifyShowError('Session expired — log in again.');
+      return;
+    }
+    if (!r.ok) {
+      _classifyShowError('Failed to load instruments: HTTP ' + r.status);
+      return;
+    }
+    const data = await r.json();
+    _classifyState.instruments = data.instruments || [];
+    _classifyState.costPer = data.estimated_cost_per_classification_usd || 0.02;
+    _classifyState.initialized = true;
+    _classifyPopulateDropdown();
+  } catch (err) {
+    _classifyShowError('Failed to load instruments: ' + (err.message || err));
+  }
+}
+
+function _classifyOpenModal(bodyHtml, onConfirm) {
+  const modal = document.getElementById('classifyModal');
+  document.getElementById('classifyModalBody').innerHTML = bodyHtml;
+  modal.classList.add('classify-modal-open');
+
+  // Replace buttons to clear any prior listeners.
+  const oldConfirm = document.getElementById('classifyModalConfirm');
+  const newConfirm = oldConfirm.cloneNode(true);
+  oldConfirm.parentNode.replaceChild(newConfirm, oldConfirm);
+
+  const oldCancel = document.getElementById('classifyModalCancel');
+  const newCancel = oldCancel.cloneNode(true);
+  oldCancel.parentNode.replaceChild(newCancel, oldCancel);
+
+  const close = () => modal.classList.remove('classify-modal-open');
+  newConfirm.addEventListener('click', () => { close(); onConfirm(); });
+  newCancel.addEventListener('click', close);
+  document.getElementById('classifyModalBackdrop').onclick = close;
+}
+
+function _classifyRenderResultCard(r) {
+  const conf = (r.confidence == null ? 0 : r.confidence).toFixed(2);
+  const days = r.days_in_regime == null ? 0 : r.days_in_regime;
+  const cost = (r.cost_usd == null ? 0 : r.cost_usd).toFixed(4);
+  const dayLabel = days === 1 ? '1 day' : `${days} days`;
+  const datedLine = r.features_dated
+    ? `<div class="classify-result-features-dated">Features dated: ${regimeEscape(r.features_dated)}</div>`
+    : '';
+  const rationaleLine = r.rationale
+    ? `<div class="classify-result-rationale">${regimeEscape(r.rationale)}</div>`
+    : '';
+  return `<div class="classify-result-card">
+      <div class="classify-result-title">✓ ${regimeEscape(r.instrument)} classified</div>
+      <div class="classify-result-row"><span class="classify-result-label">Raw regime:</span>
+        ${regimePill(r.raw_regime)} <span style="color:var(--muted)">(confidence ${conf})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Smoothed:</span>
+        ${regimePill(r.smoothed_regime)} <span style="color:var(--muted)">(${dayLabel})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Cost:</span>
+        $${cost}</div>
+      ${rationaleLine}
+      ${datedLine}
+    </div>`;
+}
+
+async function _classifyRun(payload) {
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML = '';
+
+  if (payload.all) {
+    _classifyShowProgress(
+      `Classifying ${_classifyState.instruments.length} instruments sequentially — `
+      + `takes about ${Math.ceil(_classifyState.instruments.length * 2)}s…`,
+    );
+  } else {
+    _classifyShowProgress(`Classifying ${payload.instrument}…`);
+  }
+
+  document.getElementById('classifyBtn').disabled = true;
+  document.getElementById('classifyShowLastBtn').disabled = true;
+
+  try {
+    const r = await fetch('/api/regime/classify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ..._classifyAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    let body;
+    try { body = await r.json(); } catch { body = {}; }
+    _classifyHideProgress();
+
+    if (r.status === 200) {
+      const results = body.results || [body];
+      const html = results.map(_classifyRenderResultCard).join('');
+      document.getElementById('classifyResult').innerHTML = html;
+    } else {
+      let msg = body.error || `HTTP ${r.status}`;
+      if (body.partial_results && body.partial_results.length > 0) {
+        const html = body.partial_results.map(_classifyRenderResultCard).join('');
+        document.getElementById('classifyResult').innerHTML = html;
+        msg = `Stopped after ${body.partial_results.length} instrument(s) at `
+          + `${body.stopped_on || '?'}: ${msg}`;
+      }
+      if (r.status === 429 && body.retry_after_seconds) {
+        msg += ` (retry in ${body.retry_after_seconds}s)`;
+      }
+      _classifyShowError(msg);
+    }
+    await _classifyRefreshBudget();
+  } catch (err) {
+    _classifyHideProgress();
+    _classifyShowError('Request failed: ' + (err.message || err));
+  } finally {
+    document.getElementById('classifyBtn').disabled = false;
+    document.getElementById('classifyShowLastBtn').disabled = false;
+  }
+}
+
+function _classifyOnClick() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel) {
+    _classifyShowError('Pick an instrument first.');
+    return;
+  }
+  if (sel === '__ALL__') {
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    _classifyOpenModal(
+      `Re-classify all ${n} instruments using their most recently cached features? `
+      + `This will replace today's cached classifications. Cost: ~$${cost}. `
+      + `Takes about 30 seconds.`,
+      () => _classifyRun({ all: true }),
+    );
+  } else {
+    _classifyOpenModal(
+      `Re-classify ${regimeEscape(sel)}? `
+      + `This will replace today's cached classification. `
+      + `Cost: ~$${_classifyState.costPer.toFixed(2)}.`,
+      () => _classifyRun({ instrument: sel }),
+    );
+  }
+}
+
+async function _classifyShowLast() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel || sel === '__ALL__') {
+    _classifyShowError('Pick a single instrument first.');
+    return;
+  }
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML =
+    '<div class="classify-result-card"><span style="color:var(--muted)">Loading…</span></div>';
+  try {
+    const r = await fetch('/api/regime/states?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (!r.ok) {
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`Failed to load last classification: HTTP ${r.status}`);
+      return;
+    }
+    const all = await r.json();
+    const match = (all || []).find(x => x.instrument === sel);
+    if (!match) {
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`No prior classification found for ${sel}.`);
+      return;
+    }
+    document.getElementById('classifyResult').innerHTML = _classifyRenderResultCard({
+      instrument: match.instrument,
+      raw_regime: match.raw_regime,
+      confidence: match.confidence,
+      smoothed_regime: match.smoothed_regime,
+      days_in_regime: match.days_in_regime,
+      cost_usd: 0,
+      rationale: 'Last cached classification — no fresh API call made.',
+      features_dated: match.trading_date,
+    });
+  } catch (err) {
+    document.getElementById('classifyResult').innerHTML = '';
+    _classifyShowError('Request failed: ' + (err.message || err));
+  }
+}
+
+// Wire static event listeners once at script load.
+const _classifySelect = document.getElementById('classifyInstrument');
+if (_classifySelect) {
+  _classifySelect.addEventListener('change', _classifyUpdateCostEstimate);
+}
+const _classifyBtnEl = document.getElementById('classifyBtn');
+if (_classifyBtnEl) _classifyBtnEl.addEventListener('click', _classifyOnClick);
+const _classifyShowLastEl = document.getElementById('classifyShowLastBtn');
+if (_classifyShowLastEl) _classifyShowLastEl.addEventListener('click', _classifyShowLast);
 </script>
 </body>
 </html>

@@ -1482,21 +1482,24 @@ _classify_lock = threading.Lock()
 ESTIMATED_COST_PER_CLASSIFICATION = 0.02  # display-only; logged value is real
 
 
-def _cached_features(db_path: str, instrument: str) -> "dict | None":
-    """Read features from the most recent regime_classification_cache row.
-
-    Returns None when the instrument has never been classified — the caller
-    surfaces that as a 409 ('classify not yet possible')."""
+def _cached_features(db_path: str, instrument: str) -> "tuple[dict, str] | None":
+    """Read features + their source trading_date from the most recent
+    regime_classification_cache row. Returns (features, trading_date) or
+    None if the instrument has never been classified."""
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            "SELECT classification_json FROM regime_classification_cache "
+            "SELECT classification_json, trading_date "
+            "FROM regime_classification_cache "
             "WHERE instrument = ? ORDER BY created_at DESC LIMIT 1",
             (instrument,),
         ).fetchone()
     if row is None:
         return None
     try:
-        return json.loads(row[0]).get("features")
+        features = json.loads(row[0]).get("features")
+        if features is None:
+            return None
+        return features, row[1]
     except (json.JSONDecodeError, TypeError):
         return None
 
@@ -1533,12 +1536,14 @@ def _classify_one_locked(symbol: str) -> "tuple[dict | None, int, str | None]":
             f"${DEFAULT_MAX_DAILY_COST_USD:.2f})"
         )
 
-    features = _cached_features(REGIME_DB, symbol)
-    if features is None:
+    cached = _cached_features(REGIME_DB, symbol)
+    if cached is None:
         return None, 409, (
-            f"No cached features for {symbol}. Wait for the next daily "
-            f"scheduler run (post-close) before manual re-classify."
+            f"This instrument hasn't been classified yet. The next "
+            f"scheduled classification will run at ~21:30 UTC (US) / "
+            f"~17:00 UTC (LSE). Or restart the bot to force a fresh cycle."
         )
+    features, features_trading_date = cached
 
     classifier = RegimeClassifier(cache, cost_tracker)
     if not classifier.is_available():
@@ -1572,6 +1577,7 @@ def _classify_one_locked(symbol: str) -> "tuple[dict | None, int, str | None]":
         "days_in_regime": smoothed.days_in_regime,
         "cost_usd": cost_usd,
         "rationale": classification.rationale,
+        "features_dated": features_trading_date,
     }, 200, None
 
 

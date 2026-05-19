@@ -106,7 +106,7 @@ class TestClassifyTabScaffolding:
 
 
 class TestEndpointUrls:
-    """The six fetch URLs appear in the rendered JS."""
+    """The fetch URLs appear in the rendered JS."""
 
     @pytest.mark.parametrize("url", [
         "/api/regime/states",
@@ -115,9 +115,54 @@ class TestEndpointUrls:
         "/api/shadow/comparison",
         "/api/degradation/events",
         "/api/pauses/list",
+        "/api/regime/budget",
+        "/api/regime/instruments",
+        "/api/regime/classify",
     ])
     def test_url_present(self, rendered_html, url):
-        assert f"'{url}'" in rendered_html
+        assert f"'{url}" in rendered_html or f'"{url}' in rendered_html
+
+
+class TestClassifyTabJS:
+    """The Classify tab JS scaffolding: tab-activation hook, fetch helpers,
+    modal opener, result card renderer, and the user-facing copy strings."""
+
+    @pytest.mark.parametrize("fn_name", [
+        "initializeClassifyTab",
+        "_classifyRefreshBudget",
+        "_classifyPopulateDropdown",
+        "_classifyUpdateCostEstimate",
+        "_classifyOpenModal",
+        "_classifyRenderResultCard",
+        "_classifyRun",
+        "_classifyOnClick",
+        "_classifyShowLast",
+    ])
+    def test_function_present(self, rendered_html, fn_name):
+        assert f"function {fn_name}(" in rendered_html or \
+               f"async function {fn_name}(" in rendered_html
+
+    def test_activation_hooks_classify(self, rendered_html):
+        """activateRegimeTab must short-circuit to initializeClassifyTab
+        rather than calling fetchRegimeTab(key)."""
+        assert "key === 'classify'" in rendered_html
+        assert "initializeClassifyTab()" in rendered_html
+
+    def test_single_classify_modal_copy(self, rendered_html):
+        assert "This will replace today's cached classification." in rendered_html
+
+    def test_all_classify_modal_copy(self, rendered_html):
+        # Agreed copy contains all three phrases:
+        assert "using their most recently cached features" in rendered_html
+        assert "This will replace today's cached classifications" in rendered_html
+        assert "Takes about 30 seconds" in rendered_html
+
+    def test_result_card_features_dated_line(self, rendered_html):
+        assert "Features dated:" in rendered_html
+
+    def test_show_last_uses_states_endpoint(self, rendered_html):
+        # _classifyShowLast reads from /api/regime/states (no fresh API call)
+        assert "Last cached classification — no fresh API call made." in rendered_html
 
 
 class TestFStringEscaping:

@@ -308,7 +308,29 @@ class TestClassifyEndpoint:
                                json={"instrument": "FRESH"},
                                headers=_hdrs(token))
         assert resp.status_code == 409
-        assert "No cached features" in resp.get_json()["error"]
+        msg = resp.get_json()["error"]
+        # Operator-facing copy includes the schedule guidance:
+        assert "hasn't been classified yet" in msg
+        assert "17:00 UTC" in msg or "21:30 UTC" in msg
+
+    def test_response_includes_features_dated(self, api_setup):
+        """The result panel surfaces the trading_date of the features
+        that fed this classification."""
+        client, token, _, _, _ = api_setup
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("anthropic.Anthropic") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_client.messages.create.return_value = (
+                    _fake_anthropic_response("TRENDING", 0.9)
+                )
+                mock_client_cls.return_value = mock_client
+                resp = client.post("/api/regime/classify",
+                                   json={"instrument": "AAPL"},
+                                   headers=_hdrs(token))
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # The seeded cache row used trading_date='2026-05-10'
+        assert data["features_dated"] == "2026-05-10"
 
     def test_all_classifies_every_active_instrument(self, api_setup):
         client, token, _, _, _ = api_setup

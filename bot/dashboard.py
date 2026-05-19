@@ -790,7 +790,7 @@ async function fetchRegimeTab(key) {{
 }}
 
 function activateRegimeTab(key) {{
-  if (!REGIME_TABS[key]) return;
+  if (key !== 'classify' && !REGIME_TABS[key]) return;
   _activeRegimeTab = key;
   document.querySelectorAll('.regime-tab').forEach(b => {{
     b.classList.toggle('active', b.dataset.tab === key);
@@ -798,8 +798,12 @@ function activateRegimeTab(key) {{
   document.querySelectorAll('.regime-pane').forEach(p => {{
     p.classList.toggle('active', p.id === 'regime-pane-' + key);
   }});
-  fetchRegimeTab(key);
   if (_regimeRefreshTimer) clearInterval(_regimeRefreshTimer);
+  if (key === 'classify') {{
+    initializeClassifyTab();
+    return;
+  }}
+  fetchRegimeTab(key);
   _regimeRefreshTimer = setInterval(() => fetchRegimeTab(_activeRegimeTab), 30000);
 }}
 
@@ -811,6 +815,297 @@ if (_regimeNav) {{
   }});
   activateRegimeTab('regime');
 }}
+
+// ──────────────────────────────────────────────────────
+// Classify tab — operator-triggered re-roll of Claude on
+// the most recent cached features (commit 3 of 4)
+// ──────────────────────────────────────────────────────
+const _classifyState = {{ instruments: [], costPer: 0.02, initialized: false }};
+
+function _classifyAuthHeaders() {{
+  const token = localStorage.getItem('jwt_token') || '';
+  return token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+}}
+
+function _classifyShowError(msg) {{
+  const el = document.getElementById('classifyError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}}
+
+function _classifyHideError() {{
+  document.getElementById('classifyError').style.display = 'none';
+}}
+
+function _classifyShowProgress(msg) {{
+  const el = document.getElementById('classifyProgress');
+  el.textContent = msg;
+  el.style.display = 'block';
+}}
+
+function _classifyHideProgress() {{
+  document.getElementById('classifyProgress').style.display = 'none';
+}}
+
+async function _classifyRefreshBudget() {{
+  try {{
+    const r = await fetch('/api/regime/budget?t=' + Date.now(), {{
+      headers: _classifyAuthHeaders(),
+    }});
+    if (!r.ok) return;
+    const b = await r.json();
+    const el = document.getElementById('classifyBudget');
+    const remainingPct = b.max_daily_cost_usd > 0
+      ? b.remaining_usd / b.max_daily_cost_usd : 0;
+    let cls = '';
+    if (b.remaining_usd <= 0) cls = ' classify-budget-exhausted';
+    else if (remainingPct < 0.2) cls = ' classify-budget-low';
+    el.className = 'classify-budget' + cls;
+    el.innerHTML = `Today's API budget: $${{b.remaining_usd.toFixed(2)}} of `
+      + `$${{b.max_daily_cost_usd.toFixed(2)}} remaining`
+      + ` <span class="classify-budget-spent">`
+      + `($${{b.spent_today_usd.toFixed(4)}} spent today)</span>`;
+  }} catch (err) {{
+    // Best-effort: leave the previous banner in place.
+  }}
+}}
+
+function _classifyPopulateDropdown() {{
+  const select = document.getElementById('classifyInstrument');
+  const items = _classifyState.instruments;
+  let html = '<option value="" disabled selected>Select an instrument…</option>';
+  items.forEach(s => {{
+    html += `<option value="${{regimeEscape(s)}}">${{regimeEscape(s)}}</option>`;
+  }});
+  if (items.length > 0) {{
+    html += `<option value="__ALL__">— ALL INSTRUMENTS (${{items.length}}) —</option>`;
+  }}
+  select.innerHTML = html;
+  select.disabled = items.length === 0;
+  document.getElementById('classifyBtn').disabled = items.length === 0;
+  document.getElementById('classifyShowLastBtn').disabled = items.length === 0;
+  _classifyUpdateCostEstimate();
+}}
+
+function _classifyUpdateCostEstimate() {{
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  const el = document.getElementById('classifyCostEstimate');
+  if (sel === '__ALL__') {{
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    el.textContent = `Cost estimate: ~$${{cost}} (${{n}} instruments)`;
+  }} else if (sel) {{
+    el.textContent = `Cost estimate: ~$${{_classifyState.costPer.toFixed(2)}}`;
+  }} else {{
+    el.textContent = '';
+  }}
+}}
+
+async function initializeClassifyTab() {{
+  _classifyHideError();
+  _classifyHideProgress();
+  await _classifyRefreshBudget();
+
+  try {{
+    const r = await fetch('/api/regime/instruments?t=' + Date.now(), {{
+      headers: _classifyAuthHeaders(),
+    }});
+    if (r.status === 401) {{
+      _classifyShowError('Session expired — log in again.');
+      return;
+    }}
+    if (!r.ok) {{
+      _classifyShowError('Failed to load instruments: HTTP ' + r.status);
+      return;
+    }}
+    const data = await r.json();
+    _classifyState.instruments = data.instruments || [];
+    _classifyState.costPer = data.estimated_cost_per_classification_usd || 0.02;
+    _classifyState.initialized = true;
+    _classifyPopulateDropdown();
+  }} catch (err) {{
+    _classifyShowError('Failed to load instruments: ' + (err.message || err));
+  }}
+}}
+
+function _classifyOpenModal(bodyHtml, onConfirm) {{
+  const modal = document.getElementById('classifyModal');
+  document.getElementById('classifyModalBody').innerHTML = bodyHtml;
+  modal.classList.add('classify-modal-open');
+
+  // Replace buttons to clear any prior listeners.
+  const oldConfirm = document.getElementById('classifyModalConfirm');
+  const newConfirm = oldConfirm.cloneNode(true);
+  oldConfirm.parentNode.replaceChild(newConfirm, oldConfirm);
+
+  const oldCancel = document.getElementById('classifyModalCancel');
+  const newCancel = oldCancel.cloneNode(true);
+  oldCancel.parentNode.replaceChild(newCancel, oldCancel);
+
+  const close = () => modal.classList.remove('classify-modal-open');
+  newConfirm.addEventListener('click', () => {{ close(); onConfirm(); }});
+  newCancel.addEventListener('click', close);
+  document.getElementById('classifyModalBackdrop').onclick = close;
+}}
+
+function _classifyRenderResultCard(r) {{
+  const conf = (r.confidence == null ? 0 : r.confidence).toFixed(2);
+  const days = r.days_in_regime == null ? 0 : r.days_in_regime;
+  const cost = (r.cost_usd == null ? 0 : r.cost_usd).toFixed(4);
+  const dayLabel = days === 1 ? '1 day' : `${{days}} days`;
+  const datedLine = r.features_dated
+    ? `<div class="classify-result-features-dated">Features dated: ${{regimeEscape(r.features_dated)}}</div>`
+    : '';
+  const rationaleLine = r.rationale
+    ? `<div class="classify-result-rationale">${{regimeEscape(r.rationale)}}</div>`
+    : '';
+  return `<div class="classify-result-card">
+      <div class="classify-result-title">✓ ${{regimeEscape(r.instrument)}} classified</div>
+      <div class="classify-result-row"><span class="classify-result-label">Raw regime:</span>
+        ${{regimePill(r.raw_regime)}} <span style="color:var(--muted)">(confidence ${{conf}})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Smoothed:</span>
+        ${{regimePill(r.smoothed_regime)}} <span style="color:var(--muted)">(${{dayLabel}})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Cost:</span>
+        $${{cost}}</div>
+      ${{rationaleLine}}
+      ${{datedLine}}
+    </div>`;
+}}
+
+async function _classifyRun(payload) {{
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML = '';
+
+  if (payload.all) {{
+    _classifyShowProgress(
+      `Classifying ${{_classifyState.instruments.length}} instruments sequentially — `
+      + `takes about ${{Math.ceil(_classifyState.instruments.length * 2)}}s…`,
+    );
+  }} else {{
+    _classifyShowProgress(`Classifying ${{payload.instrument}}…`);
+  }}
+
+  document.getElementById('classifyBtn').disabled = true;
+  document.getElementById('classifyShowLastBtn').disabled = true;
+
+  try {{
+    const r = await fetch('/api/regime/classify', {{
+      method: 'POST',
+      headers: {{
+        'Content-Type': 'application/json',
+        ..._classifyAuthHeaders(),
+      }},
+      body: JSON.stringify(payload),
+    }});
+    let body;
+    try {{ body = await r.json(); }} catch {{ body = {{}}; }}
+    _classifyHideProgress();
+
+    if (r.status === 200) {{
+      const results = body.results || [body];
+      const html = results.map(_classifyRenderResultCard).join('');
+      document.getElementById('classifyResult').innerHTML = html;
+    }} else {{
+      let msg = body.error || `HTTP ${{r.status}}`;
+      if (body.partial_results && body.partial_results.length > 0) {{
+        const html = body.partial_results.map(_classifyRenderResultCard).join('');
+        document.getElementById('classifyResult').innerHTML = html;
+        msg = `Stopped after ${{body.partial_results.length}} instrument(s) at `
+          + `${{body.stopped_on || '?'}}: ${{msg}}`;
+      }}
+      if (r.status === 429 && body.retry_after_seconds) {{
+        msg += ` (retry in ${{body.retry_after_seconds}}s)`;
+      }}
+      _classifyShowError(msg);
+    }}
+    await _classifyRefreshBudget();
+  }} catch (err) {{
+    _classifyHideProgress();
+    _classifyShowError('Request failed: ' + (err.message || err));
+  }} finally {{
+    document.getElementById('classifyBtn').disabled = false;
+    document.getElementById('classifyShowLastBtn').disabled = false;
+  }}
+}}
+
+function _classifyOnClick() {{
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel) {{
+    _classifyShowError('Pick an instrument first.');
+    return;
+  }}
+  if (sel === '__ALL__') {{
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    _classifyOpenModal(
+      `Re-classify all ${{n}} instruments using their most recently cached features? `
+      + `This will replace today's cached classifications. Cost: ~$${{cost}}. `
+      + `Takes about 30 seconds.`,
+      () => _classifyRun({{ all: true }}),
+    );
+  }} else {{
+    _classifyOpenModal(
+      `Re-classify ${{regimeEscape(sel)}}? `
+      + `This will replace today's cached classification. `
+      + `Cost: ~$${{_classifyState.costPer.toFixed(2)}}.`,
+      () => _classifyRun({{ instrument: sel }}),
+    );
+  }}
+}}
+
+async function _classifyShowLast() {{
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel || sel === '__ALL__') {{
+    _classifyShowError('Pick a single instrument first.');
+    return;
+  }}
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML =
+    '<div class="classify-result-card"><span style="color:var(--muted)">Loading…</span></div>';
+  try {{
+    const r = await fetch('/api/regime/states?t=' + Date.now(), {{
+      headers: _classifyAuthHeaders(),
+    }});
+    if (!r.ok) {{
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`Failed to load last classification: HTTP ${{r.status}}`);
+      return;
+    }}
+    const all = await r.json();
+    const match = (all || []).find(x => x.instrument === sel);
+    if (!match) {{
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`No prior classification found for ${{sel}}.`);
+      return;
+    }}
+    document.getElementById('classifyResult').innerHTML = _classifyRenderResultCard({{
+      instrument: match.instrument,
+      raw_regime: match.raw_regime,
+      confidence: match.confidence,
+      smoothed_regime: match.smoothed_regime,
+      days_in_regime: match.days_in_regime,
+      cost_usd: 0,
+      rationale: 'Last cached classification — no fresh API call made.',
+      features_dated: match.trading_date,
+    }});
+  }} catch (err) {{
+    document.getElementById('classifyResult').innerHTML = '';
+    _classifyShowError('Request failed: ' + (err.message || err));
+  }}
+}}
+
+// Wire static event listeners once at script load.
+const _classifySelect = document.getElementById('classifyInstrument');
+if (_classifySelect) {{
+  _classifySelect.addEventListener('change', _classifyUpdateCostEstimate);
+}}
+const _classifyBtnEl = document.getElementById('classifyBtn');
+if (_classifyBtnEl) _classifyBtnEl.addEventListener('click', _classifyOnClick);
+const _classifyShowLastEl = document.getElementById('classifyShowLastBtn');
+if (_classifyShowLastEl) _classifyShowLastEl.addEventListener('click', _classifyShowLast);
 </script>
 </body>
 </html>"""
