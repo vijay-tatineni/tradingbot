@@ -1372,6 +1372,103 @@ def advisor_news():
         return jsonify({'error': str(e)}), 500
 
 
+# ── Regime dashboard routes (§15.5) ─────────────────────
+REGIME_DB = str(BASE_DIR / 'regime.db')
+
+
+def _init_overlay_registry_safe():
+    try:
+        from bot.overlays.registry import init_overlay_registry
+        init_overlay_registry(REGIME_DB)
+    except Exception as e:
+        print(f"[Regime] Overlay registry init failed: {e}")
+
+
+_init_overlay_registry_safe()
+
+
+def _active_instruments_from_config():
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+        return [
+            i['symbol']
+            for i in data.get('layer1_active', [])
+            if i.get('enabled', True) and i.get('symbol')
+        ]
+    except Exception:
+        return []
+
+
+@app.route('/api/regime/states', methods=['GET'])
+@require_auth
+def regime_states_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_regime_states(REGIME_DB))
+
+
+@app.route('/api/overlays/active', methods=['GET'])
+@require_auth
+def regime_overlays_active_route():
+    """
+    Live-compute active overlays by calling active_overlays() per
+    configured instrument with an empty ctx. MACRO_LOCKOUT will fire
+    correctly because macro events load from the DB. DATA_QUALITY and
+    LOW_LIQUIDITY require bot runtime context (recent bars, volume) and
+    will not appear in this view — see docs/TECH_DEBT.md.
+    """
+    try:
+        from bot.overlays.registry import active_overlays as _active_overlays
+    except Exception as e:
+        return jsonify({'error': f'overlays unavailable: {e}'}), 500
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    by_overlay = {}
+    for sym in _active_instruments_from_config():
+        try:
+            checks = _active_overlays(sym, now, {})
+        except Exception:
+            continue
+        for check in checks:
+            key = check.overlay_name
+            if key not in by_overlay:
+                by_overlay[key] = {
+                    'overlay_name': key,
+                    'reason': check.reason,
+                    'instruments_affected': [],
+                }
+            by_overlay[key]['instruments_affected'].append(sym)
+    return jsonify(list(by_overlay.values()))
+
+
+@app.route('/api/routing/decisions', methods=['GET'])
+@require_auth
+def regime_routing_decisions_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_current_routing(REGIME_DB))
+
+
+@app.route('/api/shadow/comparison', methods=['GET'])
+@require_auth
+def regime_shadow_comparison_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_shadow_decisions(REGIME_DB, limit=50))
+
+
+@app.route('/api/degradation/events', methods=['GET'])
+@require_auth
+def regime_degradation_events_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_degradation_events(REGIME_DB, limit=50))
+
+
+@app.route('/api/pauses/list', methods=['GET'])
+@require_auth
+def regime_pauses_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_instrument_pauses(REGIME_DB, active_only=True))
+
+
 # ── Calendar UI routes (§15.4) ─────────────────────────
 def _maybe_register_calendar():
     """Register calendar blueprint if enable_calendar_ui is true."""
