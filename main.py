@@ -44,6 +44,11 @@ from bot.logger        import log, banner, separator
 from bot.regime.flags  import FeatureFlags
 from bot.regime.orchestrator import RegimeOrchestrator
 from bot.regime.log_setup    import setup_regime_logging
+from bot.regime.cache        import RegimeCache
+from bot.regime.classifier   import RegimeClassifier
+from bot.regime.cost_tracker import CostTracker
+from bot.regime.scheduler    import RegimeClassificationScheduler
+from bot.regime.smoothing_store import SmoothedStateStore
 from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
 from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
 from bot.regime.router     import route as regime_route
@@ -138,6 +143,13 @@ class TradingBot:
         self.pause_registry = InstrumentPauseRegistry(regime_db)
         self.cf_logger = CounterfactualLogger(regime_db)
         self.pm_store = PositionMetadataStore(regime_db)
+        self.regime_cache = RegimeCache(regime_db)
+        self.regime_cost_tracker = CostTracker(regime_db)
+        self.smoothing_store = SmoothedStateStore(regime_db)
+        self.regime_classifier = RegimeClassifier(
+            cache=self.regime_cache,
+            cost_tracker=self.regime_cost_tracker,
+        )
 
         self.orchestrator = RegimeOrchestrator(
             flags=self.flags,
@@ -150,6 +162,14 @@ class TradingBot:
             config_path=config_path,
         )
         self.register_plugin(self.orchestrator)
+
+        self.regime_scheduler = RegimeClassificationScheduler(
+            flags=self.flags,
+            classifier=self.regime_classifier,
+            cache=self.regime_cache,
+            smoothing_store=self.smoothing_store,
+            bars_fetcher=self._regime_bars_fetcher,
+        )
 
         setup_regime_logging(str(BASE_DIR))
 
@@ -252,6 +272,20 @@ class TradingBot:
                 # ── Layer 3: Silver Scalper (every cycle, LSE hours) ─
                 self.l3.run()
 
+                # ── Daily regime classifier scheduler (idempotent) ──
+                try:
+                    sched_summary = self.regime_scheduler.maybe_run(
+                        self.cfg.active_instruments
+                    )
+                    if sched_summary["classified"]:
+                        log(f"[Scheduler] Classified "
+                            f"{len(sched_summary['classified'])} instruments")
+                    if sched_summary["errors"]:
+                        log(f"[Scheduler] Errors: {sched_summary['errors']}",
+                            "WARN")
+                except Exception as e:
+                    log(f"[Scheduler] Cycle error: {e}", "WARN")
+
                 # ── Dashboard update ──────────────────────────
                 self.dash.update(
                     cycle       = cycle,
@@ -313,6 +347,23 @@ class TradingBot:
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
                 self.broker.reconnect()
+
+    def _regime_bars_fetcher(self, inst: dict):
+        """Daily-bar fetcher injected into RegimeClassificationScheduler.
+
+        Returns None when the contract isn't qualified yet (pre-startup) or
+        when the broker has no data — the scheduler treats that as an error
+        for that instrument and moves on.
+        """
+        contract = inst.get("contract")
+        if contract is None:
+            return None
+        try:
+            return self.broker.fetch_bars(contract, days=300, bar_size="1 day")
+        except Exception as e:
+            log(f"[Scheduler] fetch_bars failed for "
+                f"{inst.get('symbol', '?')}: {e}", "WARN")
+            return None
 
     def _get_today_trades(self) -> list:
         """Get today's closed trades from learning_loop.db."""

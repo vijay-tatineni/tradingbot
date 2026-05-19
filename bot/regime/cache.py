@@ -59,6 +59,20 @@ class RegimeCache:
             cache_hit=True,
         )
 
+    def has_for_day(self, instrument: str, trading_date: str) -> bool:
+        """True if any classification row exists for (instrument, trading_date).
+
+        Used by the scheduler for once-per-day idempotency, independent of
+        input_hash (features may shift slightly intraday).
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM regime_classification_cache "
+                "WHERE instrument = ? AND trading_date = ? LIMIT 1",
+                (instrument, trading_date),
+            ).fetchone()
+        return row is not None
+
     def put(self, classification: RegimeClassification) -> None:
         data = {
             "instrument": classification.instrument,
