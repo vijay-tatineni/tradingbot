@@ -43,19 +43,22 @@ class RegimeClassifier:
         return self._client is not None
 
     def classify(self, instrument: str, trading_date: str,
-                 features: dict) -> RegimeClassification:
+                 features: dict, force: bool = False) -> RegimeClassification:
+        """Classify regime. force=True bypasses the input-hash cache and
+        always calls the API (operator-triggered re-rolls)."""
         input_hash = self._compute_hash(features)
 
-        cached = self._cache.get(instrument, trading_date, input_hash)
-        if cached is not None:
-            logger.info(f"Cache hit for {instrument} on {trading_date}")
-            self._cost_tracker.log_classification(
-                instrument=instrument, trading_date=trading_date,
-                model=self._model, prompt_version=PROMPT_VERSION,
-                raw_regime=cached.raw_regime, confidence=cached.confidence,
-                cache_hit=True,
-            )
-            return cached
+        if not force:
+            cached = self._cache.get(instrument, trading_date, input_hash)
+            if cached is not None:
+                logger.info(f"Cache hit for {instrument} on {trading_date}")
+                self._cost_tracker.log_classification(
+                    instrument=instrument, trading_date=trading_date,
+                    model=self._model, prompt_version=PROMPT_VERSION,
+                    raw_regime=cached.raw_regime, confidence=cached.confidence,
+                    cache_hit=True,
+                )
+                return cached
 
         if self._cost_tracker.is_budget_exceeded(trading_date):
             logger.warning(f"Daily budget exceeded for {trading_date}, using fallback")

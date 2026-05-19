@@ -1469,6 +1469,192 @@ def regime_pauses_route():
     return jsonify(dashboard_data.get_instrument_pauses(REGIME_DB, active_only=True))
 
 
+# ── Manual regime classification routes (Classify tab) ───
+# Operator-triggered classifier re-rolls. Bypasses enable_classifier_shadow
+# and the daily input-hash cache. Reads features from the most recent cached
+# classification per instrument — daily bars don't change intraday, so the
+# scheduler's last fetch is the freshest features available outside the bot
+# process.
+
+_CLASSIFY_RATE_LIMIT_SECONDS = 300  # 5 min per instrument
+_classify_last_ts: dict = {}  # symbol → unix timestamp of last classification
+_classify_lock = threading.Lock()
+ESTIMATED_COST_PER_CLASSIFICATION = 0.02  # display-only; logged value is real
+
+
+def _cached_features(db_path: str, instrument: str) -> "dict | None":
+    """Read features from the most recent regime_classification_cache row.
+
+    Returns None when the instrument has never been classified — the caller
+    surfaces that as a 409 ('classify not yet possible')."""
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT classification_json FROM regime_classification_cache "
+            "WHERE instrument = ? ORDER BY created_at DESC LIMIT 1",
+            (instrument,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row[0]).get("features")
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _rate_limit_remaining(symbol: str) -> float:
+    last = _classify_last_ts.get(symbol)
+    if last is None:
+        return 0.0
+    remaining = _CLASSIFY_RATE_LIMIT_SECONDS - (_time.time() - last)
+    return max(remaining, 0.0)
+
+
+def _classify_one_locked(symbol: str) -> "tuple[dict | None, int, str | None]":
+    """Returns (result_payload, http_status, error_msg).
+
+    Caller already holds _classify_lock. Persists to cache + smoothed store
+    and bumps the rate-limit timestamp on success."""
+    from bot.regime.cache import RegimeCache
+    from bot.regime.classifier import RegimeClassifier
+    from bot.regime.cost_tracker import CostTracker, DEFAULT_MAX_DAILY_COST_USD
+    from bot.regime.smoothing import update, update_first_run, initial_state
+    from bot.regime.smoothing_store import SmoothedStateStore
+
+    cache = RegimeCache(REGIME_DB)
+    cost_tracker = CostTracker(REGIME_DB)
+    store = SmoothedStateStore(REGIME_DB)
+
+    trading_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    if cost_tracker.is_budget_exceeded(trading_date):
+        return None, 402, (
+            f"Daily classifier budget exhausted "
+            f"(${cost_tracker.get_daily_spend(trading_date):.4f} of "
+            f"${DEFAULT_MAX_DAILY_COST_USD:.2f})"
+        )
+
+    features = _cached_features(REGIME_DB, symbol)
+    if features is None:
+        return None, 409, (
+            f"No cached features for {symbol}. Wait for the next daily "
+            f"scheduler run (post-close) before manual re-classify."
+        )
+
+    classifier = RegimeClassifier(cache, cost_tracker)
+    if not classifier.is_available():
+        return None, 503, "Anthropic client unavailable (ANTHROPIC_API_KEY not set)"
+
+    # Cost before/after delta for the per-call cost_usd in the response.
+    spend_before = cost_tracker.get_daily_spend(trading_date)
+    classification = classifier.classify(symbol, trading_date, features, force=True)
+    spend_after = cost_tracker.get_daily_spend(trading_date)
+    cost_usd = max(spend_after - spend_before, 0.0)
+
+    # Make sure the cache row exists even on fallback paths (classifier only
+    # writes happy-path; mirroring the scheduler's behaviour for idempotency).
+    cache.put(classification)
+
+    prior = store.get_latest(symbol)
+    if prior is None:
+        prior = initial_state(symbol)
+        smoothed = update_first_run(prior, classification)
+    else:
+        smoothed = update(prior, classification)
+    store.put(smoothed)
+
+    _classify_last_ts[symbol] = _time.time()
+
+    return {
+        "instrument": symbol,
+        "raw_regime": classification.raw_regime,
+        "confidence": classification.confidence,
+        "smoothed_regime": smoothed.effective_regime,
+        "days_in_regime": smoothed.days_in_regime,
+        "cost_usd": cost_usd,
+        "rationale": classification.rationale,
+    }, 200, None
+
+
+@app.route('/api/regime/budget', methods=['GET'])
+@require_auth
+def regime_budget_route():
+    from bot.regime.cost_tracker import CostTracker, DEFAULT_MAX_DAILY_COST_USD
+    trading_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    spent = CostTracker(REGIME_DB).get_daily_spend(trading_date)
+    return jsonify({
+        "spent_today_usd": round(spent, 6),
+        "max_daily_cost_usd": DEFAULT_MAX_DAILY_COST_USD,
+        "remaining_usd": round(max(DEFAULT_MAX_DAILY_COST_USD - spent, 0.0), 6),
+    })
+
+
+@app.route('/api/regime/instruments', methods=['GET'])
+@require_auth
+def regime_instruments_route():
+    """Active instrument symbols + per-instrument display metadata for the
+    Classify dropdown. Excludes disabled/no-edge entries."""
+    return jsonify({
+        "instruments": _active_instruments_from_config(),
+        "estimated_cost_per_classification_usd": ESTIMATED_COST_PER_CLASSIFICATION,
+    })
+
+
+@app.route('/api/regime/classify', methods=['POST'])
+@require_auth
+def regime_classify_route():
+    body = request.get_json(silent=True) or {}
+    do_all = bool(body.get('all'))
+    symbol = body.get('instrument')
+
+    if not do_all and not symbol:
+        return jsonify({'error': "Body must include 'instrument' or 'all: true'"}), 400
+
+    active = set(_active_instruments_from_config())
+
+    if do_all:
+        targets = sorted(active)
+        if not targets:
+            return jsonify({'error': 'No active instruments configured'}), 400
+    else:
+        if symbol not in active:
+            return jsonify({'error': f"Unknown or inactive instrument: {symbol}"}), 400
+        targets = [symbol]
+
+    # Serialise all classifier calls — Anthropic billing is shared and we
+    # want a stable per-day budget check between iterations.
+    with _classify_lock:
+        # Pre-flight rate limit: any target inside the cooldown window aborts.
+        for s in targets:
+            remaining = _rate_limit_remaining(s)
+            if remaining > 0:
+                return jsonify({
+                    'error': f"Rate limited for {s}: retry in "
+                             f"{int(remaining)}s",
+                    'retry_after_seconds': int(remaining),
+                }), 429
+
+        results = []
+        for s in targets:
+            payload, status, err = _classify_one_locked(s)
+            if status == 200:
+                results.append(payload)
+            else:
+                # Budget / no-features / API-unavailable failures stop the
+                # 'all' loop so the operator sees a clean partial result
+                # instead of churning through more failed calls.
+                if do_all:
+                    return jsonify({
+                        'partial_results': results,
+                        'stopped_on': s,
+                        'error': err,
+                    }), status
+                return jsonify({'error': err}), status
+
+    if do_all:
+        return jsonify({'results': results})
+    return jsonify(results[0])
+
+
 # ── Calendar UI routes (§15.4) ─────────────────────────
 def _maybe_register_calendar():
     """Register calendar blueprint if enable_calendar_ui is true."""
