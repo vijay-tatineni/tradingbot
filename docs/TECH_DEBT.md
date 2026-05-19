@@ -186,3 +186,32 @@ Two fixes possible:
 The 2026-05-19 sync also surfaced that the inventory step missed `specs/`
 entirely — PR 6 should explicitly enumerate which top-level directories
 are needed for runtime vs documentation vs source-of-truth.
+
+## Dashboard rendering uses dual source of truth
+
+**Status:** Noted (PR6)
+
+`bot/dashboard.py:_write_html()` is an f-string template that regenerates
+`web/dashboard.html` every time `Dashboard.__init__` runs — on bot
+startup and on every test that instantiates `Dashboard(cfg)`. The
+committed `web/dashboard.html` is therefore a build artifact, not an
+authoritative source. Manual edits to `web/dashboard.html` survive only
+until the next regeneration.
+
+This bit PR 6: hours were lost discovering that
+`tests/test_disabled_instruments.py::test_disabled_shown_on_dashboard`
+was silently overwriting in-progress edits to `web/dashboard.html` by
+instantiating `Dashboard(cfg)` against the real config.
+
+PR 6's regime tabs are embedded directly in the f-string template
+alongside the existing Layer 1 / P&L sections. The f-string escaping
+(`{{` `}}` for literal braces, `${{var}}` for JS template literals) is
+fragile — `tests/regime/test_dashboard_template.py::TestFStringEscaping`
+guards against regressions but a future refactor should eliminate the
+approach.
+
+Future work: extract the template to a separate file (Jinja2 or read
+raw `web/dashboard.template.html`), have `_write_html()` substitute
+runtime fields by name. Then `web/dashboard.html` becomes a true cached
+copy of an authoritative template, and the template can be edited
+directly without `{{` escaping.

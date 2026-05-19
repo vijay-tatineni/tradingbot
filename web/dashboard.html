@@ -62,6 +62,29 @@ tr:hover td { background:#1c2128; }
 .pos-item { display:flex; gap:8px; align-items:baseline; font-size:0.7rem; }
 .pos-sym { color:var(--gold); font-weight:700; min-width:65px; }
 .pos-detail { color:var(--muted); font-size:0.63rem; }
+
+/* Regime layer */
+.regime-nav { display:flex; gap:2px; padding:8px 16px; border-bottom:1px solid var(--border); background:var(--bg3); flex-wrap:wrap; }
+.regime-tab { background:transparent; border:1px solid transparent; color:var(--muted); padding:6px 14px; font-family:'JetBrains Mono',monospace; font-size:0.7rem; cursor:pointer; border-radius:4px; letter-spacing:1px; }
+.regime-tab:hover { color:var(--text); border-color:var(--border); }
+.regime-tab.active { color:var(--gold); border-color:var(--gold); }
+.regime-tab .count { color:var(--muted); margin-left:6px; font-size:0.62rem; }
+.regime-tab.active .count { color:var(--gold); }
+.regime-pane { display:none; }
+.regime-pane.active { display:block; }
+.regime-empty { padding:24px 16px; color:var(--muted); font-size:0.72rem; line-height:1.5; }
+.regime-meta { padding:8px 16px; color:var(--muted); font-size:0.62rem; border-bottom:1px solid #1c2128; text-transform:uppercase; letter-spacing:1px; }
+.disagreement-row td { background:#3b0a0a; }
+.disagreement-row td:first-child { box-shadow:inset 3px 0 0 var(--red); }
+.regime-bool-yes { color:var(--green); font-weight:700; }
+.regime-bool-no { color:var(--red); font-weight:700; }
+.regime-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#1f2937; color:var(--blue); }
+.regime-pill.regime-TRENDING { background:#052e16; color:var(--green); }
+.regime-pill.regime-RANGING { background:#1e3a5f; color:var(--blue); }
+.regime-pill.regime-VOLATILE { background:#713f12; color:#fbbf24; }
+.regime-pill.regime-UNCLEAR { background:#1f2937; color:var(--muted); }
+.engine-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#0c2461; color:var(--blue); }
+.engine-pill.engine-NoOpEngine { background:#1f2937; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -127,6 +150,25 @@ tr:hover td { background:#1c2128; }
     <thead><tr><th>ETF</th><th>Price</th><th>RSI</th><th>W%R</th><th>Position</th><th>Action</th></tr></thead>
     <tbody id="layer2"></tbody>
   </table>
+</div>
+
+<div class="section">
+  <div class="section-title">// REGIME LAYER</div>
+  <div class="regime-nav" id="regimeNav">
+    <button class="regime-tab active" data-tab="regime">Regime</button>
+    <button class="regime-tab" data-tab="overlays">Overlays</button>
+    <button class="regime-tab" data-tab="routing">Routing</button>
+    <button class="regime-tab" data-tab="shadow">Shadow vs Live</button>
+    <button class="regime-tab" data-tab="degradation">Degradation</button>
+    <button class="regime-tab" data-tab="pauses">Pauses</button>
+  </div>
+  <div class="regime-meta" id="regimeMeta">Last refresh: --</div>
+  <div class="regime-pane active" id="regime-pane-regime"><div class="regime-empty">Loading...</div></div>
+  <div class="regime-pane" id="regime-pane-overlays"></div>
+  <div class="regime-pane" id="regime-pane-routing"></div>
+  <div class="regime-pane" id="regime-pane-shadow"></div>
+  <div class="regime-pane" id="regime-pane-degradation"></div>
+  <div class="regime-pane" id="regime-pane-pauses"></div>
 </div>
 
 <script>
@@ -319,6 +361,219 @@ function logout() {
   localStorage.removeItem('jwt_user');
   document.cookie = 'jwt_token=; path=/; max-age=0';
   window.location.href = 'login.html';
+}
+
+// ──────────────────────────────────────────────────────
+// Regime layer tabs (PR 6 §15.5)
+// ──────────────────────────────────────────────────────
+function regimeEscape(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function regimePill(value) {
+  if (!value) return '<span class="muted">--</span>';
+  const v = regimeEscape(value);
+  return `<span class="regime-pill regime-${v}">${v}</span>`;
+}
+
+function enginePill(value) {
+  if (!value) return '<span class="muted">--</span>';
+  const v = regimeEscape(value);
+  return `<span class="engine-pill engine-${v}">${v}</span>`;
+}
+
+function formatTs(ts) {
+  if (!ts) return '<span class="muted">--</span>';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return regimeEscape(ts);
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+  } catch (err) {
+    return regimeEscape(ts);
+  }
+}
+
+function regimeRenderTable(headers, rows) {
+  if (!rows || rows.length === 0) return null;
+  const thead = '<thead><tr>' +
+    headers.map(h => `<th>${regimeEscape(h)}</th>`).join('') + '</tr></thead>';
+  const tbody = '<tbody>' + rows.map(r => {
+    if (Array.isArray(r)) {
+      return '<tr>' + r.map(c => `<td>${c == null ? '' : c}</td>`).join('') + '</tr>';
+    }
+    const cls = r.rowClass ? ` class="${r.rowClass}"` : '';
+    return `<tr${cls}>` + r.cells.map(c => `<td>${c == null ? '' : c}</td>`).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  return `<table>${thead}${tbody}</table>`;
+}
+
+const REGIME_TABS = {
+  regime: {
+    url: '/api/regime/states',
+    empty: "Classifier hasn't run yet — first run typically happens after market close.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Raw regime', 'Confidence', 'Smoothed', 'Days in regime', 'Last classified'],
+      rows.slice().sort((a, b) => (a.instrument || '').localeCompare(b.instrument || '')).map(r => [
+        regimeEscape(r.instrument || ''),
+        regimePill(r.raw_regime),
+        r.confidence != null ? Number(r.confidence).toFixed(2) : '<span class="muted">--</span>',
+        regimePill(r.smoothed_regime),
+        r.days_in_regime != null ? String(r.days_in_regime) : '<span class="muted">--</span>',
+        formatTs(r.last_classified),
+      ])
+    ),
+  },
+  overlays: {
+    url: '/api/overlays/active',
+    empty: "No overlays currently active. This is normal during shadow phase. (MACRO_LOCKOUT events from the calendar would appear here; DATA_QUALITY and LOW_LIQUIDITY require bot runtime context and are not displayed in this view — check the Pauses tab.)",
+    render: rows => regimeRenderTable(
+      ['Overlay', 'Reason', 'Instruments affected'],
+      rows.map(r => [
+        `<span class="engine-pill">${regimeEscape(r.overlay_name || '')}</span>`,
+        regimeEscape(r.reason || ''),
+        Array.isArray(r.instruments_affected) ? r.instruments_affected.map(regimeEscape).join(', ') : '',
+      ])
+    ),
+  },
+  routing: {
+    url: '/api/routing/decisions',
+    empty: "Router hasn't been invoked yet.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Smoothed regime', 'Selected engine', 'Allow new entries', 'Block reason'],
+      rows.slice().sort((a, b) => (a.instrument || '').localeCompare(b.instrument || '')).map(r => [
+        regimeEscape(r.instrument || ''),
+        regimePill(r.smoothed_regime),
+        enginePill(r.selected_engine),
+        r.allow_new_entries
+          ? '<span class="regime-bool-yes">YES</span>'
+          : '<span class="regime-bool-no">NO</span>',
+        regimeEscape(r.block_reason || ''),
+      ])
+    ),
+  },
+  shadow: {
+    url: '/api/shadow/comparison',
+    empty: "No shadow decisions logged yet — bot needs to complete more cycles.",
+    render: rows => regimeRenderTable(
+      ['Timestamp', 'Instrument', 'Live engine', 'Live action', 'Shadow engine', 'Shadow action', 'Disagreement'],
+      rows.map(r => {
+        const disagreed = r.disagreement_type && String(r.disagreement_type).trim() !== '';
+        return {
+          cells: [
+            formatTs(r.ts),
+            regimeEscape(r.instrument || ''),
+            enginePill(r.live_engine),
+            regimeEscape(r.live_action_taken || ''),
+            enginePill(r.shadow_engine_selected),
+            regimeEscape(r.shadow_action_would_be || ''),
+            disagreed
+              ? `<span class="regime-bool-no">${regimeEscape(r.disagreement_type)}</span>`
+              : '<span class="muted">—</span>',
+          ],
+          rowClass: disagreed ? 'disagreement-row' : '',
+        };
+      })
+    ),
+  },
+  degradation: {
+    url: '/api/degradation/events',
+    empty: "No degradation events recorded. System is healthy.",
+    render: rows => regimeRenderTable(
+      ['Timestamp', 'Component', 'Severity', 'Trigger reason', 'Action taken'],
+      rows.map(r => [
+        formatTs(r.ts),
+        `<span class="engine-pill">${regimeEscape(r.component || '')}</span>`,
+        r.severity === 'hard'
+          ? '<span class="regime-bool-no">HARD</span>'
+          : `<span class="muted">${regimeEscape(r.severity || '')}</span>`,
+        regimeEscape(r.trigger_reason || ''),
+        regimeEscape(r.action_taken || ''),
+      ])
+    ),
+  },
+  pauses: {
+    url: '/api/pauses/list',
+    empty: "No instruments currently paused.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Reason', 'Paused at', 'Overlay'],
+      rows.map(r => [
+        regimeEscape(r.instrument || ''),
+        regimeEscape(r.reason || ''),
+        formatTs(r.paused_at),
+        `<span class="engine-pill">${regimeEscape(r.paused_by_overlay || '')}</span>`,
+      ])
+    ),
+  },
+};
+
+let _activeRegimeTab = 'regime';
+let _regimeRefreshTimer = null;
+
+async function fetchRegimeTab(key) {
+  const cfg = REGIME_TABS[key];
+  if (!cfg) return;
+  const pane = document.getElementById('regime-pane-' + key);
+  if (!pane) return;
+  const token = localStorage.getItem('jwt_token') || '';
+  try {
+    const r = await fetch(cfg.url + '?t=' + Date.now(), {
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+    });
+    if (r.status === 401) {
+      pane.innerHTML = '<div class="regime-empty">Session expired — <a href="login.html" style="color:#f5c842">log in</a> again.</div>';
+      return;
+    }
+    if (!r.ok) {
+      pane.innerHTML = `<div class="regime-empty">Error: HTTP ${r.status}.</div>`;
+      return;
+    }
+    const data = await r.json();
+    const rows = Array.isArray(data) ? data : [];
+    const tab = REGIME_TABS[key];
+    const btn = document.querySelector(`.regime-tab[data-tab="${key}"]`);
+    if (btn) {
+      const existing = btn.querySelector('.count');
+      if (existing) existing.remove();
+      if (rows.length > 0) {
+        const span = document.createElement('span');
+        span.className = 'count';
+        span.textContent = '(' + rows.length + ')';
+        btn.appendChild(span);
+      }
+    }
+    const table = tab.render(rows);
+    pane.innerHTML = table || `<div class="regime-empty">${regimeEscape(tab.empty)}</div>`;
+    const meta = document.getElementById('regimeMeta');
+    if (meta) meta.textContent = 'Last refresh: ' + new Date().toISOString().slice(11, 19) + ' UTC · ' + key;
+  } catch (err) {
+    pane.innerHTML = `<div class="regime-empty">Fetch error: ${regimeEscape(err.message || String(err))}</div>`;
+  }
+}
+
+function activateRegimeTab(key) {
+  if (!REGIME_TABS[key]) return;
+  _activeRegimeTab = key;
+  document.querySelectorAll('.regime-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === key);
+  });
+  document.querySelectorAll('.regime-pane').forEach(p => {
+    p.classList.toggle('active', p.id === 'regime-pane-' + key);
+  });
+  fetchRegimeTab(key);
+  if (_regimeRefreshTimer) clearInterval(_regimeRefreshTimer);
+  _regimeRefreshTimer = setInterval(() => fetchRegimeTab(_activeRegimeTab), 30000);
+}
+
+const _regimeNav = document.getElementById('regimeNav');
+if (_regimeNav) {
+  _regimeNav.addEventListener('click', e => {
+    const btn = e.target.closest('.regime-tab');
+    if (btn) activateRegimeTab(btn.dataset.tab);
+  });
+  activateRegimeTab('regime');
 }
 </script>
 </body>
