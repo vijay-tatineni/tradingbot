@@ -1381,9 +1381,9 @@ def _maybe_register_calendar():
             with open(cfg_path) as f:
                 data = json.load(f)
             flag = data.get('settings', {}).get('feature_flags', {}).get(
-                'enable_calendar_ui', True)
+                'enable_calendar_ui', False)
         else:
-            flag = True
+            flag = False
 
         if flag:
             from bot.calendar_ui.routes import calendar_bp, init_calendar_routes

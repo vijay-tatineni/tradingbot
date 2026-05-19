@@ -10,7 +10,7 @@ class TestFlagDefaults:
         assert flags.enable_classifier_live is False
         assert flags.enable_classifier_shadow is True
         assert flags.enable_router_live is False
-        assert flags.enable_calendar_ui is True
+        assert flags.enable_calendar_ui is False
 
     def test_all_safe_defaults_loaded(self):
         flags = FeatureFlags({})

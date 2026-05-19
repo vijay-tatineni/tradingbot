@@ -37,7 +37,7 @@ SAFE_DEFAULTS = {
     "enable_mean_reversion_shadow": True,
     "enable_mean_reversion_live": False,
     "enable_position_tagged_exit_policy": False,
-    "enable_calendar_ui": True,
+    "enable_calendar_ui": False,
     "data_quality_strict_mode": False,
 }
 

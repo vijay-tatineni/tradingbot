@@ -45,7 +45,7 @@ from bot.regime.flags  import FeatureFlags
 from bot.regime.orchestrator import RegimeOrchestrator
 from bot.regime.log_setup    import setup_regime_logging
 from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
-from bot.overlays.registry import active_overlays as overlay_active_overlays
+from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
 from bot.regime.router     import route as regime_route
 from bot.shadow.counterfactual_logger import CounterfactualLogger
 from bot.shadow.position_metadata_store import PositionMetadataStore
@@ -134,6 +134,7 @@ class TradingBot:
         self.flags = FeatureFlags(flag_config)
 
         regime_db = str(BASE_DIR / 'regime.db')
+        init_overlay_registry(regime_db)
         self.pause_registry = InstrumentPauseRegistry(regime_db)
         self.cf_logger = CounterfactualLogger(regime_db)
         self.pm_store = PositionMetadataStore(regime_db)

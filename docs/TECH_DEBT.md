@@ -108,3 +108,81 @@ by any systemd service or startup script. Safe to delete in a cleanup PR.
 when run as part of the full suite but passes in isolation. This is a
 test-ordering state pollution issue that pre-dates this branch. 486 of 487
 existing tests pass; this one failure is not a regression.
+
+## Per-bot macro calendars not shared
+
+**Status:** Open question (PR4)
+
+IBKR and IG each have their own `regime.db` with their own `macro_events`
+table. Macro events entered via IBKR's calendar UI are not visible to IG's
+`MACRO_LOCKOUT` overlay. Three resolution paths exist:
+
+1. Enable calendar UI on IG too (manual duplication, currently disabled).
+2. Disable macro overlay on IG (accept no macro protection).
+3. Share the macro calendar DB across both bots (architectural change for
+   PR 6 or later).
+
+Currently neither bot has macro events populated and
+`enable_event_overlays_live` is false on both, so this question doesn't
+bite yet. Revisit before promoting `enable_event_overlays_live=true` on
+either bot.
+
+## IG sync 2026-05-19 (one-time bridge)
+
+**Status:** Noted (PR4)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` covering `bot/`,
+`tests/`, `main.py`, `api_server.py`, `CLAUDE.md`, and `specs/prompts/`.
+Plus an explicit `feature_flags` block was added to
+`/root/trading-ig/instruments_ig.json` matching `SAFE_DEFAULTS`.
+
+The two codebases are now identical except for:
+- Instance config: `instruments_ig.json`, `.env`, `TASK_SPEC_IG_INSTANCE.md`
+- Runtime state: `*.db`, `*.log`
+
+This is a one-time bridge. The codebases will drift again on the next
+change to `/root/trading/`. PR 6 should consolidate to a single source
+using `main.py`'s existing `--config` and `--broker` flags from commit
+`7a9dd06`.
+
+## IBKR config missing explicit feature_flags block
+
+**Status:** Open (PR4)
+
+`/root/trading/instruments.json` has no explicit `feature_flags` block;
+the IBKR bot runs on `FeatureFlags.SAFE_DEFAULTS`. Add an explicit block
+matching its current implicit state before any live flag promotion. Same
+diff as applied to the IG side on 2026-05-19.
+
+## IG demo data-permission errors are pre-existing
+
+**Status:** Pre-existing, not caused by PR4
+
+`bot_stderr.log` shows ~398 historical instances of
+`'NoneType' object has no attribute 'fetch_market_by_epic'` plus ~20 per
+restart cycle. The IG demo account lacks a data subscription for certain
+UK epics (e.g. `KA.D.BARC.CASH.IP`); other instruments fail epic
+verification at startup. The bot operates cleanly otherwise and trades
+on permitted instruments only.
+
+Not a regime/sync issue. A separate decision is needed on whether to
+upgrade the IG market-data subscription or prune the instrument universe.
+
+## Sync-target test redundancy
+
+**Status:** Noted (PR4)
+
+`tests/regime/test_classifier.py::TestPromptSync::test_prompt_sync` reads
+from `specs/prompts/classifier_v1.md` to verify the in-code prompt matches
+its documented mirror. The test is structurally meaningless on a
+sync-target codebase like `/root/trading-ig/` — if the source-of-truth
+side passes, the target side passes automatically via rsync.
+
+Two fixes possible:
+- (a) Add `pytest.skip("Sync test only meaningful on source-of-truth side")`
+  when `specs/prompts/classifier_v1.md` is absent.
+- (b) Eliminate IG-side test runs entirely once PR 6 consolidates codebases.
+
+The 2026-05-19 sync also surfaced that the inventory step missed `specs/`
+entirely — PR 6 should explicitly enumerate which top-level directories
+are needed for runtime vs documentation vs source-of-truth.

@@ -1,165 +1,196 @@
 """
-§16.4: End-to-end test — UI writes → overlay reads.
+§16.4: End-to-end test — UI HTTP route writes → overlay reads.
 
-Imports a macro event via the calendar UI DB layer, then queries
-bot.overlays.registry.active_overlays() to confirm the overlay sees
-the new event as active. This is the "does the UI actually affect
-overlay behaviour" test.
+Writes via Flask test client HTTP POST, then reads the same SQLite DB
+with the real MacroLockoutOverlay.check(). No mocks. Proves the UI's
+writes are visible to the overlay at runtime.
 """
+import sqlite3
 import pytest
+import jwt as pyjwt
+import datetime as dt
 from datetime import datetime, timezone, timedelta
 
-from bot.calendar_ui.db import ensure_tables, create_event, csv_import, list_events
+from flask import Flask
+from bot.calendar_ui.routes import calendar_bp, init_calendar_routes
+from bot.calendar_ui.db import ensure_tables, list_events, get_audit_log
 from bot.overlays.macro_lockout import MacroLockoutOverlay
+
+JWT_SECRET = "e2e-test-secret"
 
 
 def _today_str():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _now_time_str():
-    return datetime.now(timezone.utc).strftime("%H:%M")
+def _token(username="e2euser"):
+    return pyjwt.encode(
+        {"sub": username, "exp": dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)},
+        JWT_SECRET, algorithm="HS256",
+    )
 
 
-class TestUIWriteOverlayRead:
-    def test_create_event_visible_to_overlay(self, tmp_path):
-        """Create an event via UI → overlay sees it as active."""
-        db_path = str(tmp_path / "regime.db")
-        ensure_tables(db_path)
+def _auth():
+    return {"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"}
 
+
+@pytest.fixture
+def setup(tmp_path):
+    db_path = str(tmp_path / "regime.db")
+    app = Flask(__name__)
+    app.register_blueprint(calendar_bp)
+    init_calendar_routes(db_path, JWT_SECRET)
+    app.config["TESTING"] = True
+    client = app.test_client()
+    return client, db_path
+
+
+def _read_overlay_from_db(db_path: str, now: datetime) -> list:
+    """Read macro_events from the same DB and build ctx for overlay check."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM macro_events WHERE event_date >= ? ORDER BY event_date",
+        (_today_str(),),
+    ).fetchall()
+    conn.close()
+
+    macro_events = []
+    for row in rows:
+        r = dict(row)
+        if r["event_time"]:
+            event_dt_str = f"{r['event_date']}T{r['event_time']}:00"
+            macro_events.append({
+                "name": r["name"],
+                "event_date": r["event_date"],
+                "event_time": datetime.fromisoformat(event_dt_str).replace(
+                    tzinfo=timezone.utc),
+            })
+        else:
+            macro_events.append({
+                "name": r["name"],
+                "event_date": r["event_date"],
+            })
+    return macro_events
+
+
+class TestHTTPWriteOverlayRead:
+    def test_http_create_visible_to_overlay(self, setup):
+        """HTTP POST /api/calendar/macro → same SQLite → overlay sees it."""
+        client, db_path = setup
         now = datetime.now(timezone.utc)
         event_time = (now + timedelta(minutes=30)).strftime("%H:%M")
 
-        create_event(db_path, {
+        r = client.post("/api/calendar/macro", headers=_auth(), json={
             "date": _today_str(),
             "time_utc": event_time,
             "event": "FOMC_RATE_DECISION",
             "region": "US",
             "severity": "high",
-        }, user="testuser")
+        })
+        assert r.status_code == 201, f"Create failed: {r.get_json()}"
 
-        events = list_events(db_path, from_date=_today_str())
-        assert len(events) >= 1
-
-        macro_events_for_ctx = []
-        for ev in events:
-            event_dt_str = f"{ev['event_date']}T{ev['event_time']}:00"
-            macro_events_for_ctx.append({
-                "name": ev["name"],
-                "event_date": ev["event_date"],
-                "event_time": datetime.fromisoformat(event_dt_str).replace(
-                    tzinfo=timezone.utc),
-            })
+        macro_events = _read_overlay_from_db(db_path, now)
+        assert len(macro_events) >= 1, "Event not in DB after HTTP POST"
 
         overlay = MacroLockoutOverlay()
-        check = overlay.check("AAPL", now, {"macro_events": macro_events_for_ctx})
+        check = overlay.check("AAPL", now, {"macro_events": macro_events})
 
         assert check.is_active is True, (
-            f"INTEGRATION FAILURE: Overlay does not see UI-created event. "
-            f"Event: FOMC_RATE_DECISION at {event_time}, now: {now.strftime('%H:%M')}, "
-            f"check result: {check}"
+            f"INTEGRATION FAILURE: HTTP POST wrote to DB but overlay does not "
+            f"see the event. DB path: {db_path}, events in DB: {macro_events}, "
+            f"overlay check: is_active={check.is_active}, reason={check.reason}"
         )
         assert "FOMC" in check.reason
 
-    def test_csv_import_visible_to_overlay(self, tmp_path):
-        """CSV import via UI → overlay sees imported events."""
-        db_path = str(tmp_path / "regime.db")
-        ensure_tables(db_path)
-
+    def test_http_csv_import_visible_to_overlay(self, setup):
+        """HTTP POST CSV import → same SQLite → overlay sees imported events."""
+        client, db_path = setup
         now = datetime.now(timezone.utc)
         event_time = (now + timedelta(minutes=15)).strftime("%H:%M")
 
-        rows = [{
-            "date": _today_str(),
-            "time_utc": event_time,
-            "event": "BOE_RATE_DECISION",
-            "region": "UK",
-            "severity": "high",
-            "notes": "",
-        }]
-        result = csv_import(db_path, rows, "csvuser")
-        assert result["inserted"] == 1
+        csv_data = (
+            f"date,time_utc,event,region,severity,notes\n"
+            f"{_today_str()},{event_time},BOE_RATE_DECISION,UK,high,\n"
+        )
+        r = client.post("/api/calendar/macro/import",
+                        data=csv_data, content_type="text/csv",
+                        headers=_auth())
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data["inserted"] == 1, f"CSV import failed: {data}"
 
-        events = list_events(db_path, from_date=_today_str())
-        macro_events_for_ctx = []
-        for ev in events:
-            event_dt_str = f"{ev['event_date']}T{ev['event_time']}:00"
-            macro_events_for_ctx.append({
-                "name": ev["name"],
-                "event_date": ev["event_date"],
-                "event_time": datetime.fromisoformat(event_dt_str).replace(
-                    tzinfo=timezone.utc),
-            })
-
+        macro_events = _read_overlay_from_db(db_path, now)
         overlay = MacroLockoutOverlay()
-        check = overlay.check("MSFT", now, {"macro_events": macro_events_for_ctx})
+        check = overlay.check("MSFT", now, {"macro_events": macro_events})
 
         assert check.is_active is True, (
-            f"INTEGRATION FAILURE: Overlay does not see CSV-imported event."
+            f"INTEGRATION FAILURE: CSV import wrote to DB but overlay does not "
+            f"see the event. events in DB: {macro_events}"
         )
 
-    def test_deleted_event_not_visible_to_overlay(self, tmp_path):
-        """After deleting via UI, overlay no longer sees the event."""
-        db_path = str(tmp_path / "regime.db")
-        ensure_tables(db_path)
-
+    def test_http_delete_removes_from_overlay(self, setup):
+        """HTTP DELETE → event gone from same SQLite → overlay no longer sees it."""
+        client, db_path = setup
         now = datetime.now(timezone.utc)
         event_time = (now + timedelta(minutes=30)).strftime("%H:%M")
 
-        from bot.calendar_ui.db import delete_event
-        created = create_event(db_path, {
+        r = client.post("/api/calendar/macro", headers=_auth(), json={
             "date": _today_str(),
             "time_utc": event_time,
             "event": "FOMC_RATE_DECISION",
             "region": "US",
             "severity": "high",
-        }, user="testuser")
+        })
+        event_id = r.get_json()["id"]
 
-        delete_event(db_path, created["id"], "testuser")
+        headers = {**_auth(), "X-Confirm-Event": "FOMC_RATE_DECISION"}
+        r = client.delete(f"/api/calendar/macro/{event_id}", headers=headers)
+        assert r.status_code == 200
 
-        events = list_events(db_path, from_date=_today_str())
-        assert len(events) == 0
+        macro_events = _read_overlay_from_db(db_path, now)
+        assert len(macro_events) == 0
 
         overlay = MacroLockoutOverlay()
-        check = overlay.check("AAPL", now, {"macro_events": []})
+        check = overlay.check("AAPL", now, {"macro_events": macro_events})
         assert check.is_active is False
 
 
-class TestFullCRUDCycle:
-    def test_create_edit_delete_cycle(self, tmp_path):
-        """Full CRUD cycle through the DB layer."""
-        from bot.calendar_ui.db import update_event, delete_event, get_audit_log
+class TestFullCRUDCycleHTTP:
+    def test_create_edit_delete_via_http(self, setup):
+        """Full CRUD cycle through HTTP routes with audit verification."""
+        client, db_path = setup
 
-        db_path = str(tmp_path / "regime.db")
-        ensure_tables(db_path)
-
-        created = create_event(db_path, {
+        r = client.post("/api/calendar/macro", headers=_auth(), json={
             "date": "2026-07-01",
             "time_utc": "14:00",
             "event": "FOMC_RATE_DECISION",
             "region": "US",
             "severity": "high",
-        }, user="admin")
-        assert created["name"] == "FOMC_RATE_DECISION"
+        })
+        assert r.status_code == 201
+        event_id = r.get_json()["id"]
 
-        updated = update_event(db_path, created["id"], {
+        r = client.put(f"/api/calendar/macro/{event_id}", headers=_auth(), json={
             "date": "2026-07-01",
             "time_utc": "14:30",
             "event": "FOMC_RATE_DECISION",
             "region": "US",
             "severity": "medium",
-        }, user="admin")
-        assert updated["event_time"] == "14:30"
-        assert updated["impact"] == "medium"
+        })
+        assert r.status_code == 200
+        assert r.get_json()["event_time"] == "14:30"
 
-        deleted = delete_event(db_path, created["id"], "admin")
-        assert deleted is not None
+        headers = {**_auth(), "X-Confirm-Event": "FOMC_RATE_DECISION"}
+        r = client.delete(f"/api/calendar/macro/{event_id}", headers=headers)
+        assert r.status_code == 200
 
-        from bot.calendar_ui.db import get_event
-        assert get_event(db_path, created["id"]) is None
+        r = client.get(f"/api/calendar/macro/{event_id}", headers=_auth())
+        assert r.status_code == 404
 
         audit = get_audit_log(db_path)
         actions = [a["action"] for a in audit]
         assert "create" in actions
         assert "update" in actions
         assert "delete" in actions
+        assert all(a["user_jwt_sub"] == "e2euser" for a in audit)
