@@ -156,6 +156,7 @@ class TradingBot:
             pause_registry=self.pause_registry,
             overlay_registry_fn=overlay_active_overlays,
             router_fn=regime_route,
+            smoothing_store=self.smoothing_store,
             counterfactual_logger=self.cf_logger,
             position_metadata_store=self.pm_store,
             telegram_alerts=self.alerts,

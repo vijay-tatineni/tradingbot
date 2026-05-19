@@ -26,6 +26,7 @@ class RegimeOrchestrator(BasePlugin):
                  pause_registry=None,
                  overlay_registry_fn=None,
                  router_fn=None,
+                 smoothing_store=None,
                  counterfactual_logger=None,
                  position_metadata_store=None,
                  telegram_alerts=None,
@@ -34,6 +35,7 @@ class RegimeOrchestrator(BasePlugin):
         self._pause_registry = pause_registry
         self._overlay_fn = overlay_registry_fn
         self._router_fn = router_fn
+        self._smoothing_store = smoothing_store
         self._cf_logger = counterfactual_logger
         self._pm_store = position_metadata_store
         self._telegram = telegram_alerts
@@ -55,7 +57,19 @@ class RegimeOrchestrator(BasePlugin):
             return []
 
     def _get_routing(self, instrument: str, smoothed=None):
-        if self._router_fn is None or smoothed is None:
+        if self._router_fn is None:
+            return None
+        if smoothed is None and self._smoothing_store is not None:
+            try:
+                smoothed = self._smoothing_store.get_latest(instrument)
+            except Exception as e:
+                logger.warning("Smoothing store lookup failed for %s: %s",
+                               instrument, e)
+                return None
+        if smoothed is None:
+            # No classification yet (warm-up day, scheduler hasn't run, or
+            # flag-off shadow). Preserve existing "allow" behaviour upstream
+            # by returning None — gate falls back to router_allows=True.
             return None
         try:
             overlays = self._get_overlays(instrument)
