@@ -215,3 +215,29 @@ raw `web/dashboard.template.html`), have `_write_html()` substitute
 runtime fields by name. Then `web/dashboard.html` becomes a true cached
 copy of an authoritative template, and the template can be edited
 directly without `{{` escaping.
+
+## IG sync 2026-05-19 (PR 6 dashboard tabs)
+
+**Status:** Noted (PR6)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` to pick up the
+PR 6 regime dashboard tabs:
+
+- `bot/regime/dashboard_data.py`
+- `api_server.py` (six new JWT endpoints + `init_overlay_registry`
+  at module import)
+- `bot/dashboard.py` (f-string template with regime CSS / HTML / JS)
+- `web/dashboard.html` (regenerated build artifact)
+- `tests/regime/test_dashboard_data.py`
+- `tests/regime/test_dashboard_endpoints.py`
+- `tests/regime/test_dashboard_template.py`
+
+After rsync: `cogniflowai-ig-api.service` and `cogniflowai-ig-bot.service`
+both restarted; 67 dashboard tests pass on IG side; all six endpoints
+return 401 unauthenticated at both ports 8084 (api direct) and 8083
+(nginx). IG bot cycle #1 completed cleanly in shadow mode.
+
+The two codebases now have identical regime dashboards. They will drift
+again on the next change to `/root/trading/`. PR 7 should consolidate
+to a single source using `main.py`'s `--config` / `--broker` flags from
+commit `7a9dd06`, eliminating the rsync ritual entirely.
