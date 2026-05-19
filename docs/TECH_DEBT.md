@@ -242,6 +242,40 @@ again on the next change to `/root/trading/`. PR 7 should consolidate
 to a single source using `main.py`'s `--config` / `--broker` flags from
 commit `7a9dd06`, eliminating the rsync ritual entirely.
 
+## IG sync 2026-05-19 (Classify tab)
+
+**Status:** Noted (PR7)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` to pick up the
+Classify tab (manual operator-triggered regime classification):
+
+- `api_server.py` (three new JWT endpoints: `/api/regime/budget`,
+  `/api/regime/instruments`, `/api/regime/classify`, plus
+  `_cached_features` helper, in-memory rate limiter, process-wide
+  classify lock)
+- `bot/regime/classifier.py` (`classify()` gained `force=False` param)
+- `bot/dashboard.py` (new Classify tab CSS, HTML pane, modal scaffold,
+  ~190 lines of operator-side JS)
+- `web/dashboard.html` (regenerated build artifact — see also the
+  "Dashboard rendering uses dual source of truth" entry above)
+- `tests/regime/test_classify_endpoints.py` (new, 16 tests)
+- `tests/regime/test_dashboard_template.py` (updated to assert the
+  new tab scaffold, JS function names, and copy strings)
+
+After rsync: `cogniflowai-ig-api.service` and `cogniflowai-ig-bot.service`
+both restarted; 78 dashboard/classify tests pass on IG side; all three
+new endpoints return 401 unauthenticated at port 8083; IG bot
+re-registered RegimeOrchestrator and started Cycle #1 cleanly in
+shadow mode at 22:14 UTC.
+
+Architecture caveat: the api_server does not hold a broker connection.
+Manual classify reads features from the most recent
+`regime_classification_cache` row per instrument and re-rolls Claude.
+For an instrument the daily scheduler has never reached (truly new
+add) the endpoint returns 409 with operator-facing guidance to wait
+for the next post-close window. See the commit message of
+`bd40f24` for the design rationale.
+
 ## Classifier cache-hit rate not surfaced
 
 **Status:** Open (PR6)
