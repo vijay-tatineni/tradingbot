@@ -639,7 +639,7 @@ Responsibilities:
 4. Check daily budget; exceeded → fallback
 5. Build prompt
 6. Call Anthropic API via existing `bot/llm/` abstraction. **Match `sentiment.py` pattern: tool-use for structured JSON output.**
-7. Parse response
+7. Parse response (an over-long `rationale` is clipped to 350 chars with a visible ellipsis rather than rejected — see §9.7)
 8. Log to cost tracker
 9. Return classification (`cache_hit=False`)
 
@@ -720,7 +720,7 @@ Mirror to `specs/prompts/classifier_v1.md` for human review. Sync verified by te
 class ClassifierResponseSchema(BaseModel):
     regime: Literal["TRENDING", "RANGING", "UNCLEAR"]
     confidence: confloat(ge=0.0, le=1.0)
-    rationale: str = Field(max_length=280)
+    rationale: str = Field(max_length=350)  # over-long values clipped (ellipsis) in classifier._parse_response, not rejected
     key_features: list[str] = Field(default_factory=list, max_length=5)
 ```
 

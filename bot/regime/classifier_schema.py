@@ -10,7 +10,7 @@ from typing import Literal
 class ClassifierResponseSchema(BaseModel):
     regime: Literal["TRENDING", "RANGING", "UNCLEAR"]
     confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str = Field(max_length=280)
+    rationale: str = Field(max_length=350)
     key_features: list[str] = Field(default_factory=list)
 
     @field_validator("key_features")
@@ -40,7 +40,7 @@ CLASSIFY_REGIME_TOOL = {
             },
             "rationale": {
                 "type": "string",
-                "maxLength": 280,
+                "maxLength": 350,
                 "description": "Concise rationale for the classification.",
             },
             "key_features": {

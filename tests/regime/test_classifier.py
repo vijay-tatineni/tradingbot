@@ -44,6 +44,24 @@ SAMPLE_FEATURES = {
 }
 
 
+def _make_tool_response(rationale, regime="TRENDING", confidence=0.85):
+    """Build a fake Anthropic tool-use response for _parse_response tests."""
+    block = MagicMock()
+    block.type = "tool_use"
+    block.name = "classify_regime"
+    block.input = {
+        "regime": regime,
+        "confidence": confidence,
+        "rationale": rationale,
+        "key_features": ["adx_14", "range_efficiency"],
+    }
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.content = [block]
+    return response
+
+
 class TestClassifierFallback:
     def test_fallback_when_no_api_key(self, classifier):
         result = classifier.classify("BARC.L", "2026-01-01", SAMPLE_FEATURES)
@@ -129,3 +147,49 @@ class TestPromptSync:
             line = line.strip()
             if line and not line.startswith("#"):
                 assert line in content, f"Prompt line not found in spec mirror: {line[:60]}"
+
+
+class TestRationaleTruncation:
+    """A wordy-but-valid rationale should be clipped, not turned into an
+    UNCLEAR/0.0 fallback. See classifier._clip_rationale + _parse_response."""
+
+    def _parse(self, classifier, rationale):
+        response = _make_tool_response(rationale)
+        return classifier._parse_response(
+            response, "BARC.L", "2026-01-01", SAMPLE_FEATURES, "hash1", 100,
+        )
+
+    def test_at_280_passes_unchanged(self, classifier):
+        r = "a" * 280
+        result = self._parse(classifier, r)
+        assert result.rationale == r
+        assert result.raw_regime == "TRENDING"
+        assert result.confidence == 0.85
+
+    def test_at_350_passes_unchanged(self, classifier):
+        r = "b" * 350
+        result = self._parse(classifier, r)
+        assert result.rationale == r
+        assert len(result.rationale) == 350
+        assert not result.rationale.endswith("...")
+        assert result.raw_regime == "TRENDING"
+
+    def test_at_500_truncated_to_350_no_fallback(self, classifier):
+        r = "c" * 500
+        result = self._parse(classifier, r)
+        assert result.rationale == "c" * 347 + "..."
+        assert len(result.rationale) == 350
+        # Classification persists (cached) and is not a fallback.
+        assert result.raw_regime == "TRENDING"
+        assert result.confidence == 0.85
+        assert not result.rationale.startswith("Fallback:")
+        cached = classifier._cache.get("BARC.L", "2026-01-01", "hash1")
+        assert cached is not None
+        assert cached.rationale == "c" * 347 + "..."
+
+    def test_at_351_truncated(self, classifier):
+        r = "d" * 351
+        result = self._parse(classifier, r)
+        assert result.rationale == "d" * 347 + "..."
+        assert len(result.rationale) == 350
+        assert result.raw_regime == "TRENDING"

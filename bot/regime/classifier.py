@@ -29,6 +29,21 @@ PROMPT_VERSION = "V1"
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0
 
+# Must match ClassifierResponseSchema.rationale max_length. Claude is asked
+# for <= 350 chars (prefer 250) in the prompt + tool schema, but occasionally
+# overruns. An over-long rationale is clipped here rather than discarding an
+# otherwise-valid classification — see _parse_response. The 3-char ellipsis is
+# counted within the limit so the clipped string still satisfies the validator.
+MAX_RATIONALE_LEN = 350
+
+
+def _clip_rationale(text: str) -> str:
+    """Clip an over-long rationale to MAX_RATIONALE_LEN, ellipsis included, so
+    truncation is visible. Strings within the limit pass through unchanged."""
+    if isinstance(text, str) and len(text) > MAX_RATIONALE_LEN:
+        return text[: MAX_RATIONALE_LEN - 3] + "..."
+    return text
+
 
 class RegimeClassifier:
     def __init__(self, cache: RegimeCache, cost_tracker: CostTracker,
@@ -141,8 +156,12 @@ class RegimeClassifier:
             return self._fallback(instrument, trading_date, features, input_hash,
                                   error="no_tool_use_block")
 
+        tool_input = dict(tool_use_block.input)
+        if isinstance(tool_input.get("rationale"), str):
+            tool_input["rationale"] = _clip_rationale(tool_input["rationale"])
+
         try:
-            parsed = ClassifierResponseSchema(**tool_use_block.input)
+            parsed = ClassifierResponseSchema(**tool_input)
         except Exception as e:
             logger.error(f"Schema validation failed: {e}")
             self._cost_tracker.log_classification(

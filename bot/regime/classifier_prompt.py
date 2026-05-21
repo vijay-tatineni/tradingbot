@@ -39,5 +39,5 @@ classification. When in doubt, lean toward UNCLEAR with moderate confidence.
 ## Output Contract
 
 Use the classify_regime tool to return your classification. Provide a concise
-rationale (max 280 characters) explaining which features drove your decision,
+rationale (max 350 characters, prefer 250) explaining which features drove your decision,
 and list up to 5 key features that most influenced your classification."""
