@@ -39,13 +39,21 @@ def _setup_db(db_path: str) -> None:
         shadow_engine_selected TEXT, shadow_signal_json TEXT,
         shadow_action_would_be TEXT, disagreement_type TEXT,
         hypothetical_trade_id TEXT, flag_snapshot_json TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS smoothed_regime_state (
+        instrument TEXT PRIMARY KEY, effective_regime TEXT NOT NULL,
+        source_regime TEXT NOT NULL, days_in_regime INTEGER NOT NULL,
+        last_changed_at TEXT NOT NULL, confidence REAL NOT NULL,
+        pending_regime TEXT, pending_days INTEGER NOT NULL DEFAULT 0,
+        regime_history TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL)""")
     conn.commit()
     conn.close()
 
 
-def _insert_regime(db_path, instrument, date, raw_regime, confidence=0.85):
+def _insert_regime(db_path, instrument, date, raw_regime, confidence=0.85,
+                   created_at=None):
     conn = sqlite3.connect(db_path)
     now = datetime.now(timezone.utc).isoformat()
+    created_at = created_at or now
     payload = {
         "instrument": instrument,
         "classified_at": now,
@@ -60,7 +68,21 @@ def _insert_regime(db_path, instrument, date, raw_regime, confidence=0.85):
     }
     conn.execute(
         "INSERT INTO regime_classification_cache VALUES (?,?,?,?,?)",
-        (instrument, date, "hash1", json.dumps(payload), now),
+        (instrument, date, "hash1", json.dumps(payload), created_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _insert_smoothed(db_path, instrument, effective_regime, days_in_regime):
+    conn = sqlite3.connect(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO smoothed_regime_state (instrument, effective_regime, "
+        "source_regime, days_in_regime, last_changed_at, confidence, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (instrument, effective_regime, effective_regime, days_in_regime,
+         now, 0.9, now),
     )
     conn.commit()
     conn.close()
@@ -104,24 +126,59 @@ class TestRegimeStates:
         assert row["last_classified"] is not None
         assert "_raw_classification_json" in row
 
-    def test_merges_smoothed_from_shadow(self, tmp_path):
+    def test_merges_smoothed_from_state(self, tmp_path):
         db = str(tmp_path / "test.db")
         _setup_db(db)
         _insert_regime(db, "AAPL", "2026-05-18", "TRENDING")
-        _insert_shadow(db, "AAPL", smoothed_regime="TRENDING", days_in_regime=4)
+        _insert_smoothed(db, "AAPL", "TRENDING", 4)
         result = get_regime_states(db)
         assert result[0]["smoothed_regime"] == "TRENDING"
         assert result[0]["days_in_regime"] == 4
 
-    def test_smoothed_uses_latest_shadow_row(self, tmp_path):
+    def test_latest_per_instrument_multiple_days(self, tmp_path):
+        # Single instrument, multiple days -> returns the most recent only.
         db = str(tmp_path / "test.db")
         _setup_db(db)
-        _insert_regime(db, "AAPL", "2026-05-18", "TRENDING")
-        _insert_shadow(db, "AAPL", smoothed_regime="UNCLEAR", days_in_regime=1)
-        _insert_shadow(db, "AAPL", smoothed_regime="TRENDING", days_in_regime=5)
+        _insert_regime(db, "AAPL", "2026-05-19", "RANGING",
+                       created_at="2026-05-19T21:00:00+00:00")
+        _insert_regime(db, "AAPL", "2026-05-20", "TRENDING",
+                       created_at="2026-05-20T21:00:00+00:00")
         result = get_regime_states(db)
-        assert result[0]["smoothed_regime"] == "TRENDING"
-        assert result[0]["days_in_regime"] == 5
+        assert len(result) == 1
+        assert result[0]["trading_date"] == "2026-05-20"
+        assert result[0]["raw_regime"] == "TRENDING"
+
+    def test_one_row_per_instrument_mixed_dates(self, tmp_path):
+        # Multiple instruments, mixed dates -> one row per instrument, latest.
+        db = str(tmp_path / "test.db")
+        _setup_db(db)
+        _insert_regime(db, "AAPL", "2026-05-19", "RANGING",
+                       created_at="2026-05-19T21:00:00+00:00")
+        _insert_regime(db, "AAPL", "2026-05-20", "TRENDING",
+                       created_at="2026-05-20T21:00:00+00:00")
+        _insert_regime(db, "MSFT", "2026-05-20", "UNCLEAR",
+                       created_at="2026-05-20T21:05:00+00:00")
+        _insert_regime(db, "TSM", "2026-05-18", "RANGING",
+                       created_at="2026-05-18T21:00:00+00:00")
+        result = get_regime_states(db)
+        by_instr = {r["instrument"]: r for r in result}
+        assert len(result) == 3
+        assert by_instr["AAPL"]["trading_date"] == "2026-05-20"
+        assert by_instr["AAPL"]["raw_regime"] == "TRENDING"
+        assert by_instr["MSFT"]["trading_date"] == "2026-05-20"
+        assert by_instr["TSM"]["trading_date"] == "2026-05-18"
+
+    def test_no_smoothed_row_yields_nulls(self, tmp_path):
+        # Instrument with no smoothed_regime_state row -> nulls, row still shown.
+        db = str(tmp_path / "test.db")
+        _setup_db(db)
+        _insert_regime(db, "AAPL", "2026-05-20", "TRENDING")
+        _insert_smoothed(db, "MSFT", "RANGING", 3)  # different instrument
+        result = get_regime_states(db)
+        assert len(result) == 1
+        assert result[0]["instrument"] == "AAPL"
+        assert result[0]["smoothed_regime"] is None
+        assert result[0]["days_in_regime"] is None
 
     def test_filter_by_instruments(self, tmp_path):
         db = str(tmp_path / "test.db")

@@ -19,70 +19,60 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _latest_shadow_smoothed(conn: sqlite3.Connection) -> dict:
-    try:
-        rows = conn.execute(
-            "SELECT s.instrument, s.shadow_smoothed_regime, "
-            "s.shadow_smoothed_days_in_regime "
-            "FROM shadow_decisions s "
-            "INNER JOIN (SELECT instrument, MAX(id) AS max_id "
-            "FROM shadow_decisions GROUP BY instrument) latest "
-            "ON s.instrument = latest.instrument AND s.id = latest.max_id"
-        ).fetchall()
-        return {
-            r["instrument"]: (
-                r["shadow_smoothed_regime"],
-                r["shadow_smoothed_days_in_regime"],
-            )
-            for r in rows
-        }
-    except sqlite3.OperationalError:
-        return {}
-
-
 def get_regime_states(db_path: str, instruments: Optional[list] = None) -> list:
     """
     Latest classification per instrument. classification_json is parsed and
-    flattened into top-level keys (raw_regime, confidence). Smoothed values
-    are merged in from the latest shadow_decisions row per instrument when
-    available. _raw_classification_json is retained for callers that need
-    the original payload.
+    flattened into top-level keys (raw_regime, confidence).
+
+    The cache holds one row per (instrument, trading_date), so a window
+    function picks only the most recent created_at per instrument — without
+    this the table shows one row per classification day (14 instruments × N
+    days) instead of one row per instrument.
+
+    Smoothed values (smoothed_regime, days_in_regime) are LEFT JOINed from
+    smoothed_regime_state, which the §16 smoothing scheduler maintains. An
+    instrument with no smoothed row yet yields nulls. _raw_classification_json
+    is retained for callers that need the original payload.
     """
     conn = _connect(db_path)
     try:
+        where = ""
+        params: list = []
+        if instruments:
+            placeholders = ",".join("?" * len(instruments))
+            where = f"WHERE instrument IN ({placeholders})"
+            params = list(instruments)
         try:
-            if instruments:
-                placeholders = ",".join("?" * len(instruments))
-                cache_rows = conn.execute(
-                    f"SELECT * FROM regime_classification_cache "
-                    f"WHERE instrument IN ({placeholders}) "
-                    f"ORDER BY created_at DESC",
-                    instruments,
-                ).fetchall()
-            else:
-                cache_rows = conn.execute(
-                    "SELECT * FROM regime_classification_cache "
-                    "ORDER BY created_at DESC LIMIT 100"
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT c.instrument, c.trading_date, c.created_at, "
+                f"c.classification_json, "
+                f"s.effective_regime AS smoothed_regime, "
+                f"s.days_in_regime AS days_in_regime "
+                f"FROM (SELECT *, ROW_NUMBER() OVER ("
+                f"PARTITION BY instrument ORDER BY created_at DESC) AS rn "
+                f"FROM regime_classification_cache {where}) c "
+                f"LEFT JOIN smoothed_regime_state s "
+                f"ON s.instrument = c.instrument "
+                f"WHERE c.rn = 1 "
+                f"ORDER BY c.instrument",
+                params,
+            ).fetchall()
         except sqlite3.OperationalError:
             return []
 
-        smoothed_by_instr = _latest_shadow_smoothed(conn)
-
         result = []
-        for row in cache_rows:
+        for row in rows:
             raw = dict(row)
             try:
                 parsed = json.loads(raw["classification_json"])
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
-            smoothed, days = smoothed_by_instr.get(raw["instrument"], (None, None))
             result.append({
                 "instrument": raw["instrument"],
                 "raw_regime": parsed.get("raw_regime"),
                 "confidence": parsed.get("confidence"),
-                "smoothed_regime": smoothed,
-                "days_in_regime": days,
+                "smoothed_regime": raw["smoothed_regime"],
+                "days_in_regime": raw["days_in_regime"],
                 "last_classified": raw.get("created_at"),
                 "trading_date": raw.get("trading_date"),
                 "_raw_classification_json": raw["classification_json"],

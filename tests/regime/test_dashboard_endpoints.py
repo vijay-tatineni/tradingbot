@@ -34,6 +34,12 @@ def _setup_regime_db(db_path: str) -> None:
         impact TEXT DEFAULT 'medium', region TEXT DEFAULT 'US',
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE (event_date, event_time, name, region))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS smoothed_regime_state (
+        instrument TEXT PRIMARY KEY, effective_regime TEXT NOT NULL,
+        source_regime TEXT NOT NULL, days_in_regime INTEGER NOT NULL,
+        last_changed_at TEXT NOT NULL, confidence REAL NOT NULL,
+        pending_regime TEXT, pending_days INTEGER NOT NULL DEFAULT 0,
+        regime_history TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL)""")
     conn.commit()
     conn.close()
 
@@ -122,6 +128,20 @@ def _insert_shadow(db, instrument, **kwargs):
     conn.close()
 
 
+def _insert_smoothed(db, instrument, effective_regime, days_in_regime):
+    conn = sqlite3.connect(db)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO smoothed_regime_state (instrument, effective_regime, "
+        "source_regime, days_in_regime, last_changed_at, confidence, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (instrument, effective_regime, effective_regime, days_in_regime,
+         now, 0.9, now),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _insert_pause(db, instrument, cleared=False):
     conn = sqlite3.connect(db)
     conn.execute(
@@ -201,8 +221,7 @@ class TestRegimeStates:
     def test_populated_returns_flattened_fields(self, api_setup):
         client, token, db, _ = api_setup
         _insert_regime(db, "AAPL", "TRENDING", confidence=0.91)
-        _insert_shadow(db, "AAPL", shadow_smoothed_regime="TRENDING",
-                       shadow_smoothed_days_in_regime=4)
+        _insert_smoothed(db, "AAPL", "TRENDING", 4)
         r = client.get('/api/regime/states', headers=_auth(token))
         assert r.status_code == 200
         rows = r.get_json()

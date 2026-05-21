@@ -276,6 +276,34 @@ add) the endpoint returns 409 with operator-facing guidance to wait
 for the next post-close window. See the commit message of
 `bd40f24` for the design rationale.
 
+## IG sync 2026-05-20 (Regime tab dedup + smoothed join fix)
+
+**Status:** Noted (PR7)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` to pick up the
+Regime dashboard tab bug fixes:
+
+- `bot/regime/dashboard_data.py` — `get_regime_states()` now dedups to
+  the latest cache row per instrument (window function) and `LEFT JOIN`s
+  `smoothed_regime_state` to populate `smoothed_regime` / `days_in_regime`.
+  The prior code returned one row per `(instrument, trading_date)` and
+  joined the empty `shadow_decisions` table, so the tab showed 28 rows
+  with blank smoothed columns.
+- `tests/regime/test_dashboard_data.py` and
+  `tests/regime/test_dashboard_endpoints.py` — added the
+  `smoothed_regime_state` table to the schema fixtures plus an
+  `_insert_smoothed()` helper, and migrated the smoothing assertions
+  off `shadow_decisions`.
+
+After rsync: both api services restarted; both `/api/regime/states`
+endpoints return 401 unauthenticated; IBKR returns 14 rows with smoothed
+populated; IG returns an empty array (cache still empty due to the
+entitlement issue documented in this file — see "IG demo account lacks
+cash-equity historical-data entitlement").
+
+The two codebases drift again on the next change. The PR 7 consolidation
+(`7a9dd06`) that eliminates the rsync ritual is still pending.
+
 ## Classifier cache-hit rate not surfaced
 
 **Status:** Open (PR6)
@@ -390,3 +418,42 @@ Going forward, the discipline that worked across PRs 1-6 should
 continue: after each PR, run `grep -rn` for the new component's name
 in production code, run end-to-end curl/browser verification, not just
 test-suite green.
+
+## IG demo account lacks cash-equity historical-data entitlement
+
+**Status:** Blocking IG-side regime pipeline. Pre-existing IG account limitation.
+
+The IG demo account at `/root/trading-ig/` rejects historical-bar
+requests on `*.CASH.IP` epics with
+`unauthorised.access.to.equity.exception`. This affects all 10
+configured instruments (BARC, ANTO, SU, YNDX, MSFT, AAPL, PLTRUS,
+AVGO, SGLNLN, SSLNLN).
+
+Visible consequence: the regime classification scheduler runs every
+cycle on IG but `broker.fetch_bars()` returns `None` for every
+instrument, so `regime_classification_cache` stays empty. The Classify
+tab loads but every classify attempt returns 409.
+
+Less visible consequence: IG layer1 trading is also non-functional for
+the same reason — no bars means no signal evaluation. This has been
+silently true since well before the regime work; this restart just made
+it visible via the scheduler's per-instrument error logs.
+
+Three resolution paths:
+
+1. **Fix IG account entitlements** — enable cash-equity historical
+   data on the demo account via IG support. The right fix; unblocks
+   both layer1 and the regime pipeline. External dependency.
+2. **Switch IG to IG-supported instrument types** — indices (FTSE100,
+   S&P 500 CFD), forex pairs, or commodity CFDs that the demo tier
+   supports. Small config edit to `instruments_ig.json`. Requires
+   re-backtesting on different instruments.
+3. **Accept IG as dashboard-only** — IBKR is the trading bot; IG runs
+   but doesn't trade and doesn't classify. The Classify tab and
+   dashboard work but produce no data.
+
+Currently operating in mode 3 by default. Revisit when IG side becomes
+operationally important.
+
+Construction work stops here. The §14 regime pipeline is genuinely
+complete on IBKR; IG-side blockers are upstream of our code.
