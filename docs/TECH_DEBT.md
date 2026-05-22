@@ -304,6 +304,29 @@ cash-equity historical-data entitlement").
 The two codebases drift again on the next change. The PR 7 consolidation
 (`7a9dd06`) that eliminates the rsync ritual is still pending.
 
+## IG sync 2026-05-22 (classifier rationale clip)
+
+**Status:** Noted (PR7)
+
+`/root/trading-ig/` was rsync'd from `/root/trading/` to pick up the
+classifier rationale-length fix (commit `eab27c3`):
+
+- `bot/regime/classifier.py`, `bot/regime/classifier_schema.py`,
+  `bot/regime/classifier_prompt.py` — rationale cap raised 280 → 350 and
+  an over-long rationale is now clipped (visible ellipsis) instead of
+  failing the whole response into an UNCLEAR/0.0 fallback.
+- `specs/prompts/classifier_v1.md`, `specs/CLAUDE_STRATEGY_SPEC_v3.md`,
+  `tests/regime/test_classifier.py` — prompt mirror, spec §9.2/§9.7, and
+  the new truncation tests.
+
+After rsync: both bot + api services restarted on each side; IG-side
+classifier tests pass (12); IG `/api/regime/classify` returns 401
+unauthenticated. The fix could not be exercised end-to-end on IG because
+its `regime_classification_cache` is empty (the entitlement issue above),
+so `_classify_one_locked` returns 409 there — verified instead on IBKR,
+where AVGO/SCCO/TSM re-classified to confidence 0.62 (real calls, no
+schema-validation fallbacks).
+
 ## Classifier cache-hit rate not surfaced
 
 **Status:** Open (PR6)
