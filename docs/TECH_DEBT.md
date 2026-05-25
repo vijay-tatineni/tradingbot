@@ -478,5 +478,28 @@ Three resolution paths:
 Currently operating in mode 3 by default. Revisit when IG side becomes
 operationally important.
 
+## Classifier rationale clips to 350 chars on most calls
+
+**Status:** Accepted, not blocking.
+
+Despite the prompt's "max 350 characters, prefer 250" guidance, Claude
+generates rationales at or near the 350-char cap for most instruments.
+The clip-on-overflow safeguard (commit `eab27c3`) preserves the
+classification (regime + confidence) — only the explanation text gets
+cut. The full rationale is lost.
+
+Resolution paths if this becomes operationally painful:
+
+1. Tighten the prompt with explicit sentence-count or word-count limits,
+   then iterate.
+2. Raise the cap further (currently 350; tightening was the original goal
+   so this would reverse progress).
+3. Accept and leave alone — the rationale field is for human inspection
+   during shadow phase, not for downstream consumption. The
+   classification itself is what matters.
+
+Currently operating in accept-and-leave-alone mode. Revisit only if
+rationales prove inadequate for shadow-phase analysis.
+
 Construction work stops here. The §14 regime pipeline is genuinely
 complete on IBKR; IG-side blockers are upstream of our code.
