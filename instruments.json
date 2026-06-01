@@ -642,6 +642,9 @@
     }
   ],
   "settings": {
+    "feature_flags": {
+      "enable_regime_filter_live": true
+    },
     "account": "DUQ141950",
     "adx_period": 14,
     "adx_threshold": 20,
