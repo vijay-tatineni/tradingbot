@@ -1774,6 +1774,80 @@ def labels_save():
     return jsonify({"ok": True, "window_id": window_id})
 
 
+# ── Regime filter experiment performance endpoint ──
+@app.route('/api/regime/filter_performance', methods=['GET'])
+@require_auth
+def regime_filter_performance_route():
+    """Aggregate live-trades vs would-have-been-blocked shadow-trades
+    P&L for the regime-filter experiment. Optional ?since=YYYY-MM-DD
+    narrows live trades and blocked-entries to a date window; default
+    is the earliest blocked-entry timestamp (so the comparison covers
+    only the period since the experiment started); falls back to
+    all-time if no blocked entries exist yet.
+    """
+    from bot.regime.filter_performance import aggregate as _agg
+
+    since = request.args.get("since")
+
+    def _connect_ro(path):
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    # Determine the comparison window if the caller didn't override.
+    blocked_rows: list = []
+    try:
+        rdb = _connect_ro(REGIME_DB)
+        if since is None:
+            row = rdb.execute(
+                "SELECT MIN(ts) FROM regime_blocked_entries"
+            ).fetchone()
+            since = row[0]  # may still be None if no rows
+        if since:
+            blocked_rows = [dict(r) for r in rdb.execute(
+                "SELECT * FROM regime_blocked_entries WHERE ts >= ? "
+                "ORDER BY id", (since,)
+            ).fetchall()]
+        else:
+            blocked_rows = [dict(r) for r in rdb.execute(
+                "SELECT * FROM regime_blocked_entries ORDER BY id"
+            ).fetchall()]
+        shadow_ids = [r["shadow_trade_id"] for r in blocked_rows
+                      if r.get("shadow_trade_id")]
+        if shadow_ids:
+            placeholders = ",".join("?" for _ in shadow_ids)
+            shadow_rows = [dict(r) for r in rdb.execute(
+                f"SELECT * FROM shadow_hypothetical_trades "
+                f"WHERE id IN ({placeholders})", shadow_ids
+            ).fetchall()]
+        else:
+            shadow_rows = []
+        rdb.close()
+    except sqlite3.Error as e:
+        return jsonify({"error": f"regime DB read failed: {e}"}), 500
+
+    try:
+        ldb = _connect_ro(LEARNING_DB)
+        if since:
+            live_rows = [dict(r) for r in ldb.execute(
+                "SELECT entry_price, exit_price, pnl_usd FROM trades "
+                "WHERE open = 0 AND timestamp >= ? ORDER BY id",
+                (since,)
+            ).fetchall()]
+        else:
+            live_rows = [dict(r) for r in ldb.execute(
+                "SELECT entry_price, exit_price, pnl_usd FROM trades "
+                "WHERE open = 0 ORDER BY id"
+            ).fetchall()]
+        ldb.close()
+    except sqlite3.Error as e:
+        return jsonify({"error": f"learning_loop DB read failed: {e}"}), 500
+
+    summary = _agg(live_rows, blocked_rows, shadow_rows)
+    summary["since"] = since
+    return jsonify(summary)
+
+
 if __name__ == '__main__':
     # Check users exist
     users = load_users()
