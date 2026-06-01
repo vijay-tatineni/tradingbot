@@ -152,18 +152,19 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
-const TOKEN = localStorage.getItem('token');
+const TOKEN = localStorage.getItem('jwt_token');
 if (!TOKEN) location.href = '/login.html?redirect=labelling';
 const authHeaders = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
 
-function logout() { localStorage.removeItem('token'); location.href = '/login.html'; }
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  document.cookie = 'jwt_token=; path=/; max-age=0';
+  location.href = '/login.html';
+}
 
-(function showUser() {
-  try {
-    const payload = JSON.parse(atob(TOKEN.split('.')[1] || ''));
-    document.getElementById('navUser').textContent = payload.sub || '--';
-  } catch {}
-})();
+document.getElementById('navUser').textContent =
+  localStorage.getItem('jwt_user') || '--';
 
 let worksheet = null;     // /api/labels payload
 let barsByInst = {};      // {instrument: [{date,open,high,low,close}]}
