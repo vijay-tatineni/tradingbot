@@ -218,10 +218,11 @@ class TestGateResultTracking:
         assert orch.last_gate_result("UNKNOWN") is None
 
 
-class TestShadowDecisionLogging:
-    """Gap #9: pre_trade must write a shadow_decisions row via the injected
-    CounterfactualLogger so the regime layer's would-have effect is observable
-    while it stays in shadow mode."""
+class TestShadowSignalLogging:
+    """Gap #10: log_signal writes a shadow_decisions row for every BUY/SELL
+    engine signal, regardless of whether layer1 reaches pre_trade. The
+    live_blocked_by argument carries which upstream gate (if any) stopped
+    the trade — None means live took it."""
 
     def _orch_with_logger(self, cf_logger, **kwargs):
         flags = FeatureFlags(kwargs.pop("flag_overrides", None) or {})
@@ -231,7 +232,9 @@ class TestShadowDecisionLogging:
             **kwargs,
         )
 
-    def test_trending_signal_logs_agreement(self):
+    def test_signal_taken_logs_with_no_block_reason(self):
+        """Signal fires + capital available + shadow allows → row with
+        live_blocked_by=None, both actions TAKE, no disagreement."""
         cf_logger = MagicMock()
         store = MagicMock()
         store.get_latest.return_value = _smoothed("AAPL", "TRENDING")
@@ -241,11 +244,13 @@ class TestShadowDecisionLogging:
             smoothing_store=store,
         )
 
-        assert orch.pre_trade(_inst("AAPL"), signal=1, confidence="HIGH") is True
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by=None)
 
         cf_logger.log_decision.assert_called_once()
         kwargs = cf_logger.log_decision.call_args.kwargs
         assert kwargs["instrument"] == "AAPL"
+        assert kwargs["live_blocked_by"] is None
         assert kwargs["live_action"] == "TAKE"
         assert kwargs["shadow_action"] == "TAKE"
         assert kwargs["disagreement_type"] is None
@@ -253,29 +258,69 @@ class TestShadowDecisionLogging:
         assert kwargs["live_engine"] == "triple_confirmation"
         assert kwargs["live_signal"] == {"signal": 1, "confidence": "HIGH"}
 
-    def test_unclear_signal_logs_shadow_blocks_live_takes(self):
+    def test_position_limit_with_shadow_allow_logs_disagreement(self):
+        """Signal fires + capital full + shadow allows → row with
+        live_blocked_by='position_limit', live=BLOCK, shadow=TAKE,
+        disagreement_type='shadow_allows_live_blocks'."""
         cf_logger = MagicMock()
         store = MagicMock()
-        store.get_latest.return_value = _smoothed("AAPL", "UNCLEAR")
-        # Default flags → router_live=False, so live allows.
-        # Shadow forces router_live=True → router blocks on UNCLEAR.
+        store.get_latest.return_value = _smoothed("AAPL", "TRENDING")
         orch = self._orch_with_logger(
             cf_logger,
             router_fn=regime_route,
             smoothing_store=store,
         )
 
-        allowed = orch.pre_trade(_inst("AAPL"), signal=1, confidence="HIGH")
-        assert allowed is True, "Shadow flags off → live must still allow"
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by="position_limit")
 
-        cf_logger.log_decision.assert_called_once()
         kwargs = cf_logger.log_decision.call_args.kwargs
-        assert kwargs["live_action"] == "TAKE"
+        assert kwargs["live_blocked_by"] == "position_limit"
+        assert kwargs["live_action"] == "BLOCK"
+        assert kwargs["shadow_action"] == "TAKE"
+        assert kwargs["disagreement_type"] == "shadow_allows_live_blocks"
+
+    def test_position_limit_with_shadow_block_records_diagnostic(self):
+        """Signal fires + capital full + shadow blocks (UNCLEAR) → row with
+        live_blocked_by='position_limit', both actions BLOCK,
+        disagreement_type='shadow_blocked_position_limit_blocked'."""
+        cf_logger = MagicMock()
+        store = MagicMock()
+        store.get_latest.return_value = _smoothed("AAPL", "UNCLEAR")
+        orch = self._orch_with_logger(
+            cf_logger,
+            router_fn=regime_route,
+            smoothing_store=store,
+        )
+
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by="position_limit")
+
+        kwargs = cf_logger.log_decision.call_args.kwargs
+        assert kwargs["live_blocked_by"] == "position_limit"
+        assert kwargs["live_action"] == "BLOCK"
         assert kwargs["shadow_action"] == "BLOCK"
-        assert kwargs["disagreement_type"] == "shadow_blocks_live_takes"
+        assert kwargs["disagreement_type"] == "shadow_blocked_position_limit_blocked"
         assert kwargs["shadow_smoothed_regime"] == "UNCLEAR"
 
-    def test_logger_exception_does_not_break_live_path(self):
+    def test_non_entry_signal_does_not_log(self):
+        """signal=0 short-circuits — no comparison to record."""
+        cf_logger = MagicMock()
+        orch = self._orch_with_logger(cf_logger)
+        orch.log_signal(_inst("AAPL"), signal=0, confidence="NONE",
+                        live_blocked_by=None)
+        cf_logger.log_decision.assert_not_called()
+
+    def test_pre_trade_does_not_write_shadow_row(self):
+        """After gap #10, pre_trade is gate-only. Shadow logging lives
+        in log_signal so layer1 can drive it before its position-limit
+        check."""
+        cf_logger = MagicMock()
+        orch = self._orch_with_logger(cf_logger)
+        orch.pre_trade(_inst("AAPL"), signal=1, confidence="HIGH")
+        cf_logger.log_decision.assert_not_called()
+
+    def test_logger_exception_does_not_propagate(self):
         cf_logger = MagicMock()
         cf_logger.log_decision.side_effect = RuntimeError("disk full")
         store = MagicMock()
@@ -286,25 +331,55 @@ class TestShadowDecisionLogging:
             smoothing_store=store,
         )
 
-        allowed = orch.pre_trade(_inst("AAPL"), signal=1, confidence="HIGH")
-        assert allowed is True, "Logger failure must not block live trades"
+        # Must not raise.
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by=None)
         cf_logger.log_decision.assert_called_once()
 
-    def test_no_logger_pre_trade_still_works(self):
+    def test_no_logger_is_silent(self):
+        orch = RegimeOrchestrator(flags=FeatureFlags({}),
+                                  counterfactual_logger=None)
+        # Must not raise.
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by="position_limit")
+
+    def test_validation_block_is_shadow_blocked_live_would_take(self):
+        """live_blocked_by='order_validator' + shadow blocks → diagnostic
+        bucket for 'shadow agrees the trade is bad but live also blocks
+        via a different mechanism'."""
+        cf_logger = MagicMock()
         store = MagicMock()
-        store.get_latest.return_value = _smoothed("AAPL", "TRENDING")
-        orch = RegimeOrchestrator(
-            flags=FeatureFlags({}),
-            counterfactual_logger=None,
+        store.get_latest.return_value = _smoothed("AAPL", "UNCLEAR")
+        orch = self._orch_with_logger(
+            cf_logger,
             router_fn=regime_route,
             smoothing_store=store,
         )
 
-        assert orch.pre_trade(_inst("AAPL"), signal=1, confidence="HIGH") is True
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by="order_validator")
 
-    def test_non_entry_signal_does_not_log(self):
-        """signal=0 short-circuits before gate evaluation, so no shadow row."""
+        kwargs = cf_logger.log_decision.call_args.kwargs
+        assert kwargs["disagreement_type"] == "shadow_blocked_live_would_take"
+
+    def test_orchestrator_block_is_agreement(self):
+        """live_blocked_by='orchestrator' + shadow blocks → both gates
+        are the same evaluation, so this is agreement not disagreement."""
         cf_logger = MagicMock()
-        orch = self._orch_with_logger(cf_logger)
-        orch.pre_trade(_inst("AAPL"), signal=0, confidence="NONE")
-        cf_logger.log_decision.assert_not_called()
+        store = MagicMock()
+        store.get_latest.return_value = _smoothed("AAPL", "UNCLEAR")
+        orch = self._orch_with_logger(
+            cf_logger,
+            router_fn=regime_route,
+            smoothing_store=store,
+            flag_overrides=_router_live_flags(),  # orchestrator gate is live
+        )
+
+        orch.log_signal(_inst("AAPL"), signal=1, confidence="HIGH",
+                        live_blocked_by="orchestrator")
+
+        kwargs = cf_logger.log_decision.call_args.kwargs
+        assert kwargs["live_blocked_by"] == "orchestrator"
+        assert kwargs["live_action"] == "BLOCK"
+        assert kwargs["shadow_action"] == "BLOCK"
+        assert kwargs["disagreement_type"] is None

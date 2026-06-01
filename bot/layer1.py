@@ -169,6 +169,20 @@ class ActiveTrading:
         self._entries_this_cycle += 1
         self._open_count += 1
 
+    def _broadcast_signal_to_shadow(self, inst: dict, signal: int,
+                                    confidence: str,
+                                    live_blocked_by) -> None:
+        """Gap #10: fan out every BUY/SELL engine signal to plugins'
+        log_signal hook so the shadow corpus reflects engine intent
+        regardless of layer1's position-limit and validation gates.
+        Failures in any plugin must not affect live trading.
+        """
+        for p in self.plugins:
+            try:
+                p.log_signal(inst, signal, confidence, live_blocked_by)
+            except Exception as e:
+                log(f"[Shadow] log_signal failed in {p.name}: {e}", "WARN")
+
     def _process_instrument(self, inst: dict) -> dict:
         symbol   = inst['symbol']
         mkt_open = self.hours.is_open(inst)
@@ -284,6 +298,7 @@ class ActiveTrading:
 
                     # Signal reversal (short-able CFDs only)
                     elif result.signal == -1 and not inst.get('long_only', True):
+                        live_blocked_by = None
                         allowed = all(p.pre_trade(inst, -1, result.confidence)
                                       for p in self.plugins)
                         if allowed:
@@ -296,6 +311,10 @@ class ActiveTrading:
                                                       reentry_cooldown)
                                 for p in self.plugins:
                                     p.post_trade(inst, -1, action, exit_price)
+                        else:
+                            live_blocked_by = "orchestrator"
+                        self._broadcast_signal_to_shadow(
+                            inst, -1, result.confidence, live_blocked_by)
                 else:
                     next_close = next_bar_close_str(timeframe, inst)
                     log(f"  [{symbol}] Waiting for bar close (next: {next_close})")
@@ -309,10 +328,13 @@ class ActiveTrading:
                     symbol, price, signal_valid, reentry_recovery_pct
                 )
                 if should_reenter:
+                    live_blocked_by = None
                     if not self._can_enter(symbol):
                         action = "RE-ENTRY BLOCKED (position limit)"
+                        live_blocked_by = "position_limit"
                     elif not self._validate_entry(inst, inst['qty'], price, "BUY"):
                         action = "RE-ENTRY BLOCKED (validation)"
+                        live_blocked_by = "order_validator"
                     else:
                         allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                         if allowed:
@@ -331,20 +353,28 @@ class ActiveTrading:
                                 pos_info = self.broker.get_position_info(symbol, price)
                             else:
                                 action = "RE-ENTRY FAILED"
+                        else:
+                            live_blocked_by = "orchestrator"
+                    self._broadcast_signal_to_shadow(
+                        inst, 1, result.confidence, live_blocked_by)
                 else:
                     action = f"WATCHING: {re_reason}"
 
             elif result.signal == 1:
                 # Fresh entry
+                live_blocked_by = None
                 if not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                    live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "BUY"):
                     action = "ENTRY BLOCKED (validation)"
+                    live_blocked_by = "order_validator"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed and not self._llm_sentiment_check(inst, "BUY", df):
                         allowed = False
                         action = "BLOCKED by LLM sentiment"
+                        live_blocked_by = "sentiment"
                     if allowed:
                         action, fill_result = self.broker.handle_signal(
                             inst, result.signal, result.confidence, pos)
@@ -359,13 +389,20 @@ class ActiveTrading:
                             pos_info = self.broker.get_position_info(symbol, price)
                     else:
                         action = "BLOCKED by plugin"
+                        if live_blocked_by is None:
+                            live_blocked_by = "orchestrator"
+                self._broadcast_signal_to_shadow(
+                    inst, 1, result.confidence, live_blocked_by)
 
             elif result.signal == -1 and not inst.get('long_only', True):
                 # Fresh short from flat
+                live_blocked_by = None
                 if not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                    live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "SELL"):
                     action = "ENTRY BLOCKED (validation)"
+                    live_blocked_by = "order_validator"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed:
@@ -383,6 +420,9 @@ class ActiveTrading:
                             pos_info = self.broker.get_position_info(symbol, price)
                     else:
                         action = "BLOCKED by plugin"
+                        live_blocked_by = "orchestrator"
+                self._broadcast_signal_to_shadow(
+                    inst, -1, result.confidence, live_blocked_by)
 
         # Refresh position info after any trades
         pos_info   = self.broker.get_position_info(symbol, price)

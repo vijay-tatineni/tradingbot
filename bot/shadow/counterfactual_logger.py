@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS shadow_decisions (
     live_signal_json TEXT,
     live_action_taken TEXT,
     live_trade_id TEXT,
+    live_blocked_by TEXT,
     shadow_regime TEXT,
     shadow_confidence REAL,
     shadow_smoothed_regime TEXT,
@@ -68,6 +69,13 @@ class CounterfactualLogger:
         conn = sqlite3.connect(self._db_path)
         conn.execute(CREATE_SHADOW_DECISIONS)
         conn.execute(CREATE_SHADOW_TRADES)
+        try:
+            conn.execute(
+                "ALTER TABLE shadow_decisions ADD COLUMN live_blocked_by TEXT"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         conn.commit()
         conn.close()
 
@@ -76,6 +84,7 @@ class CounterfactualLogger:
                      live_signal: Optional[dict] = None,
                      live_action: Optional[str] = None,
                      live_trade_id: Optional[str] = None,
+                     live_blocked_by: Optional[str] = None,
                      shadow_regime: Optional[str] = None,
                      shadow_confidence: Optional[float] = None,
                      shadow_smoothed_regime: Optional[str] = None,
@@ -92,17 +101,17 @@ class CounterfactualLogger:
         cursor = conn.execute(
             """INSERT INTO shadow_decisions
                (ts, instrument, bar_time, live_engine, live_signal_json,
-                live_action_taken, live_trade_id, shadow_regime,
-                shadow_confidence, shadow_smoothed_regime,
+                live_action_taken, live_trade_id, live_blocked_by,
+                shadow_regime, shadow_confidence, shadow_smoothed_regime,
                 shadow_smoothed_days_in_regime, shadow_overlays_active,
                 shadow_engine_selected, shadow_signal_json,
                 shadow_action_would_be, disagreement_type,
                 hypothetical_trade_id, flag_snapshot_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (now, instrument, bar_time, live_engine,
              json.dumps(live_signal) if live_signal else None,
-             live_action, live_trade_id, shadow_regime,
-             shadow_confidence, shadow_smoothed_regime,
+             live_action, live_trade_id, live_blocked_by,
+             shadow_regime, shadow_confidence, shadow_smoothed_regime,
              shadow_smoothed_days,
              json.dumps(shadow_overlays_active) if shadow_overlays_active else None,
              shadow_engine,

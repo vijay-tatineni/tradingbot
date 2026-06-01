@@ -10,6 +10,10 @@ AVAILABLE HOOKS:
   on_cycle_start(cycle)   → called at the start of each cycle
   pre_trade(inst, signal) → called before a trade is placed
                             return False to BLOCK the trade
+  log_signal(inst, signal, confidence, live_blocked_by)
+                          → called for every BUY/SELL engine signal
+                            regardless of whether layer1 enforced
+                            gates. Observation-only.
   post_trade(inst, result)→ called after a trade is placed
   on_cycle_end(cycle)     → called at the end of each cycle
   on_shutdown()           → called when bot stops
@@ -54,6 +58,18 @@ class BasePlugin:
           - ML override (block if model disagrees strongly)
         """
         return True   # default: allow all trades
+
+    def log_signal(self, inst: dict, signal: int, confidence: str,
+                   live_blocked_by: Optional[str]) -> None:
+        """
+        Called for every BUY/SELL engine signal, BEFORE layer1's
+        position-limit and validation gates. Observation-only — the
+        return value is ignored. Use this to record what the live
+        trading path will do (live_blocked_by tells you which gate,
+        if any, will stop the trade) alongside what your subsystem
+        would have done.
+        """
+        pass
 
     def post_trade(self, inst: dict, signal: int,
                    action: str, entry_price: float) -> None:

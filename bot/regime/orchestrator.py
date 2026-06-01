@@ -134,16 +134,38 @@ class RegimeOrchestrator(BasePlugin):
         }
         return result, context
 
-    def _log_shadow_decision(self, symbol: str, signal: int, confidence: str,
-                             live_result: EntryGateResult,
-                             context: dict) -> None:
-        """Write a shadow_decisions row comparing the live gate outcome to a
-        full-shadow evaluation (overlays_live=True, router_live=True). Any
-        failure is logged and swallowed so live trading is unaffected.
+    def pre_trade(self, inst: dict, signal: int, confidence: str) -> bool:
+        if signal not in (1, -1):
+            return True
+
+        symbol = inst.get("symbol", "UNKNOWN")
+        result = self._evaluate_gates(symbol)
+        self._last_gate_results[symbol] = result
+
+        if not result.allow:
+            logger.info("Entry blocked for %s: gate=%s reason=%s",
+                        symbol, result.gate, result.block_reason)
+            return False
+
+        return True
+
+    def log_signal(self, inst: dict, signal: int, confidence: str,
+                   live_blocked_by: Optional[str]) -> None:
+        """Gap #10: log every BUY/SELL engine signal regardless of
+        whether layer1 reaches the pre_trade gate. live_blocked_by
+        carries which gate (if any) stopped the live trade — None
+        means live took it. Best-effort; any failure is swallowed
+        so live trading is unaffected.
         """
         if self._cf_logger is None:
             return
+        if signal not in (1, -1):
+            return
+
+        symbol = inst.get("symbol", "UNKNOWN")
         try:
+            _, context = self._evaluate_gates_with_context(symbol)
+
             shadow_result = evaluate_entry_gates(
                 is_paused=context["is_paused"],
                 pause_reason=context["pause_reason"],
@@ -154,15 +176,11 @@ class RegimeOrchestrator(BasePlugin):
                 router_block_reason=context["router_block_reason"],
             )
 
-            live_action = "TAKE" if live_result.allow else "BLOCK"
+            live_action = "TAKE" if live_blocked_by is None else "BLOCK"
             shadow_action = "TAKE" if shadow_result.allow else "BLOCK"
-
-            if live_action == shadow_action:
-                disagreement_type = None
-            elif shadow_action == "BLOCK" and live_action == "TAKE":
-                disagreement_type = "shadow_blocks_live_takes"
-            else:
-                disagreement_type = "shadow_allows_live_blocks"
+            disagreement_type = self._classify_disagreement(
+                live_action, shadow_action, live_blocked_by
+            )
 
             smoothed = context.get("smoothed")
             routing = context.get("routing")
@@ -176,6 +194,7 @@ class RegimeOrchestrator(BasePlugin):
                 live_signal=signal_payload,
                 live_action=live_action,
                 live_trade_id=None,
+                live_blocked_by=live_blocked_by,
                 shadow_regime=smoothed.source_regime if smoothed else None,
                 shadow_confidence=smoothed.confidence if smoothed else None,
                 shadow_smoothed_regime=smoothed.effective_regime if smoothed else None,
@@ -188,25 +207,24 @@ class RegimeOrchestrator(BasePlugin):
                 flag_snapshot=self._flags.as_dict(),
             )
         except Exception as e:
-            logger.warning("Shadow decision logging failed for %s: %s",
+            logger.warning("Shadow signal logging failed for %s: %s",
                            symbol, e)
 
-    def pre_trade(self, inst: dict, signal: int, confidence: str) -> bool:
-        if signal not in (1, -1):
-            return True
-
-        symbol = inst.get("symbol", "UNKNOWN")
-        result, context = self._evaluate_gates_with_context(symbol)
-        self._last_gate_results[symbol] = result
-
-        self._log_shadow_decision(symbol, signal, confidence, result, context)
-
-        if not result.allow:
-            logger.info("Entry blocked for %s: gate=%s reason=%s",
-                        symbol, result.gate, result.block_reason)
-            return False
-
-        return True
+    @staticmethod
+    def _classify_disagreement(live_action: str, shadow_action: str,
+                               live_blocked_by: Optional[str]) -> Optional[str]:
+        if live_action == shadow_action == "TAKE":
+            return None
+        if shadow_action == "BLOCK" and live_action == "TAKE":
+            return "shadow_blocks_live_takes"
+        if shadow_action == "TAKE" and live_action == "BLOCK":
+            return "shadow_allows_live_blocks"
+        # Both BLOCK from here — refine by live block reason.
+        if live_blocked_by == "orchestrator":
+            return None
+        if live_blocked_by == "position_limit":
+            return "shadow_blocked_position_limit_blocked"
+        return "shadow_blocked_live_would_take"
 
     def last_gate_result(self, instrument: str) -> Optional[EntryGateResult]:
         return self._last_gate_results.get(instrument)
