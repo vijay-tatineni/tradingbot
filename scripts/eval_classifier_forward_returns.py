@@ -39,6 +39,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+from dotenv import load_dotenv                       # noqa: E402
+load_dotenv(PROJECT_DIR / ".env")
+
 import pandas as pd                              # noqa: E402
 import yfinance as yf                            # noqa: E402
 
