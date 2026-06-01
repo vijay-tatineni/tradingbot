@@ -245,6 +245,19 @@ class ActiveTrading:
             'emergency_stop_pct',
             trail_stop_pct * 2  # default: 2x trail stop
         )
+        bar_closed = is_bar_close(timeframe, inst)
+
+        # Per-cycle per-instrument tick — plugins use this to advance
+        # shadow positions (regime-filter experiment) so blocked-entry
+        # P&L gets measured against the same tier-1/tier-2 exit logic
+        # the live path uses. Default plugin behaviour is a no-op.
+        for p in self.plugins:
+            try:
+                p.on_instrument_tick(inst, price, bar_closed,
+                                     trail_stop_pct, take_profit_pct,
+                                     emergency_stop_pct)
+            except Exception as e:
+                log(f"[Tick] {p.name} raised: {e}", "WARN")
 
         if pos != 0:
             # ── Tier 1: Emergency hard stop (every cycle) ──────────

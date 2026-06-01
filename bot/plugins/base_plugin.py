@@ -59,6 +59,20 @@ class BasePlugin:
         """
         return True   # default: allow all trades
 
+    def on_instrument_tick(self, inst: dict, price: float,
+                           bar_closed: bool, trail_stop_pct: float,
+                           take_profit_pct: float,
+                           emergency_stop_pct: float) -> None:
+        """
+        Called once per instrument per cycle, after `price` and the
+        instrument's per-instrument exit pct values are known but
+        before the live position-handling branch. Default is a no-op.
+        The orchestrator overrides this to tick any open shadow
+        positions through tier-1 / tier-2 exit logic so blocked-entry
+        P&L data can be measured.
+        """
+        pass
+
     def apply_regime_filter(self, inst: dict, signal: int,
                             confidence: str, price: float,
                             bar_time: str) -> bool:

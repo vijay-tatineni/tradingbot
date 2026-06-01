@@ -32,7 +32,8 @@ class RegimeOrchestrator(BasePlugin):
                  telegram_alerts=None,
                  config_path: Optional[str] = None,
                  regime_cache=None,
-                 blocked_entries_log=None):
+                 blocked_entries_log=None,
+                 shadow_trade_simulator=None):
         self._flags = flags
         self._pause_registry = pause_registry
         self._overlay_fn = overlay_registry_fn
@@ -44,6 +45,7 @@ class RegimeOrchestrator(BasePlugin):
         self._config_path = config_path
         self._regime_cache = regime_cache
         self._blocked_entries_log = blocked_entries_log
+        self._shadow_simulator = shadow_trade_simulator
         self._last_gate_results: dict[str, EntryGateResult] = {}
         # Per-signal cache so the post-block dashboard / Commit 2 simulator
         # can pull the row id we just wrote without a second SELECT.
@@ -275,12 +277,13 @@ class RegimeOrchestrator(BasePlugin):
         if effective_regime == "TRENDING":
             return True
 
-        # Block + log
+        # Block + log + open shadow trade
         signal_type = "BUY" if signal == 1 else "SELL"
         rationale = self._lookup_latest_rationale(symbol)
+        blocked_row_id = None
         if self._blocked_entries_log is not None:
             try:
-                row_id = self._blocked_entries_log.log(
+                blocked_row_id = self._blocked_entries_log.log(
                     instrument=symbol,
                     signal_type=signal_type,
                     signal_confidence=confidence,
@@ -289,16 +292,62 @@ class RegimeOrchestrator(BasePlugin):
                     would_have_entry_price=price,
                     bar_time=bar_time,
                 )
-                self._last_blocked_row_id[symbol] = row_id
+                self._last_blocked_row_id[symbol] = blocked_row_id
             except Exception as e:
                 logger.warning(
                     "regime_filter: blocked-entry log write failed "
                     "for %s: %s", symbol, e)
+
+        # Open a hypothetical position so we can later measure what
+        # the blocked trade would have paid.
+        if self._shadow_simulator is not None:
+            qty = inst.get("qty", 1.0)
+            trail_stop_pct = inst.get("trail_stop_pct", 2.0)
+            try:
+                trade_id = self._shadow_simulator.open(
+                    instrument=symbol,
+                    side="LONG" if signal == 1 else "SHORT",
+                    price=price, qty=qty, bar_time=bar_time,
+                    regime=effective_regime,
+                    trail_stop_pct=trail_stop_pct,
+                )
+                if (trade_id is not None and blocked_row_id is not None
+                        and self._blocked_entries_log is not None):
+                    self._blocked_entries_log.attach_shadow_trade(
+                        blocked_row_id, trade_id)
+            except Exception as e:
+                logger.warning(
+                    "regime_filter: shadow open failed for %s: %s",
+                    symbol, e)
+
         logger.info(
             "regime_filter blocked %s %s @ %s — smoothed_regime=%s",
             signal_type, symbol, price, effective_regime,
         )
         return False
+
+    def on_instrument_tick(self, inst: dict, price: float,
+                           bar_closed: bool, trail_stop_pct: float,
+                           take_profit_pct: float,
+                           emergency_stop_pct: float) -> None:
+        """Advance any open shadow position for this instrument so
+        blocked-entry P&L gets measured against the same exit logic
+        the live path uses."""
+        if self._shadow_simulator is None:
+            return
+        symbol = inst.get("symbol", "UNKNOWN")
+        try:
+            bar_time = datetime.now(timezone.utc).isoformat()
+            self._shadow_simulator.tick(
+                instrument=symbol, price=price, bar_closed=bar_closed,
+                bar_time=bar_time,
+                trail_stop_pct=trail_stop_pct,
+                take_profit_pct=take_profit_pct,
+                emergency_stop_pct=emergency_stop_pct,
+            )
+        except Exception as e:
+            logger.warning(
+                "shadow tick failed for %s: %s", symbol, e)
 
     def _lookup_latest_rationale(self, instrument: str) -> Optional[str]:
         """Pull the most recent classifier rationale for the instrument

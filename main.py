@@ -54,6 +54,7 @@ from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
 from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
 from bot.regime.router     import route as regime_route
 from bot.shadow.counterfactual_logger import CounterfactualLogger
+from bot.shadow.trade_simulator import ShadowTradeSimulator
 from bot.shadow.position_metadata_store import PositionMetadataStore
 
 BASE_DIR = Path(__file__).parent
@@ -152,6 +153,7 @@ class TradingBot:
             cost_tracker=self.regime_cost_tracker,
         )
         self.regime_blocked_entries_log = RegimeBlockedEntriesLog(regime_db)
+        self.shadow_trade_simulator = ShadowTradeSimulator(self.cf_logger)
 
         self.orchestrator = RegimeOrchestrator(
             flags=self.flags,
@@ -165,6 +167,7 @@ class TradingBot:
             config_path=config_path,
             regime_cache=self.regime_cache,
             blocked_entries_log=self.regime_blocked_entries_log,
+            shadow_trade_simulator=self.shadow_trade_simulator,
         )
         self.register_plugin(self.orchestrator)
 
