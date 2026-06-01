@@ -571,3 +571,141 @@ PR.
 
 Construction work stops here. The §14 regime pipeline is genuinely
 complete on IBKR; IG-side blockers are upstream of our code.
+
+## Strategy engine cluster is unwired
+
+**Status:** Deferred — pending day-30 classifier evaluation
+**Spec:** §8, §11.1
+
+Surfaced by the post-gap-#10 audit on 2026-06-01. The
+`StrategyEngine` ABC (`bot/strategies/base.py`) and its concrete
+subclasses — `TripleConfirmationEngine`, `MeanReversionEngine`,
+`NoOpEngine` — exist as classes but are **never instantiated in
+production**. The router (`bot/regime/router.py`) emits engine names
+as strings (`selected_engine="TripleConfirmationEngine"`, etc.) but
+nothing constructs the engines or calls their `evaluate()`. Layer1
+continues to dispatch through the legacy
+`bot/signals.py:SignalEngine`.
+
+By transitive dead-code: `bot/strategies/registry.py:get_engine()`
+has only one caller (`bot/shadow/exit_policy.py`), which is itself
+never invoked from production. `bot/shadow/position_metadata_store.py`
+is instantiated in `main.py:145`, passed into the orchestrator as
+`position_metadata_store=...`, stored as `self._pm_store` at
+`orchestrator.py:40`, and never read again — same shape as gap #9.
+
+Flipping `enable_router_live` or `enable_position_tagged_exit_policy`
+to true does **nothing functional today**: the router would activate
+its decision path but route to classes that aren't instantiated.
+Genuine regime-aware execution requires, end-to-end:
+
+1. Instantiate `TripleConfirmationEngine` and dispatch through it
+   from layer1 for `TRENDING` regimes.
+2. Instantiate `NoOpEngine` and respect its HOLD outcomes (so
+   `UNCLEAR` and DATA_QUALITY-blocked cases actually skip live
+   entries).
+3. Implement `MeanReversionEngine` from skeleton to functional
+   strategy (separate research effort — see
+   "Mean-reversion engine is a skeleton only" above).
+4. Wire `PositionMetadataStore` so the orchestrator's `post_trade`
+   records `entry_engine` per fill.
+5. Wire `bot/shadow/exit_policy.py` so exits dispatch via the
+   engine recorded at entry.
+
+Estimated effort: ~2-3 weeks for steps 1, 2, 4, 5; mean-reversion
+implementation (step 3) is its own project.
+
+If the classifier proves valuable at the day-30 evaluation (i.e.
+shadow disagreement data shows the router would have improved P&L
+or avoided drawdowns), this becomes the highest-priority work.
+If not, the engine cluster can be deleted along with the router
+strings and the unused stores. This is the largest "decide what to
+do with what was built" call still outstanding from PRs 1-7.
+
+See the "Integration-gap pattern" section above — this is the same
+shape as gaps #8, #9, #10, just larger.
+
+## Degradation framework is dormant
+
+**Status:** Deferred — consider before any `overlays_live` promotion
+**Spec:** §12
+
+Surfaced by the same 2026-06-01 audit. `bot/degradation/` ships a
+full framework — `FailureTracker`, `DegradationPolicy`,
+`DegradationThreshold`, `DegradationEvent` — but **none of these
+classes are instantiated in production**. The only wired piece is
+`InstrumentPauseRegistry` (`main.py:143`), which is the **output**
+of the framework: the orchestrator reads it to decide whether to
+gate entries. Nothing on the input side writes to it.
+
+`bot/degradation/recover_overlay.py` is a standalone CLI (run via
+`python -m bot.degradation.recover_overlay`); it gives operators a
+manual way to register and clear pauses. It is not part of the
+running bot, and is the *only* path by which the pause registry
+ever gets populated today.
+
+Practical implication: a malfunctioning data source (stale bars,
+runaway classifier, broker quote drift) can keep producing
+degraded signals indefinitely with no automatic safety stop. The
+system relies entirely on operator vigilance and the CLI for
+intervention. With `overlays_live=False` and `router_live=False`
+today, the blast radius is bounded — degraded signals still flow
+through the legacy gates. Once either flag is promoted to live,
+the lack of automatic failure detection becomes a real risk.
+
+Wiring requires, at minimum:
+1. Instantiate `FailureTracker` in `main.py` and pass it into the
+   classifier, scheduler, smoothing store, and broker (the
+   subsystems whose failures should count).
+2. Each subsystem records its own success/failure outcomes via
+   `tracker.record(...)`.
+3. Per-cycle, `DegradationPolicy.evaluate(tracker)` consults the
+   thresholds (already defined in `bot/degradation/policies.py`)
+   and emits `DegradationEvent`s into `InstrumentPauseRegistry`.
+4. Surface degradation events in the dashboard (the read endpoint
+   `dashboard_data.get_degradation_events` is already wired and
+   waiting for rows to display).
+
+Estimated effort: ~1 week to wire the failure-recording call sites
+plus the policy evaluation loop, given the framework code already
+exists.
+
+This should land before any live promotion of `enable_event_overlays_live`
+or `enable_router_live`. Without automatic degradation, those
+flags shift more decisions onto a pipeline whose failure modes are
+not observable in real time.
+
+See "Integration-gap pattern" above — same shape, applied to
+operational safety rather than feature delivery.
+
+## CostTracker.get_daily_spend filtered on the wrong column
+
+**Status:** Fixed 2026-06-01
+
+`CostTracker.get_daily_spend(day)` filtered `WHERE trading_date = ?`
+when it should have filtered `WHERE date(ts) = ?`. The two columns
+coincide in normal scheduler use (the bot classifies today's
+trading_date today), so the bug was invisible in production. It
+surfaced when the classifier forward-returns evaluator ran in
+`--backfill` mode on 2026-06-01: 196 calls written with historical
+`trading_date` values reported $0.0000 spent, and the script's
+mid-run `is_budget_exceeded(today)` check never would have fired
+against backfill cost no matter how large the run got. The actual
+run stayed within cap by luck.
+
+Patched to `date(ts) = ?` so the filter follows the wall-clock day
+the calls were logged on — the meaningful unit for budget
+enforcement. Param renamed `trading_date` → `day` with a docstring
+spelling out the semantics. All five callers (classifier
+pre-flight, three `api_server.py` sites, eval scripts) audited and
+already pass today's wall-clock date, so behaviour for normal
+operation is unchanged; only the backfill scenario flips from
+"silently uncapped" to "correctly capped". Regression test added
+in `tests/regime/test_cost_tracker.py` covering exactly the
+backfill scenario.
+
+Lesson for future budget-sensitive scripts: budget checks must
+filter on log timestamp (`date(ts)`), never on the
+classification's `trading_date`. When the two are equal it's a
+coincidence of the bot's normal cadence, not a property of the
+data model.

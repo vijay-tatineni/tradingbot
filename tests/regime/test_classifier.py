@@ -106,15 +106,22 @@ class TestClassifierCache:
 
 class TestClassifierBudget:
     def test_budget_exceeded_returns_fallback(self, cache, cost_tracker, tmp_db):
+        # is_budget_exceeded checks the wall-clock day the *calls* were
+        # logged on, not the classification's trading_date — so the seed
+        # row needs to land on wall-clock today, which is what
+        # log_classification() does by default (it uses datetime.now()
+        # for ts).
+        from datetime import date as _date
+        today = _date.today().isoformat()
         cost_tracker.log_classification(
-            instrument="BARC.L", trading_date="2026-01-01",
+            instrument="BARC.L", trading_date=today,
             model="claude-sonnet-4-6", prompt_version="V1",
             cost_usd=5.01,
         )
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             classifier = RegimeClassifier(cache, cost_tracker)
             classifier._client = MagicMock()
-        result = classifier.classify("BARC.L", "2026-01-01", SAMPLE_FEATURES)
+        result = classifier.classify("BARC.L", today, SAMPLE_FEATURES)
         assert result.raw_regime == "UNCLEAR"
         assert "budget_exceeded" in result.rationale
 

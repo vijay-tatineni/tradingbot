@@ -66,17 +66,28 @@ class CostTracker:
             return 0.0
         return input_tokens * pricing["input"] + output_tokens * pricing["output"]
 
-    def get_daily_spend(self, trading_date: str) -> float:
+    def get_daily_spend(self, day: str) -> float:
+        """Sum cost of non-cache-hit classifier calls *logged* on the given
+        wall-clock day (filter on `date(ts)`, NOT on trading_date).
+
+        Wall-clock semantics is what budget enforcement needs: the cap
+        constrains how much the system spends in a single operating day,
+        regardless of which historical trading_dates the calls were
+        classifying. (Backfill scripts in particular log many historical
+        trading_dates within a single wall-clock day; an earlier version
+        of this method filtered on trading_date and so silently disabled
+        budget enforcement for those runs — found 2026-06-01.)
+        """
         with sqlite3.connect(self._db_path) as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(cost_usd), 0) FROM regime_classification_log "
-                "WHERE trading_date = ? AND cache_hit = 0",
-                (trading_date,),
+                "WHERE date(ts) = ? AND cache_hit = 0",
+                (day,),
             ).fetchone()
         return row[0]
 
-    def is_budget_exceeded(self, trading_date: str) -> bool:
-        return self.get_daily_spend(trading_date) >= self._max_daily_cost
+    def is_budget_exceeded(self, day: str) -> bool:
+        return self.get_daily_spend(day) >= self._max_daily_cost
 
     def log_classification(
         self,
