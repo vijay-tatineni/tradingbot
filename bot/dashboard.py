@@ -364,6 +364,7 @@ tr:hover td {{ background:#1c2128; }}
     <button class="regime-tab" data-tab="degradation">Degradation</button>
     <button class="regime-tab" data-tab="pauses">Pauses</button>
     <button class="regime-tab" data-tab="classify">Classify</button>
+    <button class="regime-tab" data-tab="filter">Filter</button>
   </div>
   <div class="regime-meta" id="regimeMeta">Last refresh: --</div>
   <div class="regime-pane active" id="regime-pane-regime"><div class="regime-empty">Loading...</div></div>
@@ -372,6 +373,7 @@ tr:hover td {{ background:#1c2128; }}
   <div class="regime-pane" id="regime-pane-shadow"></div>
   <div class="regime-pane" id="regime-pane-degradation"></div>
   <div class="regime-pane" id="regime-pane-pauses"></div>
+  <div class="regime-pane" id="regime-pane-filter"><div class="regime-empty">Loading...</div></div>
   <div class="regime-pane" id="regime-pane-classify">
     <div class="classify-subtitle">Re-classify an instrument using its most recent cached features.</div>
     <div class="classify-budget" id="classifyBudget">Loading budget...</div>
@@ -743,7 +745,68 @@ const REGIME_TABS = {{
       ])
     ),
   }},
+  filter: {{
+    url: '/api/regime/filter_performance',
+    usesRawData: true,
+    empty: "No filter performance data — flag is off or no rows yet.",
+    render: renderFilterTile,
+  }},
 }};
+
+function _fmtPct(v) {{
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  const n = Number(v);
+  const cls = n > 0 ? 'green' : (n < 0 ? 'red' : '');
+  return `<span class="${{cls}}">${{n >= 0 ? '+' : ''}}${{n.toFixed(2)}}%</span>`;
+}}
+function _fmtCount(n) {{
+  return n === null || n === undefined ? '<span class="muted">—</span>' : String(n);
+}}
+function renderFilterTile(data) {{
+  if (!data || typeof data !== 'object') return '';
+  const live = data.live_trades || {{}};
+  const blocked = data.blocked_entries || {{}};
+  const cmp = data.comparison || {{}};
+  const byReg = blocked.by_regime || {{}};
+  const sinceStr = data.since ? regimeEscape(data.since) : 'all-time';
+  return `
+    <div style="padding:14px 16px;">
+      <div class="regime-meta" style="border:none;padding:0 0 10px 0;">
+        Window: <span class="gold">${{sinceStr}}</span>
+        &nbsp;·&nbsp; Auto-refreshes every 30s
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px;">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;">
+          <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Live trades</div>
+          <div style="font-size:1.1rem;font-weight:700;">${{_fmtCount(live.n)}}<span class="muted" style="font-size:0.7rem;font-weight:400;"> closed</span></div>
+          <div style="margin-top:4px;font-size:0.72rem;">Mean P&amp;L: ${{_fmtPct(live.mean_pnl_pct)}}</div>
+          <div style="font-size:0.7rem;color:var(--muted);">Win rate: ${{live.win_rate === null || live.win_rate === undefined ? '—' : (live.win_rate * 100).toFixed(0) + '%'}}
+            &nbsp;·&nbsp; ${{live.n_wins || 0}}W / ${{live.n_losses || 0}}L</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;">
+          <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Blocked entries</div>
+          <div style="font-size:1.1rem;font-weight:700;">${{_fmtCount(blocked.n_total)}}<span class="muted" style="font-size:0.7rem;font-weight:400;"> total</span></div>
+          <div style="margin-top:4px;font-size:0.72rem;">RANGING: ${{_fmtCount(byReg.RANGING && byReg.RANGING.n)}}
+            &nbsp;·&nbsp; UNCLEAR: ${{_fmtCount(byReg.UNCLEAR && byReg.UNCLEAR.n)}}
+            &nbsp;·&nbsp; unknown: ${{_fmtCount(byReg.unknown && byReg.unknown.n)}}</div>
+          <div style="font-size:0.7rem;color:var(--muted);">Shadows: ${{blocked.n_closed_shadows || 0}} closed, ${{blocked.n_open_shadows || 0}} open</div>
+        </div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--gold);border-radius:6px;padding:12px 14px;">
+        <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Net effect</div>
+        <div style="font-size:0.78rem;line-height:1.5;">
+          Live mean: ${{_fmtPct(cmp.mean_live_pnl_pct)}}
+          &nbsp;·&nbsp; Would-have-blocked mean: ${{_fmtPct(cmp.mean_blocked_shadow_pnl_pct)}}
+          &nbsp;·&nbsp; Net per trade: ${{_fmtPct(cmp.net_effect_pct_per_trade)}}
+        </div>
+        <div style="margin-top:6px;font-size:0.72rem;color:var(--text);font-style:italic;">${{regimeEscape(cmp.verdict || '')}}</div>
+      </div>
+      <div style="margin-top:10px;font-size:0.66rem;color:var(--muted);">
+        P&amp;L is raw % return from entry (LONG-assumed). Includes only closed shadow trades.
+      </div>
+    </div>
+  `;
+}}
 
 let _activeRegimeTab = 'regime';
 let _regimeRefreshTimer = null;
@@ -780,7 +843,7 @@ async function fetchRegimeTab(key) {{
         btn.appendChild(span);
       }}
     }}
-    const table = tab.render(rows);
+    const table = tab.render(tab.usesRawData ? data : rows);
     pane.innerHTML = table || `<div class="regime-empty">${{regimeEscape(tab.empty)}}</div>`;
     const meta = document.getElementById('regimeMeta');
     if (meta) meta.textContent = 'Last refresh: ' + new Date().toISOString().slice(11, 19) + ' UTC · ' + key;

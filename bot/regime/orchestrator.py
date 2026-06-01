@@ -254,6 +254,15 @@ class RegimeOrchestrator(BasePlugin):
         the block, including the price + bar_time at which the entry
         would have fired. Commit 2 attaches a shadow-trade id to the
         same row to simulate the would-have outcome.
+
+        Direction-agnostic by design: the filter checks regime structure
+        (TRENDING / RANGING / UNCLEAR), not direction. A long signal in a
+        TRENDING-down market passes the filter — direction is owned by the
+        underlying signal engine (triple-confirmation). The filter's job is
+        to suppress chop (RANGING / UNCLEAR), not to confirm direction.
+        Consequence: the shadow-trade P&L this collects includes
+        "trending but against-trend" entries; read the comparison tile with
+        that in mind. See docs/TECH_DEBT.md.
         """
         if signal not in (1, -1):
             return True

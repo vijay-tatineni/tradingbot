@@ -226,6 +226,31 @@ class TradingBot:
         for plugin in self.plugins:
             plugin.on_start()
 
+        # ── Regime-filter warm-up warning ─────────────────────
+        # When the filter is live, any instrument without a smoothed
+        # regime yet (scheduler hasn't classified it since startup)
+        # has its entries BLOCKED until classification lands. Surface
+        # the count once at startup so a fully-blocked filter isn't
+        # mistaken for a dead bot.
+        if self.flags.get("enable_regime_filter_live"):
+            instruments = self.cfg.active_instruments
+            no_regime = 0
+            for inst in instruments:
+                symbol = inst.get("symbol")
+                if not symbol:
+                    continue
+                try:
+                    if self.smoothing_store.get_latest(symbol) is None:
+                        no_regime += 1
+                except Exception:
+                    # Treat an unreadable smoothing store as "no regime"
+                    # for warning purposes — it would block too.
+                    no_regime += 1
+            if no_regime > 0:
+                log(f"REGIME FILTER LIVE: {no_regime} of {len(instruments)} "
+                    f"instruments have no smoothed regime — entries will be "
+                    f"BLOCKED until classification lands", "WARN")
+
         # Start watchdog
         self.watchdog.start()
 

@@ -709,3 +709,66 @@ filter on log timestamp (`date(ts)`), never on the
 classification's `trading_date`. When the two are equal it's a
 coincidence of the bot's normal cadence, not a property of the
 data model.
+
+## Regime filter is direction-agnostic (intent, not a bug)
+
+**Status:** Documented 2026-06-01
+
+`RegimeOrchestrator.apply_regime_filter` allows an entry only when the
+instrument's smoothed `effective_regime` is `TRENDING`. It checks regime
+*structure* (TRENDING / RANGING / UNCLEAR), not *direction*. A long signal
+in a TRENDING-down market passes the filter, and a short in a TRENDING-up
+market passes too — direction is owned by the underlying signal engine
+(triple-confirmation), not the filter. The filter's only job is to
+suppress chop (RANGING / UNCLEAR).
+
+Recorded here so it isn't "fixed" later by someone who reads a blocked
+against-trend trade as a defect. Consequence to keep in mind when reading
+the Filter comparison tile / `filter_performance` aggregation: the
+would-have-blocked shadow P&L includes trending-but-against-trend entries,
+so the comparison is "regime gate on vs off", not "good-direction trades
+only". If a directional gate is ever wanted, it belongs in the signal
+engine or as a separate gate — not by overloading the regime filter.
+
+## Dashboard dual-source-of-truth bit twice in the regime-filter work
+
+**Status:** Open — root cause fixed for the Filter tile, pattern remains
+
+`web/dashboard.html` is generated wholesale from the f-string in
+`bot/dashboard.py:_write_html()`, which runs on every `Dashboard(...)`
+instantiation (bot startup *and* any test that constructs a Dashboard).
+Commit `c2f6656` added the Filter tile — both the tab/pane/render JS *and*
+the `tab.render(tab.usesRawData ? data : rows)` dispatch the tile depends
+on — directly to the generated `web/dashboard.html`, never to the
+generator. The next regeneration silently reverted both, leaving the
+`/api/regime/filter_performance` endpoint orphaned. Fixed 2026-06-01 by
+porting both into `bot/dashboard.py` and confirming regeneration now
+reproduces the committed artifact byte-for-byte.
+
+The underlying hazard remains: there is no guard that the committed
+`web/dashboard.html` equals `_write_html()` output. Future tile edits made
+to the HTML by hand will be reverted the same way. Suggested fix for a
+later pass: a test that constructs the Dashboard, reads the generated
+file, and asserts it equals the committed `web/dashboard.html` — turning
+silent drift into a red test.
+
+## Deferred minor cleanups (regime-filter review, 2026-06-01)
+
+**Status:** Open — batch for a future tidy-up pass
+
+Surfaced during the regime-filter review; deferred to keep the restore
+commit focused.
+
+- **(4a) `.gitignore` misses SQLite sidecars.** `*.db` is ignored but
+  `*.db-wal` / `*.db-shm` / `*.db-journal` are not, so `regime.db-wal` and
+  `regime.db-shm` show as untracked. `logs/` is also untracked. Add these
+  patterns to `.gitignore`.
+- **(4b) Orchestrator reaches into RegimeCache internals.**
+  `RegimeOrchestrator._lookup_latest_rationale` opens its own sqlite
+  connection against `self._regime_cache._db_path` (a private attr).
+  Add a `get_latest_rationale(instrument)` method to `RegimeCache` so
+  there is one connection owner / path.
+- **(4c) `datetime.utcnow()` deprecation in JWT.** `api_server.py:101-102`
+  uses `datetime.utcnow()` for JWT `iat`/`exp` (raises DeprecationWarning
+  under the test run). Switch to `datetime.now(timezone.utc)` before a
+  Python bump removes it.
