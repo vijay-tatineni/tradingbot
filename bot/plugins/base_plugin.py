@@ -59,6 +59,18 @@ class BasePlugin:
         """
         return True   # default: allow all trades
 
+    def apply_regime_filter(self, inst: dict, signal: int,
+                            confidence: str, price: float,
+                            bar_time: str) -> bool:
+        """
+        Called BEFORE the layer1 entry gates (position limit, validation,
+        sentiment, pre_trade). Return False to block this signal because
+        of the regime filter; layer1 will mark live_blocked_by =
+        "regime_filter" and skip the rest of the branch. Default is True
+        (no opinion) — only the orchestrator overrides this.
+        """
+        return True
+
     def log_signal(self, inst: dict, signal: int, confidence: str,
                    live_blocked_by: Optional[str]) -> None:
         """

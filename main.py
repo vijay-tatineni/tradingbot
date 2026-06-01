@@ -49,6 +49,7 @@ from bot.regime.classifier   import RegimeClassifier
 from bot.regime.cost_tracker import CostTracker
 from bot.regime.scheduler    import RegimeClassificationScheduler
 from bot.regime.smoothing_store import SmoothedStateStore
+from bot.regime.blocked_entries import RegimeBlockedEntriesLog
 from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
 from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
 from bot.regime.router     import route as regime_route
@@ -150,6 +151,7 @@ class TradingBot:
             cache=self.regime_cache,
             cost_tracker=self.regime_cost_tracker,
         )
+        self.regime_blocked_entries_log = RegimeBlockedEntriesLog(regime_db)
 
         self.orchestrator = RegimeOrchestrator(
             flags=self.flags,
@@ -161,6 +163,8 @@ class TradingBot:
             position_metadata_store=self.pm_store,
             telegram_alerts=self.alerts,
             config_path=config_path,
+            regime_cache=self.regime_cache,
+            blocked_entries_log=self.regime_blocked_entries_log,
         )
         self.register_plugin(self.orchestrator)
 

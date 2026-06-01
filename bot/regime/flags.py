@@ -23,6 +23,7 @@ KNOWN_FLAGS = {
     "enable_position_tagged_exit_policy",
     "enable_calendar_ui",
     "data_quality_strict_mode",
+    "enable_regime_filter_live",
 }
 
 SAFE_DEFAULTS = {
@@ -39,6 +40,7 @@ SAFE_DEFAULTS = {
     "enable_position_tagged_exit_policy": False,
     "enable_calendar_ui": False,
     "data_quality_strict_mode": False,
+    "enable_regime_filter_live": False,
 }
 
 # §6.3: dependency graph (child → list of parents)
@@ -54,6 +56,10 @@ DEPENDENCIES = {
     ],
     "enable_mean_reversion_live": ["enable_router_live"],
     "enable_event_overlays_live": ["enable_event_overlays_shadow"],
+    # The regime filter is the minimal experimental gate — it doesn't
+    # need the full router/persistence chain, just smoothed regime data,
+    # which is produced by the shadow classifier path.
+    "enable_regime_filter_live": ["enable_classifier_shadow"],
 }
 
 
@@ -130,6 +136,7 @@ class FeatureFlags:
         lines.append(f"  position_tagged_exit: {str(self._flags['enable_position_tagged_exit_policy']).lower()}")
         lines.append(f"  calendar_ui: {str(self._flags['enable_calendar_ui']).lower()}")
         lines.append(f"  data_quality_strict: {str(self._flags['data_quality_strict_mode']).lower()}")
+        lines.append(f"  regime_filter: live={str(self._flags['enable_regime_filter_live']).lower()}")
 
         any_live = any(
             self._flags.get(k, False) for k in KNOWN_FLAGS if k.endswith("_live")

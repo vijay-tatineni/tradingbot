@@ -183,6 +183,23 @@ class ActiveTrading:
             except Exception as e:
                 log(f"[Shadow] log_signal failed in {p.name}: {e}", "WARN")
 
+    def _regime_filter_allows(self, inst: dict, signal: int,
+                              confidence: str, price: float) -> bool:
+        """Regime-filter experiment hook. Asks every plugin whether
+        this entry should be blocked by the regime filter. Returns
+        False only if any plugin says block; failures fall through to
+        allow so a buggy plugin can never halt live trading.
+        """
+        bar_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for p in self.plugins:
+            try:
+                if not p.apply_regime_filter(inst, signal, confidence,
+                                             price, bar_time):
+                    return False
+            except Exception as e:
+                log(f"[RegimeFilter] {p.name} raised: {e}", "WARN")
+        return True
+
     def _process_instrument(self, inst: dict) -> dict:
         symbol   = inst['symbol']
         mkt_open = self.hours.is_open(inst)
@@ -299,20 +316,25 @@ class ActiveTrading:
                     # Signal reversal (short-able CFDs only)
                     elif result.signal == -1 and not inst.get('long_only', True):
                         live_blocked_by = None
-                        allowed = all(p.pre_trade(inst, -1, result.confidence)
-                                      for p in self.plugins)
-                        if allowed:
-                            action, fill_result = self.broker.handle_signal(
-                                inst, result.signal, result.confidence, pos)
-                            if 'FAILED' not in action:
-                                exit_price = fill_result.fill_price or price
-                                self.tracker.on_close(symbol, exit_price,
-                                                      'SIGNAL_REVERSED',
-                                                      reentry_cooldown)
-                                for p in self.plugins:
-                                    p.post_trade(inst, -1, action, exit_price)
+                        if not self._regime_filter_allows(
+                                inst, -1, result.confidence, price):
+                            action = "REGIME FILTER BLOCKED"
+                            live_blocked_by = "regime_filter"
                         else:
-                            live_blocked_by = "orchestrator"
+                            allowed = all(p.pre_trade(inst, -1, result.confidence)
+                                          for p in self.plugins)
+                            if allowed:
+                                action, fill_result = self.broker.handle_signal(
+                                    inst, result.signal, result.confidence, pos)
+                                if 'FAILED' not in action:
+                                    exit_price = fill_result.fill_price or price
+                                    self.tracker.on_close(symbol, exit_price,
+                                                          'SIGNAL_REVERSED',
+                                                          reentry_cooldown)
+                                    for p in self.plugins:
+                                        p.post_trade(inst, -1, action, exit_price)
+                            else:
+                                live_blocked_by = "orchestrator"
                         self._broadcast_signal_to_shadow(
                             inst, -1, result.confidence, live_blocked_by)
                 else:
@@ -329,7 +351,11 @@ class ActiveTrading:
                 )
                 if should_reenter:
                     live_blocked_by = None
-                    if not self._can_enter(symbol):
+                    if not self._regime_filter_allows(
+                            inst, 1, result.confidence, price):
+                        action = "REGIME FILTER BLOCKED"
+                        live_blocked_by = "regime_filter"
+                    elif not self._can_enter(symbol):
                         action = "RE-ENTRY BLOCKED (position limit)"
                         live_blocked_by = "position_limit"
                     elif not self._validate_entry(inst, inst['qty'], price, "BUY"):
@@ -363,7 +389,11 @@ class ActiveTrading:
             elif result.signal == 1:
                 # Fresh entry
                 live_blocked_by = None
-                if not self._can_enter(symbol):
+                if not self._regime_filter_allows(
+                        inst, 1, result.confidence, price):
+                    action = "REGIME FILTER BLOCKED"
+                    live_blocked_by = "regime_filter"
+                elif not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
                     live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "BUY"):
@@ -397,7 +427,11 @@ class ActiveTrading:
             elif result.signal == -1 and not inst.get('long_only', True):
                 # Fresh short from flat
                 live_blocked_by = None
-                if not self._can_enter(symbol):
+                if not self._regime_filter_allows(
+                        inst, -1, result.confidence, price):
+                    action = "REGIME FILTER BLOCKED"
+                    live_blocked_by = "regime_filter"
+                elif not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
                     live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "SELL"):

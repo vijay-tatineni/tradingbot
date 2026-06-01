@@ -30,7 +30,9 @@ class RegimeOrchestrator(BasePlugin):
                  counterfactual_logger=None,
                  position_metadata_store=None,
                  telegram_alerts=None,
-                 config_path: Optional[str] = None):
+                 config_path: Optional[str] = None,
+                 regime_cache=None,
+                 blocked_entries_log=None):
         self._flags = flags
         self._pause_registry = pause_registry
         self._overlay_fn = overlay_registry_fn
@@ -40,7 +42,12 @@ class RegimeOrchestrator(BasePlugin):
         self._pm_store = position_metadata_store
         self._telegram = telegram_alerts
         self._config_path = config_path
+        self._regime_cache = regime_cache
+        self._blocked_entries_log = blocked_entries_log
         self._last_gate_results: dict[str, EntryGateResult] = {}
+        # Per-signal cache so the post-block dashboard / Commit 2 simulator
+        # can pull the row id we just wrote without a second SELECT.
+        self._last_blocked_row_id: dict[str, int] = {}
 
     def on_start(self) -> None:
         log_startup(self._flags, config_path=self._config_path,
@@ -228,3 +235,98 @@ class RegimeOrchestrator(BasePlugin):
 
     def last_gate_result(self, instrument: str) -> Optional[EntryGateResult]:
         return self._last_gate_results.get(instrument)
+
+    def apply_regime_filter(self, inst: dict, signal: int,
+                            confidence: str, price: float,
+                            bar_time: str) -> bool:
+        """Regime-filter experiment hook (§claude-strategy follow-up).
+
+        When `enable_regime_filter_live` is on, block any entry whose
+        instrument's smoothed regime isn't TRENDING. Warm-up case
+        (no smoothed row yet): also block — conservative default.
+        Infrastructure exceptions (DB locked, store unavailable) fall
+        through to allow, so a transient regime-data failure can't
+        accidentally halt live trading.
+
+        Side effect: writes a row to `regime_blocked_entries` describing
+        the block, including the price + bar_time at which the entry
+        would have fired. Commit 2 attaches a shadow-trade id to the
+        same row to simulate the would-have outcome.
+        """
+        if signal not in (1, -1):
+            return True
+        if not self._flags.get("enable_regime_filter_live"):
+            return True
+
+        symbol = inst.get("symbol", "UNKNOWN")
+        smoothed = None
+        if self._smoothing_store is not None:
+            try:
+                smoothed = self._smoothing_store.get_latest(symbol)
+            except Exception as e:
+                logger.warning(
+                    "regime_filter: smoothing store lookup failed for %s "
+                    "(%s) — allowing entry through to live path", symbol, e)
+                return True
+
+        effective_regime = (
+            smoothed.effective_regime if smoothed is not None else None
+        )
+        if effective_regime == "TRENDING":
+            return True
+
+        # Block + log
+        signal_type = "BUY" if signal == 1 else "SELL"
+        rationale = self._lookup_latest_rationale(symbol)
+        if self._blocked_entries_log is not None:
+            try:
+                row_id = self._blocked_entries_log.log(
+                    instrument=symbol,
+                    signal_type=signal_type,
+                    signal_confidence=confidence,
+                    smoothed_regime=effective_regime,
+                    classifier_rationale=rationale,
+                    would_have_entry_price=price,
+                    bar_time=bar_time,
+                )
+                self._last_blocked_row_id[symbol] = row_id
+            except Exception as e:
+                logger.warning(
+                    "regime_filter: blocked-entry log write failed "
+                    "for %s: %s", symbol, e)
+        logger.info(
+            "regime_filter blocked %s %s @ %s — smoothed_regime=%s",
+            signal_type, symbol, price, effective_regime,
+        )
+        return False
+
+    def _lookup_latest_rationale(self, instrument: str) -> Optional[str]:
+        """Pull the most recent classifier rationale for the instrument
+        from regime_classification_cache. Best-effort; missing cache or
+        bad JSON yields None."""
+        if self._regime_cache is None:
+            return None
+        try:
+            import json as _json
+            import sqlite3 as _sqlite3
+            with _sqlite3.connect(self._regime_cache._db_path) as conn:
+                row = conn.execute(
+                    "SELECT classification_json FROM "
+                    "regime_classification_cache WHERE instrument = ? "
+                    "ORDER BY trading_date DESC LIMIT 1",
+                    (instrument,),
+                ).fetchone()
+            if not row:
+                return None
+            return _json.loads(row[0]).get("rationale")
+        except Exception as e:
+            logger.warning(
+                "regime_filter: rationale lookup failed for %s: %s",
+                instrument, e)
+            return None
+
+    def last_blocked_row_id(self, instrument: str) -> Optional[int]:
+        """Most recent regime_blocked_entries.id written for this
+        instrument by apply_regime_filter() — Commit 2 uses this to
+        attach a shadow_trade_id without an extra SELECT."""
+        return self._last_blocked_row_id.get(instrument)
