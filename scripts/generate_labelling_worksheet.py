@@ -16,6 +16,7 @@ between the two bar sources is expected and accepted.
 Re-runs preserve any labels already entered in the existing file.
 """
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -31,10 +32,13 @@ from bot.regime.features import compute_regime_features  # noqa: E402
 
 INSTRUMENTS_FILE = PROJECT_DIR / "instruments.json"
 OUTPUT_FILE = PROJECT_DIR / "specs" / "regime_labels.json"
+BARS_OUTPUT_FILE = PROJECT_DIR / "specs" / "regime_labels_bars.json"
+REGIME_DB = PROJECT_DIR / "regime.db"
 
 WINDOW_SIZE = 6       # trading days per window
 WINDOW_STEP = 5       # advance between window starts
 LOOKBACK_DAYS = 90    # how many trading days back to cover
+CHART_CONTEXT_DAYS = 30  # context bars to ship before / after window range
 FETCH_PERIOD = "2y"   # fetch generously so MA200 has room
 
 
@@ -83,7 +87,39 @@ def _round_features(features: dict) -> dict:
     return out
 
 
-def build_windows(symbol: str, df: pd.DataFrame) -> list:
+def load_classifier_verdicts() -> dict:
+    """Return {(instrument, trading_date): {raw_regime, confidence, rationale}}
+    from regime_classification_cache. Empty dict if the DB or table is
+    missing — the worksheet stays usable, the verdicts panel just stays
+    blank until classifier data accumulates."""
+    if not REGIME_DB.exists():
+        return {}
+    out = {}
+    try:
+        conn = sqlite3.connect(str(REGIME_DB))
+        rows = conn.execute(
+            "SELECT instrument, trading_date, classification_json "
+            "FROM regime_classification_cache"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"  WARN: classifier cache read failed: {e}", file=sys.stderr)
+        return {}
+    for inst, day, blob in rows:
+        try:
+            payload = json.loads(blob)
+        except Exception:
+            continue
+        out[(inst, day)] = {
+            "raw_regime": payload.get("raw_regime"),
+            "confidence": payload.get("confidence"),
+            "rationale": payload.get("rationale"),
+        }
+    return out
+
+
+def build_windows(symbol: str, df: pd.DataFrame,
+                  verdicts: dict) -> list:
     """Return a list of window dicts. Each covers WINDOW_SIZE trading days
     within the most recent LOOKBACK_DAYS of df. Classifier features are
     computed using bars up to and including the window's end bar — that's
@@ -138,11 +174,32 @@ def build_windows(symbol: str, df: pd.DataFrame) -> list:
             "range_low": round(range_low, 4),
             "range_efficiency_window": round(range_eff_window, 3),
             "classifier_features_at_end": _round_features(classifier_features),
+            "classifier_verdict_at_end": verdicts.get((symbol, end_date)),
             "my_label": None,
             "my_confidence": None,
             "my_notes": None,
         })
     return windows
+
+
+def build_chart_bars(df: pd.DataFrame) -> list:
+    """Return [{date, open, high, low, close}] for the last
+    LOOKBACK_DAYS + CHART_CONTEXT_DAYS trading days. UI extracts the slice
+    around each window's date range when rendering the chart."""
+    if len(df) < LOOKBACK_DAYS:
+        return []
+    slice_size = LOOKBACK_DAYS + CHART_CONTEXT_DAYS
+    bars = df.iloc[-slice_size:]
+    return [
+        {
+            "date": idx.strftime("%Y-%m-%d"),
+            "open": round(float(row["open"]), 4),
+            "high": round(float(row["high"]), 4),
+            "low": round(float(row["low"]), 4),
+            "close": round(float(row["close"]), 4),
+        }
+        for idx, row in bars.iterrows()
+    ]
 
 
 def _load_existing_labels() -> dict:
@@ -174,6 +231,9 @@ def main() -> int:
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     existing_labels = _load_existing_labels()
+    verdicts = load_classifier_verdicts()
+    if verdicts:
+        print(f"  classifier verdicts available: {len(verdicts)} (instrument, date) pairs")
 
     output = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -182,6 +242,12 @@ def main() -> int:
         "lookback_days": LOOKBACK_DAYS,
         "bar_source": "yfinance",
         "instruments": [],
+    }
+    bars_output = {
+        "generated_at": output["generated_at"],
+        "context_days": CHART_CONTEXT_DAYS,
+        "lookback_days": LOOKBACK_DAYS,
+        "instruments": {},
     }
     total_windows = 0
     preserved = 0
@@ -200,13 +266,15 @@ def main() -> int:
             print(" no data")
             skipped.append(sym)
             continue
-        windows = build_windows(sym, df)
+        windows = build_windows(sym, df, verdicts)
         for w in windows:
             key = (sym, w["window_id"])
             if key in existing_labels:
                 w.update(existing_labels[key])
                 preserved += 1
-        print(f" {len(df)} bars → {len(windows)} windows")
+        chart_bars = build_chart_bars(df)
+        print(f" {len(df)} bars → {len(windows)} windows, "
+              f"{len(chart_bars)} chart bars")
         output["instruments"].append({
             "instrument": sym,
             "yfinance_symbol": yf_sym,
@@ -214,10 +282,13 @@ def main() -> int:
             "currency": inst.get("currency"),
             "windows": windows,
         })
+        bars_output["instruments"][sym] = chart_bars
         total_windows += len(windows)
 
     OUTPUT_FILE.write_text(json.dumps(output, indent=2) + "\n")
+    BARS_OUTPUT_FILE.write_text(json.dumps(bars_output, indent=2) + "\n")
     print(f"\nWrote {OUTPUT_FILE}")
+    print(f"Wrote {BARS_OUTPUT_FILE}")
     print(f"  {len(output['instruments'])} instruments, "
           f"{total_windows} total windows")
     if preserved:

@@ -1685,6 +1685,95 @@ def _maybe_register_calendar():
 _maybe_register_calendar()
 
 
+# ── Labelling worksheet endpoints (classifier evaluation) ──
+import fcntl as _fcntl  # noqa: E402
+
+LABELS_FILE = str(BASE_DIR / 'specs' / 'regime_labels.json')
+LABELS_BARS_FILE = str(BASE_DIR / 'specs' / 'regime_labels_bars.json')
+VALID_LABELS = {"TRENDING", "RANGING", "UNCLEAR"}
+MAX_NOTES_LEN = 500
+
+
+@app.route('/api/labels', methods=['GET'])
+@require_auth
+def labels_get():
+    """Return the full labelling worksheet."""
+    if not os.path.exists(LABELS_FILE):
+        return jsonify({"error": "worksheet not generated yet"}), 404
+    with open(LABELS_FILE, 'r') as f:
+        return jsonify(json.load(f))
+
+
+@app.route('/api/labels/bars', methods=['GET'])
+@require_auth
+def labels_bars_get():
+    """Return the chart-bar dataset for the labelling worksheet."""
+    if not os.path.exists(LABELS_BARS_FILE):
+        return jsonify({"error": "bars not generated yet"}), 404
+    with open(LABELS_BARS_FILE, 'r') as f:
+        return jsonify(json.load(f))
+
+
+@app.route('/api/labels/save', methods=['POST'])
+@require_auth
+def labels_save():
+    """Save one window's label (read-modify-write under fcntl lock)."""
+    payload = request.get_json(silent=True) or {}
+    window_id = payload.get('window_id')
+    my_label = payload.get('my_label')
+    my_confidence = payload.get('my_confidence')
+    my_notes = payload.get('my_notes')
+
+    if not window_id or not isinstance(window_id, str):
+        return jsonify({"error": "window_id required"}), 400
+    if my_label not in VALID_LABELS:
+        return jsonify({
+            "error": f"my_label must be one of {sorted(VALID_LABELS)}"
+        }), 400
+    if not isinstance(my_confidence, int) or not (1 <= my_confidence <= 5):
+        return jsonify({"error": "my_confidence must be int 1..5"}), 400
+    if my_notes is not None:
+        if not isinstance(my_notes, str):
+            return jsonify({"error": "my_notes must be string"}), 400
+        if len(my_notes) > MAX_NOTES_LEN:
+            return jsonify({
+                "error": f"my_notes exceeds {MAX_NOTES_LEN} chars"
+            }), 400
+
+    if not os.path.exists(LABELS_FILE):
+        return jsonify({"error": "worksheet not generated yet"}), 404
+
+    # Read-modify-write under exclusive lock so concurrent POSTs don't
+    # clobber each other.
+    with open(LABELS_FILE, 'r+') as f:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+        try:
+            data = json.load(f)
+            updated = False
+            for inst in data.get('instruments', []):
+                for w in inst.get('windows', []):
+                    if w.get('window_id') == window_id:
+                        w['my_label'] = my_label
+                        w['my_confidence'] = my_confidence
+                        w['my_notes'] = my_notes
+                        updated = True
+                        break
+                if updated:
+                    break
+            if not updated:
+                return jsonify({"error": "window_id not found"}), 404
+            f.seek(0)
+            f.truncate()
+            json.dump(data, f, indent=2)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+
+    return jsonify({"ok": True, "window_id": window_id})
+
+
 if __name__ == '__main__':
     # Check users exist
     users = load_users()

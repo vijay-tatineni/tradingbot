@@ -55,32 +55,44 @@ class TestYfSymbolMapping:
 class TestBuildWindows:
     def test_too_short_returns_empty(self):
         df = _synthetic_bars(100)
-        assert glw.build_windows("FOO", df) == []
+        assert glw.build_windows("FOO", df, {}) == []
 
     def test_typical_input_produces_expected_window_count(self):
         df = _synthetic_bars(500)
-        windows = glw.build_windows("FOO", df)
+        windows = glw.build_windows("FOO", df, {})
         # 90-day lookback, size=6, step=5 → 18 windows (incl. snapped tail)
         assert 15 <= len(windows) <= 20
 
     def test_window_ids_unique_and_prefixed_with_symbol(self):
         df = _synthetic_bars(500)
-        windows = glw.build_windows("BARC", df)
+        windows = glw.build_windows("BARC", df, {})
         ids = [w["window_id"] for w in windows]
         assert len(set(ids)) == len(ids)
         for wid in ids:
             assert wid.startswith("BARC_")
 
+    def test_classifier_verdict_baked_in_when_available(self):
+        df = _synthetic_bars(500)
+        windows_blank = glw.build_windows("FOO", df, {})
+        end_date = windows_blank[-1]["end_date"]
+        verdicts = {("FOO", end_date): {"raw_regime": "RANGING",
+                                        "confidence": 0.72,
+                                        "rationale": "test"}}
+        windows = glw.build_windows("FOO", df, verdicts)
+        assert windows[-1]["classifier_verdict_at_end"]["raw_regime"] == "RANGING"
+        # Windows whose end_date isn't in the verdicts dict stay null.
+        assert windows[0]["classifier_verdict_at_end"] is None
+
     def test_placeholders_are_none(self):
         df = _synthetic_bars(500)
-        for w in glw.build_windows("FOO", df):
+        for w in glw.build_windows("FOO", df, {}):
             assert w["my_label"] is None
             assert w["my_confidence"] is None
             assert w["my_notes"] is None
 
     def test_classifier_features_populated(self):
         df = _synthetic_bars(500)
-        windows = glw.build_windows("FOO", df)
+        windows = glw.build_windows("FOO", df, {})
         feats = windows[-1]["classifier_features_at_end"]
         # All keys returned by compute_regime_features should appear
         for key in ("adx_14", "atr_14", "atr_pct",
@@ -91,7 +103,7 @@ class TestBuildWindows:
 
     def test_window_internal_aggregates_consistent(self):
         df = _synthetic_bars(500)
-        windows = glw.build_windows("FOO", df)
+        windows = glw.build_windows("FOO", df, {})
         last = windows[-1]
         # pct_change should be computable from start/end prices
         expected_pct = (last["end_price"] - last["start_price"]) \
