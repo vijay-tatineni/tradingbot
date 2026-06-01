@@ -79,6 +79,10 @@ class RegimeOrchestrator(BasePlugin):
             return None
 
     def _evaluate_gates(self, instrument: str) -> EntryGateResult:
+        result, _ = self._evaluate_gates_with_context(instrument)
+        return result
+
+    def _evaluate_gates_with_context(self, instrument: str):
         is_paused = False
         pause_reason = None
         if self._pause_registry:
@@ -96,14 +100,21 @@ class RegimeOrchestrator(BasePlugin):
                 overlay_names.append(getattr(o, "overlay_name", str(o)))
 
         router_live = self._flags.get("enable_router_live")
-        routing = self._get_routing(instrument)
+        smoothed = None
+        if self._smoothing_store is not None:
+            try:
+                smoothed = self._smoothing_store.get_latest(instrument)
+            except Exception as e:
+                logger.warning("Smoothing store lookup failed for %s: %s",
+                               instrument, e)
+        routing = self._get_routing(instrument, smoothed=smoothed)
         router_allows = True
         router_block_reason = None
         if routing is not None:
             router_allows = routing.allow_new_entries
             router_block_reason = routing.block_reason
 
-        return evaluate_entry_gates(
+        result = evaluate_entry_gates(
             is_paused=is_paused,
             pause_reason=pause_reason,
             overlays_live=overlays_live,
@@ -112,14 +123,83 @@ class RegimeOrchestrator(BasePlugin):
             router_allows=router_allows,
             router_block_reason=router_block_reason,
         )
+        context = {
+            "is_paused": is_paused,
+            "pause_reason": pause_reason,
+            "overlay_names": overlay_names,
+            "smoothed": smoothed,
+            "routing": routing,
+            "router_allows": router_allows,
+            "router_block_reason": router_block_reason,
+        }
+        return result, context
+
+    def _log_shadow_decision(self, symbol: str, signal: int, confidence: str,
+                             live_result: EntryGateResult,
+                             context: dict) -> None:
+        """Write a shadow_decisions row comparing the live gate outcome to a
+        full-shadow evaluation (overlays_live=True, router_live=True). Any
+        failure is logged and swallowed so live trading is unaffected.
+        """
+        if self._cf_logger is None:
+            return
+        try:
+            shadow_result = evaluate_entry_gates(
+                is_paused=context["is_paused"],
+                pause_reason=context["pause_reason"],
+                overlays_live=True,
+                active_overlay_names=context["overlay_names"],
+                router_live=True,
+                router_allows=context["router_allows"],
+                router_block_reason=context["router_block_reason"],
+            )
+
+            live_action = "TAKE" if live_result.allow else "BLOCK"
+            shadow_action = "TAKE" if shadow_result.allow else "BLOCK"
+
+            if live_action == shadow_action:
+                disagreement_type = None
+            elif shadow_action == "BLOCK" and live_action == "TAKE":
+                disagreement_type = "shadow_blocks_live_takes"
+            else:
+                disagreement_type = "shadow_allows_live_blocks"
+
+            smoothed = context.get("smoothed")
+            routing = context.get("routing")
+            signal_payload = {"signal": signal, "confidence": confidence}
+            bar_time = datetime.now(timezone.utc).isoformat()
+
+            self._cf_logger.log_decision(
+                instrument=symbol,
+                bar_time=bar_time,
+                live_engine="triple_confirmation",
+                live_signal=signal_payload,
+                live_action=live_action,
+                live_trade_id=None,
+                shadow_regime=smoothed.source_regime if smoothed else None,
+                shadow_confidence=smoothed.confidence if smoothed else None,
+                shadow_smoothed_regime=smoothed.effective_regime if smoothed else None,
+                shadow_smoothed_days=smoothed.days_in_regime if smoothed else None,
+                shadow_overlays_active=context["overlay_names"] or None,
+                shadow_engine=routing.selected_engine if routing else None,
+                shadow_signal=signal_payload,
+                shadow_action=shadow_action,
+                disagreement_type=disagreement_type,
+                flag_snapshot=self._flags.as_dict(),
+            )
+        except Exception as e:
+            logger.warning("Shadow decision logging failed for %s: %s",
+                           symbol, e)
 
     def pre_trade(self, inst: dict, signal: int, confidence: str) -> bool:
         if signal not in (1, -1):
             return True
 
         symbol = inst.get("symbol", "UNKNOWN")
-        result = self._evaluate_gates(symbol)
+        result, context = self._evaluate_gates_with_context(symbol)
         self._last_gate_results[symbol] = result
+
+        self._log_shadow_decision(symbol, signal, confidence, result, context)
 
         if not result.allow:
             logger.info("Entry blocked for %s: gate=%s reason=%s",
