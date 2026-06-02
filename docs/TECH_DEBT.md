@@ -772,3 +772,29 @@ commit focused.
   uses `datetime.utcnow()` for JWT `iat`/`exp` (raises DeprecationWarning
   under the test run). Switch to `datetime.now(timezone.utc)` before a
   Python bump removes it.
+
+---
+
+## Instruments Editor toggle-enable bypasses disabled_reason
+
+**Status:** Known foot-gun. Documented after the 2026-06-02 XAUUSD incident.
+Mitigation not yet implemented — recorded for a follow-up.
+
+The dashboard's `POST /api/instruments/toggle-enable` endpoint flips an
+instrument's `enabled` field without checking the `disabled_reason` field.
+On 2026-06-02 09:22, this allowed XAUUSD and XAGUSD (both disabled with
+reason `no_cfd_market_data_paper_account`) to be enabled via the UI. The
+bot then registered phantom positions, took fake stop-out losses on bad
+CFD data, and generated 12 minutes of error churn until manually disabled
+at 09:32. A fictitious -$657.74 USD loss froze in `pnl_cache` and required
+SQL cleanup.
+
+**Mitigation:** add a guard to the toggle-enable endpoint that blocks (or
+requires explicit confirmation override) when an instrument has any
+non-null `disabled_reason`. For reasons matching
+`paper_account|no_cfd_market_data|no_data_subscription`, block entirely
+with an error message. For other reasons, require confirmation with the
+reason text shown.
+
+**Severity:** moderate — caused real operational churn and required manual
+cleanup, but no real money at risk (paper account).
