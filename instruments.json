@@ -212,6 +212,8 @@
       "qty": 100,
       "sec_type": "STK",
       "symbol": "ANET",
+      "allow_new_entries": false,
+      "disabled_reason": "No demonstrated edge; exits only (validation Phase 0, 2026-06-02)",
       "emergency_stop_pct": 10.0,
       "trail_stop_pct": 5.0,
       "take_profit_pct": 15.0
