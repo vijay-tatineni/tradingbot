@@ -775,6 +775,48 @@ commit focused.
 
 ---
 
+## Filter experiment data semantics: blocks ≠ shadow trades
+
+**Status:** Reference note. Not a defect — documents expected behaviour so the
+`filter_performance` / Filter-tile read isn't misinterpreted as "experiment
+broken" when the closed-shadow sample looks small early on.
+
+When reading the regime-filter experiment's counterfactual data, the count of
+`regime_blocked_entries` and the count of `shadow_hypothetical_trades` measure
+two different things and will diverge by a large factor. That divergence is
+correct.
+
+- **Deduplication is by design.** `ShadowTradeSimulator.open()` refuses to
+  stack — at most one open shadow position per instrument. Repeated blocks on
+  the same instrument *while a shadow is already open* are no-ops, not data
+  loss. The blocked signal being re-evaluated each cycle is essentially the
+  same signal the existing shadow is already tracking.
+- **Expected ratio.** Blocks ≈ (number of cycles the signal fires) × (number
+  of blocked instruments). Shadow trades ≈ number of *distinct shadow
+  lifecycles* (each runs from open until its exit). A 100:1 or higher
+  blocks-to-shadow-trades ratio is normal: it reflects the same instrument
+  being re-blocked every cycle while one shadow position already tracks it.
+- **Market-hours tick gating.** Shadow positions only tick during their
+  instrument's market hours (`_process_instrument` returns early on a closed
+  market, before the tick loop). LSE shadows freeze 16:30–08:00 UTC; US
+  shadows freeze 21:00–13:30 UTC. This is correct — you can't price a closed
+  market — but it means a shadow only progresses during its session.
+- **Tier-2 exits evaluate on bar close.** Trailing stop and take profit are
+  checked only on bar close; for daily-timeframe instruments that is once per
+  day. The emergency stop is checked per tick. So most shadow closures land at
+  end-of-day or on daily bar boundaries, not intraday.
+- **Practical implication for interpretation.** The closed-shadow-trade sample
+  grows slowly — roughly 5–15 per week initially, scaling up as the filter
+  blocks more variety. After 2–4 weeks, expect ~30–80 closed shadow trades to
+  compare against the live path. Do **not** read a low closed-trade count in
+  week 1 as "experiment broken."
+- **Snapshot at time of writing (2026-06-02, day 1 of live filter):** 6 shadow
+  lifecycles (1 closed, 5 open), 1097 blocks accumulated. The closed MSFT
+  trade hit its trail stop at −3.50% — the first counterfactual data point
+  captured.
+
+---
+
 ## Instruments Editor toggle-enable bypasses disabled_reason
 
 **Status:** Known foot-gun. Documented after the 2026-06-02 XAUUSD incident.
