@@ -332,37 +332,57 @@ class ActiveTrading:
                             action = "CLOSE FAILED (smart exit)"
 
                     # Signal reversal (short-able CFDs only)
-                    # NOTE: allow_new_entries=false does NOT gate this path.
-                    # A reversal closes the long and opens a NEW short —
-                    # i.e. it opens fresh risk — yet it lives inside the
-                    # exit-management block, which the flag deliberately
-                    # leaves active. For current instruments this is
-                    # dormant (long_only stocks never reach it; shortable
-                    # CFDs are disabled). If "exits only" should also block
-                    # reopen-on-reversal, gate this branch in a follow-up.
+                    # allow_new_entries=false GATES this path: the
+                    # reversal's exit component (closing the existing
+                    # position) still runs — exit management is always
+                    # preserved — but the opposite-direction entry is
+                    # suppressed. Net effect: a reversal becomes a plain
+                    # exit, not an exit-and-flip, so no new risk is opened
+                    # in either direction. Dormant for current instruments
+                    # (long_only stocks never reach it; shortable CFDs are
+                    # disabled).
                     elif result.signal == -1 and not inst.get('long_only', True):
-                        live_blocked_by = None
-                        if not self._regime_filter_allows(
-                                inst, -1, result.confidence, price):
-                            action = "REGIME FILTER BLOCKED"
-                            live_blocked_by = "regime_filter"
-                        else:
-                            allowed = all(p.pre_trade(inst, -1, result.confidence)
-                                          for p in self.plugins)
-                            if allowed:
-                                action, fill_result = self.broker.handle_signal(
-                                    inst, result.signal, result.confidence, pos)
-                                if 'FAILED' not in action:
-                                    exit_price = fill_result.fill_price or price
-                                    self.tracker.on_close(symbol, exit_price,
-                                                          'SIGNAL_REVERSED',
-                                                          reentry_cooldown)
-                                    for p in self.plugins:
-                                        p.post_trade(inst, -1, action, exit_price)
+                        if not allow_new_entries:
+                            # Exit-only: close the position, do NOT flip.
+                            fill_result = self.broker.close_position(inst, pos)
+                            if fill_result:
+                                exit_price = fill_result.fill_price or price
+                                self.tracker.on_close(
+                                    symbol, exit_price,
+                                    'SIGNAL_REVERSED (entry suppressed)',
+                                    reentry_cooldown)
+                                action = ("CLOSED (reversal — new entry "
+                                          "suppressed)")
+                                for p in self.plugins:
+                                    p.post_trade(inst, 0, action, exit_price)
                             else:
-                                live_blocked_by = "orchestrator"
-                        self._broadcast_signal_to_shadow(
-                            inst, -1, result.confidence, live_blocked_by)
+                                action = "CLOSE FAILED (reversal exit)"
+                            log(f"  [{symbol}] reversal → closed position; "
+                                f"opposite entry suppressed — "
+                                f"allow_new_entries=false (exits only)")
+                        else:
+                            live_blocked_by = None
+                            if not self._regime_filter_allows(
+                                    inst, -1, result.confidence, price):
+                                action = "REGIME FILTER BLOCKED"
+                                live_blocked_by = "regime_filter"
+                            else:
+                                allowed = all(p.pre_trade(inst, -1, result.confidence)
+                                              for p in self.plugins)
+                                if allowed:
+                                    action, fill_result = self.broker.handle_signal(
+                                        inst, result.signal, result.confidence, pos)
+                                    if 'FAILED' not in action:
+                                        exit_price = fill_result.fill_price or price
+                                        self.tracker.on_close(symbol, exit_price,
+                                                              'SIGNAL_REVERSED',
+                                                              reentry_cooldown)
+                                        for p in self.plugins:
+                                            p.post_trade(inst, -1, action, exit_price)
+                                else:
+                                    live_blocked_by = "orchestrator"
+                            self._broadcast_signal_to_shadow(
+                                inst, -1, result.confidence, live_blocked_by)
                 else:
                     next_close = next_bar_close_str(timeframe, inst)
                     log(f"  [{symbol}] Waiting for bar close (next: {next_close})")

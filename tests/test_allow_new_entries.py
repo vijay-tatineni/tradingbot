@@ -259,3 +259,48 @@ def test_suppressed_signal_would_have_entered(_bc, _qty):
                                             allow_new_entries=False)
     at_off._process_instrument(inst_off)
     at_off.broker.handle_signal.assert_not_called()
+
+
+# ── 5. reversal gating: exit happens, flip is suppressed ─────────────
+
+@patch("bot.layer1.calculate_qty", return_value=1)
+@patch("bot.layer1.is_bar_close", return_value=True)
+def test_reversal_suppressed_closes_no_flip(_bc, _qty):
+    """Open long + allow_new_entries=false + reversal-to-short signal:
+    the position closes (exit), but no short is opened, and it's logged.
+    A reversal becomes a plain exit, not an exit-and-flip."""
+    at, inst = _make_active_trading(
+        signal=-1, pos_qty=10, allow_new_entries=False,
+        emergency_exit=None, smart_exit=None)
+    inst["long_only"] = False  # shortable, so the reversal branch is reached
+    with patch("bot.layer1.log") as mock_log:
+        at._process_instrument(inst)
+
+    # Exit component ran: position closed via the plain-close primitive...
+    at.broker.close_position.assert_called_once()
+    at.tracker.on_close.assert_called_once()
+    # ...and the flip (handle_signal) was NOT taken — no new short opened.
+    at.broker.handle_signal.assert_not_called()
+    assert "reversal" in _action_of(at).lower()
+    logged = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+    assert "opposite entry suppressed" in logged
+    assert "allow_new_entries=false" in logged
+
+
+@patch("bot.layer1.calculate_qty", return_value=1)
+@patch("bot.layer1.is_bar_close", return_value=True)
+def test_reversal_flips_when_flag_true(_bc, _qty):
+    """Open long + allow_new_entries=true + reversal signal: normal
+    exit-and-flip via handle_signal (unchanged behaviour)."""
+    at, inst = _make_active_trading(
+        signal=-1, pos_qty=10, allow_new_entries=True,
+        emergency_exit=None, smart_exit=None)
+    inst["long_only"] = False
+    at.broker.handle_signal.return_value = ("SHORTED 1 @ 100",
+                                            at.broker.close_position.return_value)
+    at._process_instrument(inst)
+
+    # The flip path (handle_signal) is taken...
+    at.broker.handle_signal.assert_called_once()
+    # ...and the exit-only close primitive is NOT used for the reversal.
+    at.broker.close_position.assert_not_called()
