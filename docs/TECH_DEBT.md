@@ -759,10 +759,10 @@ silent drift into a red test.
 Surfaced during the regime-filter review; deferred to keep the restore
 commit focused.
 
-- **(4a) `.gitignore` misses SQLite sidecars.** `*.db` is ignored but
-  `*.db-wal` / `*.db-shm` / `*.db-journal` are not, so `regime.db-wal` and
-  `regime.db-shm` show as untracked. `logs/` is also untracked. Add these
-  patterns to `.gitignore`.
+- **(4a) `.gitignore` misses SQLite sidecars.** ✅ Resolved (2026-06-02).
+  `*.db` is ignored but `*.db-wal` / `*.db-shm` / `*.db-journal` were not, so
+  `regime.db-wal` and `regime.db-shm` showed as untracked. `logs/` was also
+  untracked. These patterns are now in `.gitignore`.
 - **(4b) Orchestrator reaches into RegimeCache internals.**
   `RegimeOrchestrator._lookup_latest_rationale` opens its own sqlite
   connection against `self._regime_cache._db_path` (a private attr).

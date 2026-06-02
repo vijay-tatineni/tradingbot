@@ -1,8 +1,12 @@
 # Databases
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 # Logs
 *.log
+logs/
 
 # Python
 __pycache__/
