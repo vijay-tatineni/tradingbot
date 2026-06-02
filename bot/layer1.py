@@ -234,6 +234,11 @@ class ActiveTrading:
         reentry_recovery_pct = inst.get('reentry_recovery_pct',  1.5)
         reentry_cooldown     = inst.get('reentry_cooldown_mins',  30)
         loss_limit           = inst.get('loss_limit',            200)
+        # Exits-only switch: when False, no NEW position is opened for
+        # this instrument (re-entry or fresh) but an existing position
+        # is still fully managed (trail/TP/emergency). Absent → True,
+        # so existing instruments are unaffected.
+        allow_new_entries    = inst.get('allow_new_entries',     True)
 
         # Risk-based position sizing: calculate qty from target_notional
         entry_qty = calculate_qty(inst, price, self.cfg.default_target_notional)
@@ -327,6 +332,14 @@ class ActiveTrading:
                             action = "CLOSE FAILED (smart exit)"
 
                     # Signal reversal (short-able CFDs only)
+                    # NOTE: allow_new_entries=false does NOT gate this path.
+                    # A reversal closes the long and opens a NEW short —
+                    # i.e. it opens fresh risk — yet it lives inside the
+                    # exit-management block, which the flag deliberately
+                    # leaves active. For current instruments this is
+                    # dormant (long_only stocks never reach it; shortable
+                    # CFDs are disabled). If "exits only" should also block
+                    # reopen-on-reversal, gate this branch in a follow-up.
                     elif result.signal == -1 and not inst.get('long_only', True):
                         live_blocked_by = None
                         if not self._regime_filter_allows(
@@ -357,7 +370,24 @@ class ActiveTrading:
         else:
             # No position — check for re-entry or fresh entry
 
-            if self.tracker.is_watching(symbol):
+            if not allow_new_entries:
+                # Exits-only mode: short-circuit every new-position path
+                # (watch re-entry + fresh long/short). The pos != 0 exit
+                # block above is untouched, so an open position keeps its
+                # trail/TP/emergency management. Only log when an entry
+                # path WOULD have fired, so quiet cycles stay quiet and
+                # this line is distinguishable from a regime-filter block.
+                would_enter = (
+                    self.tracker.is_watching(symbol)
+                    or result.signal == 1
+                    or (result.signal == -1
+                        and not inst.get('long_only', True))
+                )
+                if would_enter:
+                    action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                    log(f"  [{symbol}] entry suppressed — "
+                        f"allow_new_entries=false (exits only)")
+            elif self.tracker.is_watching(symbol):
                 signal_valid = (result.signal == 1 and result.confidence in ('HIGH', 'MEDIUM'))
                 should_reenter, re_reason = self.tracker.check_reentry(
                     symbol, price, signal_valid, reentry_recovery_pct
