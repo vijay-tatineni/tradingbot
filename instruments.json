@@ -417,6 +417,9 @@
       "qty": 50,
       "sec_type": "STK",
       "symbol": "NBIS",
+      "experiment": true,
+      "experiment_reason": "Marginal historical evidence; included in regime-filter paper experiment",
+      "experiment_start": "2026-06-01",
       "emergency_stop_pct": 5.0,
       "trail_stop_pct": 1.0,
       "take_profit_pct": 12.0
