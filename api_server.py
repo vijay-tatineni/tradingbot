@@ -34,6 +34,8 @@ load_dotenv(Path(__file__).parent / '.env')
 
 import argparse as _argparse
 
+from bot.guardrails import validate_no_edge_guardrails
+
 BASE_DIR    = Path(__file__).parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 BACKUP_DIR  = str(BASE_DIR / 'backups')
@@ -187,6 +189,13 @@ def load():
 
 
 def save(data):
+    # Universal no-edge guardrail backstop: every write path (layer1,
+    # layer2, settings, toggle-enable, update, apply-wf, optimise) funnels
+    # through save(). Refuse before any write — the atomic write below has
+    # not started, so a raise leaves instruments.json untouched.
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        raise ValueError("No-edge guardrail failed: " + "; ".join(guard_errors))
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     shutil.copy(CONFIG_FILE, f'{BACKUP_DIR}/instruments_{ts}.json')
@@ -267,6 +276,9 @@ def validate_config(data: dict) -> list:
                     sym = inst.get('symbol', f'index {i}')
                     errors.append(f"layer1_active '{sym}' missing required field: '{field}'")
 
+    # ── no-edge guardrail ────────────────────────────────────
+    errors.extend(validate_no_edge_guardrails(data))
+
     return errors
 
 
@@ -276,6 +288,10 @@ def save_layer1():
     instruments = request.get_json()
     data = load()
     data['layer1_active'] = instruments
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        return jsonify({'ok': False, 'message': 'No-edge guardrail failed',
+                        'errors': guard_errors}), 400
     save(data)
     return jsonify({'ok': True})
 
@@ -296,6 +312,10 @@ def save_settings():
     settings = request.get_json()
     data = load()
     data['settings'].update(settings)
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        return jsonify({'ok': False, 'message': 'No-edge guardrail failed',
+                        'errors': guard_errors}), 400
     save(data)
     return jsonify({'ok': True})
 

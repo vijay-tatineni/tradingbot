@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from bot.config        import Config
+from bot.guardrails     import validate_no_edge_guardrails
 from bot.brokers       import create_broker
 from bot.market_hours  import MarketHours
 from bot.layer1        import ActiveTrading
@@ -627,6 +628,9 @@ def validate_environment(config_file: str = None) -> None:
                 data = json.load(f)
             if 'settings' not in data or 'layer1_active' not in data:
                 errors.append("instruments.json missing 'settings' or 'layer1_active' keys")
+            # No-edge guardrail: refuse to start if a known-marginal
+            # instrument is enabled without an explicit override.
+            errors.extend(validate_no_edge_guardrails(data))
         except json.JSONDecodeError as e:
             errors.append(f"instruments.json has invalid JSON: {e}")
 
