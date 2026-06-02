@@ -71,6 +71,20 @@ class Dashboard:
              'pnl_pct': r.get('pnl_pct', 0)}
             for r in signal_rows if r.get('pos', 0) != 0
         ]
+        # Currencies that have an open position WITH a live price this cycle.
+        # These are kept in the P&L breakdown even at $0, so an operator can see
+        # e.g. USD positions sitting at break-even. The liveness gate
+        # (price > 0 and avg_cost > 0) is the same condition used below to decide
+        # whether P&L can be computed at all — so a currency only shows $0 when we
+        # actually have data confirming break-even, not when the market is merely
+        # closed (in which case edf283b's cache-preserve behaviour still applies).
+        # Uses pos != 0 to include shorts, matching has_open_positions.
+        active_currencies = {
+            r.get('currency', 'USD')
+            for r in signal_rows
+            if r.get('pos', 0) != 0
+            and r.get('price', 0) > 0 and r.get('avg_cost', 0) > 0
+        }
         pnl_by_ccy = {}
         for r in signal_rows:
             pos = r.get('pos', 0)
@@ -88,7 +102,8 @@ class Dashboard:
                         raw_pnl = convert_pnl_to_base(raw_pnl, ccy)
                     pnl_val = round(raw_pnl, 2)
             pnl_by_ccy[ccy] = round(pnl_by_ccy.get(ccy, 0) + pnl_val, 2)
-        pnl_by_ccy = {k: v for k, v in pnl_by_ccy.items() if v != 0}
+        pnl_by_ccy = {k: v for k, v in pnl_by_ccy.items()
+                      if v != 0 or k in active_currencies}
 
         has_open_positions = any(r.get('pos', 0) != 0 for r in signal_rows)
 
@@ -96,10 +111,11 @@ class Dashboard:
         cached_pnl = cached.get("pnl_by_currency", {})
 
         for ccy, val in pnl_by_ccy.items():
-            if val != 0:
+            if val != 0 or ccy in active_currencies:
                 cached_pnl[ccy] = val
 
-        pnl_by_ccy = {k: v for k, v in cached_pnl.items() if v != 0}
+        pnl_by_ccy = {k: v for k, v in cached_pnl.items()
+                      if v != 0 or k in active_currencies}
 
         if pnl_by_ccy:
             total_pnl = sum(pnl_by_ccy.values())
