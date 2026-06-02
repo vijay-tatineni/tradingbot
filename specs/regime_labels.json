@@ -182,8 +182,8 @@
             "distance_to_ma200_pct": 28.6855
           },
           "classifier_verdict_at_end": null,
-          "my_label": null,
-          "my_confidence": null,
+          "my_label": "TRENDING",
+          "my_confidence": 4,
           "my_notes": null
         },
         {
