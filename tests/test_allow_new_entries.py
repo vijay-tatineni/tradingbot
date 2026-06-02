@@ -261,6 +261,57 @@ def test_suppressed_signal_would_have_entered(_bc, _qty):
     at_off.broker.handle_signal.assert_not_called()
 
 
+# ── 6. watch-mode log accuracy (Item 2) ──────────────────────────────
+
+@patch("bot.layer1.calculate_qty", return_value=1)
+@patch("bot.layer1.is_bar_close", return_value=False)
+def test_watch_reentry_not_met_no_suppression_log(_bc, _qty):
+    """ANET case: in re-entry watch but criteria NOT met → no suppression
+    log this cycle (shows WATCHING, not ENTRY SUPPRESSED). The flag only
+    suppresses when an entry would genuinely have fired."""
+    at, inst = _make_active_trading(signal=0, pos_qty=0,
+                                    allow_new_entries=False, is_watching=True)
+    at.tracker.check_reentry.return_value = (False, "Waiting +1.5% recovery")
+    with patch("bot.layer1.log") as mock_log:
+        at._process_instrument(inst)
+
+    at.broker.place_order.assert_not_called()
+    at.broker.handle_signal.assert_not_called()
+    action = _action_of(at)
+    assert "SUPPRESSED" not in action
+    assert action.startswith("WATCHING")
+    logged = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+    assert "suppressed" not in logged.lower()
+
+
+@patch("bot.layer1.calculate_qty", return_value=1)
+@patch("bot.layer1.is_bar_close", return_value=False)
+def test_watch_reentry_met_suppression_fires(_bc, _qty):
+    """In re-entry watch AND criteria met → suppression log fires, no order."""
+    at, inst = _make_active_trading(signal=1, pos_qty=0,
+                                    allow_new_entries=False, is_watching=True)
+    at.tracker.check_reentry.return_value = (True, "recovery met")
+    with patch("bot.layer1.log") as mock_log:
+        at._process_instrument(inst)
+
+    at.broker.place_order.assert_not_called()
+    assert "SUPPRESSED" in _action_of(at)
+    logged = " ".join(str(c.args[0]) for c in mock_log.call_args_list if c.args)
+    assert "re-entry suppressed" in logged.lower()
+
+
+@patch("bot.layer1.calculate_qty", return_value=1)
+@patch("bot.layer1.is_bar_close", return_value=False)
+def test_watch_reentry_fires_when_flag_true(_bc, _qty):
+    """Control: watch + criteria met + flag true → re-entry actually places
+    an order (restructure didn't break the re-entry execution path)."""
+    at, inst = _make_active_trading(signal=1, pos_qty=0,
+                                    allow_new_entries=True, is_watching=True)
+    at.tracker.check_reentry.return_value = (True, "recovery met")
+    at._process_instrument(inst)
+    at.broker.place_order.assert_called_once()
+
+
 # ── 5. reversal gating: exit happens, flip is suppressed ─────────────
 
 @patch("bot.layer1.calculate_qty", return_value=1)

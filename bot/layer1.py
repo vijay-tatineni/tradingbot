@@ -390,29 +390,20 @@ class ActiveTrading:
         else:
             # No position — check for re-entry or fresh entry
 
-            if not allow_new_entries:
-                # Exits-only mode: short-circuit every new-position path
-                # (watch re-entry + fresh long/short). The pos != 0 exit
-                # block above is untouched, so an open position keeps its
-                # trail/TP/emergency management. Only log when an entry
-                # path WOULD have fired, so quiet cycles stay quiet and
-                # this line is distinguishable from a regime-filter block.
-                would_enter = (
-                    self.tracker.is_watching(symbol)
-                    or result.signal == 1
-                    or (result.signal == -1
-                        and not inst.get('long_only', True))
-                )
-                if would_enter:
-                    action = "ENTRY SUPPRESSED (allow_new_entries=false)"
-                    log(f"  [{symbol}] entry suppressed — "
-                        f"allow_new_entries=false (exits only)")
-            elif self.tracker.is_watching(symbol):
+            if self.tracker.is_watching(symbol):
                 signal_valid = (result.signal == 1 and result.confidence in ('HIGH', 'MEDIUM'))
                 should_reenter, re_reason = self.tracker.check_reentry(
                     symbol, price, signal_valid, reentry_recovery_pct
                 )
-                if should_reenter:
+                if should_reenter and not allow_new_entries:
+                    # Exits-only: a re-entry would genuinely have fired
+                    # (recovery met + valid signal) but is suppressed. The
+                    # pos != 0 exit block is untouched. Logged only on a
+                    # real would-fire — not on every watch cycle.
+                    action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                    log(f"  [{symbol}] re-entry suppressed — "
+                        f"allow_new_entries=false (exits only)")
+                elif should_reenter:
                     live_blocked_by = None
                     if not self._regime_filter_allows(
                             inst, 1, result.confidence, price):
@@ -449,6 +440,11 @@ class ActiveTrading:
                 else:
                     action = f"WATCHING: {re_reason}"
 
+            elif result.signal == 1 and not allow_new_entries:
+                # Fresh long signal that would have fired — suppressed.
+                action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                log(f"  [{symbol}] entry suppressed — "
+                    f"allow_new_entries=false (exits only)")
             elif result.signal == 1:
                 # Fresh entry
                 live_blocked_by = None
@@ -487,6 +483,12 @@ class ActiveTrading:
                 self._broadcast_signal_to_shadow(
                     inst, 1, result.confidence, live_blocked_by)
 
+            elif (result.signal == -1 and not inst.get('long_only', True)
+                    and not allow_new_entries):
+                # Fresh short signal that would have fired — suppressed.
+                action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                log(f"  [{symbol}] entry suppressed — "
+                    f"allow_new_entries=false (exits only)")
             elif result.signal == -1 and not inst.get('long_only', True):
                 # Fresh short from flat
                 live_blocked_by = None
