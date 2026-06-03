@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from bot.config        import Config
+from bot.guardrails     import validate_no_edge_guardrails
 from bot.brokers       import create_broker
 from bot.market_hours  import MarketHours
 from bot.layer1        import ActiveTrading
@@ -41,6 +42,21 @@ from bot.layer2        import Accumulation
 from bot.layer3_silver import SilverScalper
 from bot.dashboard     import Dashboard
 from bot.logger        import log, banner, separator
+from bot.regime.flags  import FeatureFlags
+from bot.regime.orchestrator import RegimeOrchestrator
+from bot.regime.log_setup    import setup_regime_logging
+from bot.regime.cache        import RegimeCache
+from bot.regime.classifier   import RegimeClassifier
+from bot.regime.cost_tracker import CostTracker
+from bot.regime.scheduler    import RegimeClassificationScheduler
+from bot.regime.smoothing_store import SmoothedStateStore
+from bot.regime.blocked_entries import RegimeBlockedEntriesLog
+from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
+from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
+from bot.regime.router     import route as regime_route
+from bot.shadow.counterfactual_logger import CounterfactualLogger
+from bot.shadow.trade_simulator import ShadowTradeSimulator
+from bot.shadow.position_metadata_store import PositionMetadataStore
 
 BASE_DIR = Path(__file__).parent
 
@@ -121,6 +137,51 @@ class TradingBot:
         # self.register_plugin(MacroFilter(self.cfg))
         # self.register_plugin(MLOverride(self.cfg))
 
+        # ── Regime orchestrator (§14) ─────────────────────────
+        flag_config = self.cfg._raw.get('settings', {}).get('feature_flags', {})
+        self.flags = FeatureFlags(flag_config)
+
+        regime_db = str(BASE_DIR / 'regime.db')
+        init_overlay_registry(regime_db)
+        self.pause_registry = InstrumentPauseRegistry(regime_db)
+        self.cf_logger = CounterfactualLogger(regime_db)
+        self.pm_store = PositionMetadataStore(regime_db)
+        self.regime_cache = RegimeCache(regime_db)
+        self.regime_cost_tracker = CostTracker(regime_db)
+        self.smoothing_store = SmoothedStateStore(regime_db)
+        self.regime_classifier = RegimeClassifier(
+            cache=self.regime_cache,
+            cost_tracker=self.regime_cost_tracker,
+        )
+        self.regime_blocked_entries_log = RegimeBlockedEntriesLog(regime_db)
+        self.shadow_trade_simulator = ShadowTradeSimulator(self.cf_logger)
+
+        self.orchestrator = RegimeOrchestrator(
+            flags=self.flags,
+            pause_registry=self.pause_registry,
+            overlay_registry_fn=overlay_active_overlays,
+            router_fn=regime_route,
+            smoothing_store=self.smoothing_store,
+            counterfactual_logger=self.cf_logger,
+            position_metadata_store=self.pm_store,
+            telegram_alerts=self.alerts,
+            config_path=config_path,
+            regime_cache=self.regime_cache,
+            blocked_entries_log=self.regime_blocked_entries_log,
+            shadow_trade_simulator=self.shadow_trade_simulator,
+        )
+        self.register_plugin(self.orchestrator)
+
+        self.regime_scheduler = RegimeClassificationScheduler(
+            flags=self.flags,
+            classifier=self.regime_classifier,
+            cache=self.regime_cache,
+            smoothing_store=self.smoothing_store,
+            bars_fetcher=self._regime_bars_fetcher,
+        )
+
+        setup_regime_logging(str(BASE_DIR))
+
         # ── Wire alerts to broker for order failure notifications ─
         self.broker.set_alerts(self.alerts)
 
@@ -165,6 +226,31 @@ class TradingBot:
         # Notify plugins bot has started
         for plugin in self.plugins:
             plugin.on_start()
+
+        # ── Regime-filter warm-up warning ─────────────────────
+        # When the filter is live, any instrument without a smoothed
+        # regime yet (scheduler hasn't classified it since startup)
+        # has its entries BLOCKED until classification lands. Surface
+        # the count once at startup so a fully-blocked filter isn't
+        # mistaken for a dead bot.
+        if self.flags.get("enable_regime_filter_live"):
+            instruments = self.cfg.active_instruments
+            no_regime = 0
+            for inst in instruments:
+                symbol = inst.get("symbol")
+                if not symbol:
+                    continue
+                try:
+                    if self.smoothing_store.get_latest(symbol) is None:
+                        no_regime += 1
+                except Exception:
+                    # Treat an unreadable smoothing store as "no regime"
+                    # for warning purposes — it would block too.
+                    no_regime += 1
+            if no_regime > 0:
+                log(f"REGIME FILTER LIVE: {no_regime} of {len(instruments)} "
+                    f"instruments have no smoothed regime — entries will be "
+                    f"BLOCKED until classification lands", "WARN")
 
         # Start watchdog
         self.watchdog.start()
@@ -219,6 +305,20 @@ class TradingBot:
 
                 # ── Layer 3: Silver Scalper (every cycle, LSE hours) ─
                 self.l3.run()
+
+                # ── Daily regime classifier scheduler (idempotent) ──
+                try:
+                    sched_summary = self.regime_scheduler.maybe_run(
+                        self.cfg.active_instruments
+                    )
+                    if sched_summary["classified"]:
+                        log(f"[Scheduler] Classified "
+                            f"{len(sched_summary['classified'])} instruments")
+                    if sched_summary["errors"]:
+                        log(f"[Scheduler] Errors: {sched_summary['errors']}",
+                            "WARN")
+                except Exception as e:
+                    log(f"[Scheduler] Cycle error: {e}", "WARN")
 
                 # ── Dashboard update ──────────────────────────
                 self.dash.update(
@@ -281,6 +381,23 @@ class TradingBot:
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
                 self.broker.reconnect()
+
+    def _regime_bars_fetcher(self, inst: dict):
+        """Daily-bar fetcher injected into RegimeClassificationScheduler.
+
+        Returns None when the contract isn't qualified yet (pre-startup) or
+        when the broker has no data — the scheduler treats that as an error
+        for that instrument and moves on.
+        """
+        contract = inst.get("contract")
+        if contract is None:
+            return None
+        try:
+            return self.broker.fetch_bars(contract, days=300, bar_size="1 day")
+        except Exception as e:
+            log(f"[Scheduler] fetch_bars failed for "
+                f"{inst.get('symbol', '?')}: {e}", "WARN")
+            return None
 
     def _get_today_trades(self) -> list:
         """Get today's closed trades from learning_loop.db."""
@@ -511,6 +628,9 @@ def validate_environment(config_file: str = None) -> None:
                 data = json.load(f)
             if 'settings' not in data or 'layer1_active' not in data:
                 errors.append("instruments.json missing 'settings' or 'layer1_active' keys")
+            # No-edge guardrail: refuse to start if a known-marginal
+            # instrument is enabled without an explicit override.
+            errors.extend(validate_no_edge_guardrails(data))
         except json.JSONDecodeError as e:
             errors.append(f"instruments.json has invalid JSON: {e}")
 

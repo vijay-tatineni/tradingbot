@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Regime Labelling — CogniflowAI</title>
+<link rel="icon" href="data:,">
+<style>
+  @font-face { font-family:'JetBrains Mono'; src:url('JetBrainsMono.woff2') format('woff2'); }
+  :root {
+    --bg1:#0d1117; --bg2:#161b22; --bg3:#1c2128;
+    --text:#c9d1d9; --muted:#8b949e; --border:#30363d;
+    --gold:#f5c842; --green:#22c55e; --red:#ef4444; --blue:#38bdf8;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg1); color:var(--text); font-family:'JetBrains Mono', monospace; font-size:0.78rem; line-height:1.5; }
+
+  .nav { display:flex; align-items:center; padding:10px 24px; background:var(--bg2); border-bottom:1px solid var(--border); gap:8px; }
+  .nav .logo { color:var(--gold); font-weight:700; font-size:0.82rem; margin-right:8px; }
+  .nav a { font-size:0.72rem; text-decoration:none; padding:6px 14px; border-radius:4px; color:var(--muted); border:1px solid transparent; font-family:'JetBrains Mono', monospace; }
+  .nav a.active { color:var(--gold); border-color:var(--gold); }
+  .nav .spacer { flex:1; }
+  .nav .user { color:var(--green); font-size:0.65rem; padding:6px 0; }
+  .nav button.logout { color:var(--red); border:1px solid var(--red); cursor:pointer; background:none; font-weight:600; font-family:'JetBrains Mono', monospace; font-size:0.72rem; padding:6px 14px; border-radius:4px; }
+
+  .page { max-width:900px; margin:0 auto; padding:20px 24px; }
+
+  .progress { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:10px 16px; margin-bottom:14px; display:flex; align-items:center; gap:14px; }
+  .progress-text { color:var(--text); font-size:0.78rem; }
+  .progress-text .pct { color:var(--gold); font-weight:700; margin-left:6px; }
+  .progress-bar { flex:1; height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; }
+  .progress-fill { height:100%; background:var(--gold); transition:width 0.2s ease; }
+  .progress-hint { color:var(--muted); font-size:0.7rem; }
+
+  .card { background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:18px 20px; margin-bottom:14px; }
+  .card-title { color:var(--gold); font-size:0.7rem; letter-spacing:1px; text-transform:uppercase; margin-bottom:8px; }
+  .card-meta { color:var(--muted); font-size:0.7rem; margin-bottom:12px; }
+
+  .instrument-line { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:6px; }
+  .instrument-sym { color:var(--gold); font-size:1.1rem; font-weight:700; letter-spacing:0.5px; }
+  .instrument-name { color:var(--text); font-size:0.82rem; }
+  .instrument-meta { color:var(--muted); font-size:0.72rem; }
+  .date-range { color:var(--blue); font-size:0.82rem; font-weight:600; }
+
+  #chartWrap { background:var(--bg3); border:1px solid var(--border); border-radius:4px; padding:12px; margin:14px 0; }
+  #chart { width:100%; height:280px; }
+
+  .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px 18px; margin-top:10px; }
+  .feature { display:flex; gap:8px; font-size:0.74rem; }
+  .feature-label { color:var(--muted); min-width:130px; }
+  .feature-value { color:var(--text); font-weight:600; }
+  .feature-value.pos { color:var(--green); }
+  .feature-value.neg { color:var(--red); }
+
+  .verdict-toggle { margin-top:14px; }
+  .verdict-toggle button { background:transparent; color:var(--blue); border:1px solid var(--blue); padding:6px 14px; font-family:'JetBrains Mono', monospace; font-size:0.7rem; cursor:pointer; border-radius:4px; }
+  .verdict-toggle button:hover { background:var(--blue); color:var(--bg1); }
+  .verdict-box { margin-top:12px; padding:12px 14px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; display:none; }
+  .verdict-box.open { display:block; }
+  .verdict-box .verdict-label { color:var(--muted); font-size:0.7rem; }
+  .verdict-box .verdict-value { color:var(--gold); font-weight:700; font-size:0.84rem; }
+  .verdict-box .verdict-rationale { color:var(--text); font-style:italic; margin-top:6px; padding-top:6px; border-top:1px dashed var(--border); font-size:0.74rem; }
+
+  .prev-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:0.72rem; color:var(--muted); }
+  .prev-card .prev-label-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.66rem; margin-left:6px; }
+  .prev-card .prev-label-pill.TRENDING { background:#0c2461; color:var(--blue); }
+  .prev-card .prev-label-pill.RANGING { background:#312e0c; color:var(--gold); }
+  .prev-card .prev-label-pill.UNCLEAR { background:#3b0d0d; color:#fecaca; }
+  .prev-card .prev-conf { color:var(--text); margin-left:4px; }
+
+  .action-card { background:var(--bg2); border:2px solid var(--gold); border-radius:6px; padding:18px 20px; margin-bottom:30px; }
+  .label-buttons { display:flex; gap:10px; margin-bottom:14px; }
+  .label-buttons button { flex:1; padding:14px 0; font-family:'JetBrains Mono', monospace; font-size:0.84rem; font-weight:700; letter-spacing:1px; cursor:pointer; border-radius:4px; transition:all 0.1s; }
+  .label-buttons button.TRENDING { background:#0c2461; color:var(--blue); border:2px solid var(--blue); }
+  .label-buttons button.TRENDING.selected { background:var(--blue); color:var(--bg1); }
+  .label-buttons button.RANGING { background:#312e0c; color:var(--gold); border:2px solid var(--gold); }
+  .label-buttons button.RANGING.selected { background:var(--gold); color:var(--bg1); }
+  .label-buttons button.UNCLEAR { background:#3b0d0d; color:#fecaca; border:2px solid var(--red); }
+  .label-buttons button.UNCLEAR.selected { background:var(--red); color:var(--bg1); }
+  .label-buttons .kbd { display:block; font-size:0.62rem; color:var(--muted); margin-top:4px; font-weight:400; letter-spacing:0; }
+  .label-buttons button.selected .kbd { color:var(--bg1); opacity:0.7; }
+
+  .confidence-row { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+  .confidence-row .label { color:var(--muted); font-size:0.72rem; min-width:90px; }
+  .stars { display:flex; gap:6px; }
+  .stars button { background:transparent; color:var(--muted); border:none; font-size:1.4rem; cursor:pointer; padding:0; }
+  .stars button.active { color:var(--gold); }
+  .stars .hint { color:var(--muted); font-size:0.66rem; margin-left:8px; }
+
+  .notes-row textarea { width:100%; min-height:54px; background:var(--bg3); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:8px 10px; font-family:'JetBrains Mono', monospace; font-size:0.74rem; resize:vertical; }
+
+  .save-row { display:flex; align-items:center; gap:14px; margin-top:14px; }
+  .save-btn { background:var(--gold); color:var(--bg1); border:1px solid var(--gold); padding:10px 22px; font-family:'JetBrains Mono', monospace; font-size:0.78rem; font-weight:700; letter-spacing:0.5px; cursor:pointer; border-radius:4px; }
+  .save-btn:hover:not(:disabled) { background:#f5d568; }
+  .save-btn:disabled { opacity:0.4; cursor:not-allowed; }
+  .save-hint { color:var(--muted); font-size:0.7rem; }
+
+  .empty { text-align:center; padding:60px 20px; color:var(--muted); }
+  .empty h2 { color:var(--gold); margin:0 0 12px; font-size:1rem; }
+
+  .keyboard-help { background:var(--bg3); border:1px solid var(--border); border-radius:4px; padding:8px 14px; margin-bottom:14px; color:var(--muted); font-size:0.68rem; display:flex; gap:18px; flex-wrap:wrap; }
+  .keyboard-help kbd { background:var(--bg1); border:1px solid var(--border); border-radius:3px; padding:1px 6px; color:var(--text); font-family:'JetBrains Mono', monospace; font-size:0.66rem; }
+
+  .toast { position:fixed; bottom:24px; right:24px; background:var(--bg2); border:1px solid var(--green); color:var(--text); padding:10px 16px; border-radius:4px; font-size:0.74rem; display:none; }
+  .toast.err { border-color:var(--red); }
+  .toast.show { display:block; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <span class="logo">CogniflowAI</span>
+  <a href="dashboard.html">Dashboard</a>
+  <a href="instruments.html">Instruments</a>
+  <a href="tests.html">Tests</a>
+  <a href="advisor.html">Advisor</a>
+  <a href="labelling.html" class="active">Label</a>
+  <div class="spacer"></div>
+  <span class="user">Logged in as: <span id="navUser">--</span></span>
+  <button class="logout" onclick="logout()">Logout</button>
+</div>
+
+<div class="page">
+
+  <div class="progress">
+    <span class="progress-text">Labelled <strong id="progressDone">0</strong> of <strong id="progressTotal">0</strong><span class="pct" id="progressPct">(0%)</span></span>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    <span class="progress-hint" id="progressHint"></span>
+  </div>
+
+  <div class="keyboard-help">
+    <span><kbd>T</kbd> trending</span>
+    <span><kbd>R</kbd> ranging</span>
+    <span><kbd>U</kbd> unclear</span>
+    <span><kbd>1</kbd>-<kbd>5</kbd> confidence</span>
+    <span><kbd>Enter</kbd> save &amp; next</span>
+  </div>
+
+  <div id="prevCard" class="prev-card" style="display:none;">
+    Previous: <span id="prevSymbol"></span> <span id="prevRange"></span>
+    →<span id="prevLabelPill" class="prev-label-pill"></span>
+    <span id="prevConf" class="prev-conf"></span>
+    <span id="prevNotes" style="margin-left:8px;font-style:italic;"></span>
+  </div>
+
+  <div id="mainArea">
+    <div class="empty"><h2>Loading worksheet…</h2><div>Fetching /api/labels</div></div>
+  </div>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const TOKEN = localStorage.getItem('jwt_token');
+if (!TOKEN) location.href = '/login.html?redirect=labelling';
+const authHeaders = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('jwt_user');
+  document.cookie = 'jwt_token=; path=/; max-age=0';
+  location.href = '/login.html';
+}
+
+document.getElementById('navUser').textContent =
+  localStorage.getItem('jwt_user') || '--';
+
+let worksheet = null;     // /api/labels payload
+let barsByInst = {};      // {instrument: [{date,open,high,low,close}]}
+let flatWindows = [];     // [{instrument, name, currency, window}]
+let cursor = 0;
+let chart = null;
+let pending = { label: null, confidence: null, notes: '' };
+let prevLabelled = null;  // most recent labelled window (for "Previous" panel)
+
+async function fetchJSON(url, opts={}) {
+  const res = await fetch(url, { ...opts, headers: { ...authHeaders, ...(opts.headers||{}) } });
+  if (res.status === 401) { logout(); throw new Error('unauthorized'); }
+  if (!res.ok) {
+    const body = await res.json().catch(()=>({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function flatten(ws) {
+  const flat = [];
+  for (const inst of ws.instruments) {
+    for (const w of inst.windows) {
+      flat.push({
+        instrument: inst.instrument,
+        name: inst.name,
+        currency: inst.currency,
+        window: w,
+      });
+    }
+  }
+  return flat;
+}
+
+function recountProgress() {
+  const total = flatWindows.length;
+  const done = flatWindows.filter(x => x.window.my_label !== null).length;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  document.getElementById('progressDone').textContent = done;
+  document.getElementById('progressTotal').textContent = total;
+  document.getElementById('progressPct').textContent = `(${pct}%)`;
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+
+function firstUnlabelled() {
+  return flatWindows.findIndex(x => x.window.my_label === null);
+}
+
+function updatePrevCard() {
+  if (!prevLabelled) {
+    document.getElementById('prevCard').style.display = 'none';
+    return;
+  }
+  const card = document.getElementById('prevCard');
+  card.style.display = 'block';
+  document.getElementById('prevSymbol').textContent = prevLabelled.instrument;
+  document.getElementById('prevRange').textContent =
+    `${prevLabelled.window.start_date} → ${prevLabelled.window.end_date}`;
+  const pill = document.getElementById('prevLabelPill');
+  pill.className = `prev-label-pill ${prevLabelled.window.my_label}`;
+  pill.textContent = prevLabelled.window.my_label;
+  document.getElementById('prevConf').textContent =
+    `(conf ${prevLabelled.window.my_confidence}/5)`;
+  document.getElementById('prevNotes').textContent =
+    prevLabelled.window.my_notes ? '— ' + prevLabelled.window.my_notes : '';
+}
+
+function fmtNum(v, digits=2) {
+  if (v === null || v === undefined) return '—';
+  return Number(v).toFixed(digits);
+}
+
+function renderCurrent() {
+  const main = document.getElementById('mainArea');
+  if (cursor >= flatWindows.length) {
+    main.innerHTML = `<div class="empty"><h2>All done.</h2><div>${flatWindows.length} windows labelled. Run scripts/analyze_classifier_accuracy.py to see agreement stats.</div></div>`;
+    return;
+  }
+  const item = flatWindows[cursor];
+  const w = item.window;
+  const f = w.classifier_features_at_end || {};
+  pending = { label: null, confidence: null, notes: '' };
+
+  main.innerHTML = `
+    <div class="card">
+      <div class="card-title">Current window — ${cursor + 1} of ${flatWindows.length}</div>
+      <div class="instrument-line">
+        <span class="instrument-sym">${item.instrument}</span>
+        <span class="instrument-name">${item.name || ''}</span>
+        <span class="instrument-meta">${item.currency || ''}</span>
+        <span class="date-range">${w.start_date} → ${w.end_date}</span>
+      </div>
+      <div id="chartWrap"><canvas id="chart"></canvas></div>
+      <div class="features">
+        <div class="feature"><span class="feature-label">Start → End</span><span class="feature-value">${fmtNum(w.start_price,2)} → ${fmtNum(w.end_price,2)}</span></div>
+        <div class="feature"><span class="feature-label">% change</span><span class="feature-value ${w.pct_change >= 0 ? 'pos' : 'neg'}">${w.pct_change >= 0 ? '+' : ''}${fmtNum(w.pct_change,2)}%</span></div>
+        <div class="feature"><span class="feature-label">Range high / low</span><span class="feature-value">${fmtNum(w.range_high,2)} / ${fmtNum(w.range_low,2)}</span></div>
+        <div class="feature"><span class="feature-label">Range efficiency (window)</span><span class="feature-value">${fmtNum(w.range_efficiency_window,3)}</span></div>
+        <div class="feature"><span class="feature-label">ADX(14) at end</span><span class="feature-value">${fmtNum(f.adx_14,1)}</span></div>
+        <div class="feature"><span class="feature-label">MA200 slope %/day</span><span class="feature-value">${fmtNum(f.ma_200_slope_pct_per_day,3)}</span></div>
+        <div class="feature"><span class="feature-label">Range efficiency (classifier 20d)</span><span class="feature-value">${fmtNum(f.range_efficiency,3)}</span></div>
+        <div class="feature"><span class="feature-label">Realised vol 20d</span><span class="feature-value">${fmtNum(f.realized_volatility_20d,1)}%</span></div>
+        <div class="feature"><span class="feature-label">ATR %</span><span class="feature-value">${fmtNum(f.atr_pct,2)}%</span></div>
+        <div class="feature"><span class="feature-label">Above MA200</span><span class="feature-value">${f.close_above_ma200 === null ? '—' : (f.close_above_ma200 ? 'yes' : 'no')}</span></div>
+      </div>
+      <div class="verdict-toggle">
+        <button id="verdictBtn" onclick="toggleVerdict()">Show classifier verdict</button>
+        <div id="verdictBox" class="verdict-box">${renderVerdict(w.classifier_verdict_at_end)}</div>
+      </div>
+    </div>
+
+    <div class="action-card">
+      <div class="label-buttons">
+        <button data-label="TRENDING" class="TRENDING" onclick="pickLabel('TRENDING')">TRENDING<span class="kbd">[T]</span></button>
+        <button data-label="RANGING" class="RANGING" onclick="pickLabel('RANGING')">RANGING<span class="kbd">[R]</span></button>
+        <button data-label="UNCLEAR" class="UNCLEAR" onclick="pickLabel('UNCLEAR')">UNCLEAR<span class="kbd">[U]</span></button>
+      </div>
+      <div class="confidence-row">
+        <span class="label">Confidence</span>
+        <div class="stars" id="stars">
+          ${[1,2,3,4,5].map(n => `<button data-n="${n}" onclick="pickConf(${n})">★</button>`).join('')}
+        </div>
+        <span class="hint">1 = unsure, 5 = very confident</span>
+      </div>
+      <div class="notes-row">
+        <textarea id="notes" placeholder="optional notes (e.g., what jumped out on the chart)" oninput="pending.notes = this.value"></textarea>
+      </div>
+      <div class="save-row">
+        <button class="save-btn" id="saveBtn" disabled onclick="saveAndNext()">Save and next</button>
+        <span class="save-hint">Enter to save once label + confidence are set.</span>
+      </div>
+    </div>
+  `;
+  drawChart(item);
+  updateSaveEnabled();
+}
+
+function renderVerdict(v) {
+  if (!v) return `<div class="verdict-label">No classifier verdict for this window — the regime classifier didn't run on ${'this date' /* placeholder */}.</div>`;
+  return `
+    <div class="verdict-label">Classifier said:</div>
+    <div class="verdict-value">${v.raw_regime} <span style="color:var(--muted);font-size:0.7rem;">(conf ${fmtNum(v.confidence,2)})</span></div>
+    ${v.rationale ? `<div class="verdict-rationale">"${v.rationale}"</div>` : ''}
+  `;
+}
+
+function toggleVerdict() {
+  const box = document.getElementById('verdictBox');
+  const btn = document.getElementById('verdictBtn');
+  box.classList.toggle('open');
+  btn.textContent = box.classList.contains('open') ? 'Hide classifier verdict' : 'Show classifier verdict';
+}
+
+function pickLabel(label) {
+  pending.label = label;
+  document.querySelectorAll('.label-buttons button').forEach(b => {
+    b.classList.toggle('selected', b.dataset.label === label);
+  });
+  updateSaveEnabled();
+}
+
+function pickConf(n) {
+  pending.confidence = n;
+  document.querySelectorAll('#stars button').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.n) <= n);
+  });
+  updateSaveEnabled();
+}
+
+function updateSaveEnabled() {
+  document.getElementById('saveBtn').disabled =
+    !(pending.label && pending.confidence);
+}
+
+function showToast(msg, err=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (err ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 1800);
+}
+
+async function saveAndNext() {
+  if (!pending.label || !pending.confidence) return;
+  const item = flatWindows[cursor];
+  document.getElementById('saveBtn').disabled = true;
+  try {
+    await fetchJSON('/api/labels/save', {
+      method: 'POST',
+      body: JSON.stringify({
+        window_id: item.window.window_id,
+        my_label: pending.label,
+        my_confidence: pending.confidence,
+        my_notes: pending.notes || null,
+      }),
+    });
+    item.window.my_label = pending.label;
+    item.window.my_confidence = pending.confidence;
+    item.window.my_notes = pending.notes || null;
+    prevLabelled = item;
+    recountProgress();
+    updatePrevCard();
+    cursor = firstUnlabelled();
+    if (cursor === -1) cursor = flatWindows.length;
+    showToast('Saved.');
+    renderCurrent();
+  } catch (e) {
+    showToast('Save failed: ' + e.message, true);
+    document.getElementById('saveBtn').disabled = false;
+  }
+}
+
+function drawChart(item) {
+  const bars = (barsByInst[item.instrument] || []);
+  if (!bars.length) {
+    document.getElementById('chartWrap').innerHTML =
+      '<div style="color:var(--muted);font-size:0.72rem;text-align:center;padding:30px;">No chart bars available for this instrument.</div>';
+    return;
+  }
+  const labels = bars.map(b => b.date);
+  const closes = bars.map(b => b.close);
+  const startIdx = bars.findIndex(b => b.date >= item.window.start_date);
+  const endIdx = (() => {
+    let last = -1;
+    for (let i = 0; i < bars.length; i++) if (bars[i].date <= item.window.end_date) last = i;
+    return last;
+  })();
+  // Window-highlight series: copy closes inside the window, null elsewhere
+  const winSeries = closes.map((v, i) =>
+    (i >= startIdx && i <= endIdx) ? v : null);
+
+  if (chart) chart.destroy();
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Close',
+          data: closes,
+          borderColor: '#8b949e',
+          backgroundColor: 'transparent',
+          borderWidth: 1.2,
+          pointRadius: 0,
+          tension: 0.05,
+        },
+        {
+          label: 'Window',
+          data: winSeries,
+          borderColor: '#f5c842',
+          backgroundColor: 'rgba(245,200,66,0.18)',
+          borderWidth: 2.4,
+          pointRadius: 0,
+          tension: 0.05,
+          fill: 'origin',
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 8 }, grid: { color: '#1c2128' } },
+        y: { ticks: { color: '#8b949e' }, grid: { color: '#1c2128' } },
+      },
+    },
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === 't') { e.preventDefault(); pickLabel('TRENDING'); }
+  else if (k === 'r') { e.preventDefault(); pickLabel('RANGING'); }
+  else if (k === 'u') { e.preventDefault(); pickLabel('UNCLEAR'); }
+  else if (['1','2','3','4','5'].includes(e.key)) {
+    e.preventDefault(); pickConf(Number(e.key));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!document.getElementById('saveBtn').disabled) saveAndNext();
+  }
+});
+
+(async function init() {
+  try {
+    worksheet = await fetchJSON('/api/labels');
+    flatWindows = flatten(worksheet);
+    try {
+      const barsJson = await fetchJSON('/api/labels/bars');
+      barsByInst = barsJson.instruments || {};
+    } catch (e) {
+      barsByInst = {};
+    }
+    recountProgress();
+    cursor = firstUnlabelled();
+    if (cursor === -1) cursor = flatWindows.length;
+    document.getElementById('progressHint').textContent =
+      flatWindows.length ? '' : 'No windows in worksheet.';
+    renderCurrent();
+  } catch (e) {
+    document.getElementById('mainArea').innerHTML =
+      `<div class="empty"><h2>Could not load worksheet</h2><div>${e.message}</div></div>`;
+  }
+})();
+</script>
+
+</body>
+</html>

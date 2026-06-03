@@ -62,6 +62,63 @@ tr:hover td { background:#1c2128; }
 .pos-item { display:flex; gap:8px; align-items:baseline; font-size:0.7rem; }
 .pos-sym { color:var(--gold); font-weight:700; min-width:65px; }
 .pos-detail { color:var(--muted); font-size:0.63rem; }
+
+/* Regime layer */
+.regime-nav { display:flex; gap:2px; padding:8px 16px; border-bottom:1px solid var(--border); background:var(--bg3); flex-wrap:wrap; }
+.regime-tab { background:transparent; border:1px solid transparent; color:var(--muted); padding:6px 14px; font-family:'JetBrains Mono',monospace; font-size:0.7rem; cursor:pointer; border-radius:4px; letter-spacing:1px; }
+.regime-tab:hover { color:var(--text); border-color:var(--border); }
+.regime-tab.active { color:var(--gold); border-color:var(--gold); }
+.regime-tab .count { color:var(--muted); margin-left:6px; font-size:0.62rem; }
+.regime-tab.active .count { color:var(--gold); }
+.regime-pane { display:none; }
+.regime-pane.active { display:block; }
+.regime-empty { padding:24px 16px; color:var(--muted); font-size:0.72rem; line-height:1.5; }
+.regime-meta { padding:8px 16px; color:var(--muted); font-size:0.62rem; border-bottom:1px solid #1c2128; text-transform:uppercase; letter-spacing:1px; }
+.disagreement-row td { background:#3b0a0a; }
+.disagreement-row td:first-child { box-shadow:inset 3px 0 0 var(--red); }
+.regime-bool-yes { color:var(--green); font-weight:700; }
+.regime-bool-no { color:var(--red); font-weight:700; }
+.regime-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#1f2937; color:var(--blue); }
+.regime-pill.regime-TRENDING { background:#052e16; color:var(--green); }
+.regime-pill.regime-RANGING { background:#1e3a5f; color:var(--blue); }
+.regime-pill.regime-VOLATILE { background:#713f12; color:#fbbf24; }
+.regime-pill.regime-UNCLEAR { background:#1f2937; color:var(--muted); }
+/* ── Classify tab ── */
+.classify-subtitle { padding:14px 16px 4px; color:var(--muted); font-size:0.75rem; letter-spacing:0.5px; }
+.classify-budget { padding:0 16px 14px; color:var(--text); font-size:0.78rem; font-weight:600; border-bottom:1px solid #1c2128; }
+.classify-budget .classify-budget-spent { color:var(--muted); font-weight:400; margin-left:6px; }
+.classify-budget.classify-budget-low { color:#fbbf24; }
+.classify-budget.classify-budget-exhausted { color:var(--red); }
+.classify-section-title { padding:14px 16px 6px; color:var(--gold); font-size:0.7rem; letter-spacing:1px; text-transform:uppercase; }
+.classify-form { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 16px; }
+.classify-form label { color:var(--muted); font-size:0.72rem; letter-spacing:0.5px; }
+.classify-form select { background:var(--bg3); color:var(--text); border:1px solid var(--border); padding:6px 10px; font-family:'JetBrains Mono',monospace; font-size:0.74rem; border-radius:4px; min-width:220px; }
+.classify-cost-estimate { color:var(--muted); font-size:0.7rem; }
+.classify-tooltip { padding:4px 16px 14px; color:var(--muted); font-size:0.68rem; font-style:italic; line-height:1.5; max-width:780px; }
+.classify-buttons { display:flex; gap:10px; padding:0 16px 14px; }
+.classify-btn-primary { background:var(--gold); color:#1a1a1a; border:1px solid var(--gold); padding:7px 18px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:700; letter-spacing:0.5px; cursor:pointer; border-radius:4px; }
+.classify-btn-primary:hover:not(:disabled) { background:#f5d568; }
+.classify-btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
+.classify-btn-secondary { background:transparent; color:var(--text); border:1px solid var(--border); padding:7px 14px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; cursor:pointer; border-radius:4px; }
+.classify-btn-secondary:hover { border-color:var(--text); }
+.classify-error { margin:0 16px 14px; padding:10px 14px; background:#3b0d0d; border:1px solid var(--red); color:#fecaca; font-size:0.72rem; border-radius:4px; line-height:1.5; }
+.classify-progress { margin:0 16px 14px; padding:8px 14px; color:var(--blue); font-size:0.72rem; border:1px solid var(--border); border-radius:4px; background:var(--bg3); }
+.classify-result { margin:0 16px 16px; }
+.classify-result-card { padding:14px 16px; background:var(--bg3); border:1px solid var(--border); border-radius:4px; font-size:0.74rem; line-height:1.65; margin-bottom:8px; }
+.classify-result-card .classify-result-title { color:var(--green); font-weight:700; margin-bottom:8px; }
+.classify-result-card .classify-result-row { display:flex; gap:8px; }
+.classify-result-card .classify-result-label { color:var(--muted); min-width:130px; }
+.classify-result-card .classify-result-rationale { color:var(--text); margin-top:6px; font-style:italic; padding-top:6px; border-top:1px dashed var(--border); }
+.classify-result-card .classify-result-features-dated { color:var(--muted); font-size:0.66rem; margin-top:6px; }
+.classify-modal { position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; }
+.classify-modal.classify-modal-open { display:flex; }
+.classify-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.7); }
+.classify-modal-content { position:relative; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:20px 22px; max-width:520px; width:92%; font-family:'JetBrains Mono',monospace; }
+.classify-modal-title { color:var(--gold); font-size:0.82rem; font-weight:700; letter-spacing:1px; margin-bottom:12px; }
+.classify-modal-body { color:var(--text); font-size:0.78rem; line-height:1.6; margin-bottom:18px; }
+.classify-modal-buttons { display:flex; gap:10px; justify-content:flex-end; }
+.engine-pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.62rem; font-weight:700; background:#0c2461; color:var(--blue); }
+.engine-pill.engine-NoOpEngine { background:#1f2937; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -127,6 +184,61 @@ tr:hover td { background:#1c2128; }
     <thead><tr><th>ETF</th><th>Price</th><th>RSI</th><th>W%R</th><th>Position</th><th>Action</th></tr></thead>
     <tbody id="layer2"></tbody>
   </table>
+</div>
+
+<div class="section">
+  <div class="section-title">// REGIME LAYER</div>
+  <div class="regime-nav" id="regimeNav">
+    <button class="regime-tab active" data-tab="regime">Regime</button>
+    <button class="regime-tab" data-tab="overlays">Overlays</button>
+    <button class="regime-tab" data-tab="routing">Routing</button>
+    <button class="regime-tab" data-tab="shadow">Shadow vs Live</button>
+    <button class="regime-tab" data-tab="degradation">Degradation</button>
+    <button class="regime-tab" data-tab="pauses">Pauses</button>
+    <button class="regime-tab" data-tab="classify">Classify</button>
+    <button class="regime-tab" data-tab="filter">Filter</button>
+  </div>
+  <div class="regime-meta" id="regimeMeta">Last refresh: --</div>
+  <div class="regime-pane active" id="regime-pane-regime"><div class="regime-empty">Loading...</div></div>
+  <div class="regime-pane" id="regime-pane-overlays"></div>
+  <div class="regime-pane" id="regime-pane-routing"></div>
+  <div class="regime-pane" id="regime-pane-shadow"></div>
+  <div class="regime-pane" id="regime-pane-degradation"></div>
+  <div class="regime-pane" id="regime-pane-pauses"></div>
+  <div class="regime-pane" id="regime-pane-filter"><div class="regime-empty">Loading...</div></div>
+  <div class="regime-pane" id="regime-pane-classify">
+    <div class="classify-subtitle">Re-classify an instrument using its most recent cached features.</div>
+    <div class="classify-budget" id="classifyBudget">Loading budget...</div>
+    <div class="classify-section-title">Re-classify</div>
+    <div class="classify-form">
+      <label for="classifyInstrument">Instrument:</label>
+      <select id="classifyInstrument" disabled>
+        <option value="" disabled selected>Loading instruments...</option>
+      </select>
+      <span class="classify-cost-estimate" id="classifyCostEstimate"></span>
+    </div>
+    <div class="classify-tooltip" id="classifyTooltip">
+      Re-runs Claude on the most recent cached features for this instrument. Use to re-roll after a low-confidence response or to inspect classifier behavior. Features come from the last daily scheduler run.
+    </div>
+    <div class="classify-buttons">
+      <button id="classifyBtn" class="classify-btn-primary" disabled>Classify</button>
+      <button id="classifyShowLastBtn" class="classify-btn-secondary" disabled>Show last classification</button>
+    </div>
+    <div id="classifyProgress" class="classify-progress" style="display:none"></div>
+    <div id="classifyError" class="classify-error" style="display:none"></div>
+    <div id="classifyResult" class="classify-result"></div>
+  </div>
+</div>
+<div id="classifyModal" class="classify-modal" role="dialog" aria-modal="true" aria-labelledby="classifyModalTitle">
+  <div class="classify-modal-backdrop" id="classifyModalBackdrop"></div>
+  <div class="classify-modal-content">
+    <div class="classify-modal-title" id="classifyModalTitle">Confirm re-classify</div>
+    <div class="classify-modal-body" id="classifyModalBody"></div>
+    <div class="classify-modal-buttons">
+      <button id="classifyModalCancel" class="classify-btn-secondary">Cancel</button>
+      <button id="classifyModalConfirm" class="classify-btn-primary">Confirm</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -320,6 +432,575 @@ function logout() {
   document.cookie = 'jwt_token=; path=/; max-age=0';
   window.location.href = 'login.html';
 }
+
+// ──────────────────────────────────────────────────────
+// Regime layer tabs (PR 6 §15.5)
+// ──────────────────────────────────────────────────────
+function regimeEscape(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function regimePill(value) {
+  if (!value) return '<span class="muted">--</span>';
+  const v = regimeEscape(value);
+  return `<span class="regime-pill regime-${v}">${v}</span>`;
+}
+
+function enginePill(value) {
+  if (!value) return '<span class="muted">--</span>';
+  const v = regimeEscape(value);
+  return `<span class="engine-pill engine-${v}">${v}</span>`;
+}
+
+function formatTs(ts) {
+  if (!ts) return '<span class="muted">--</span>';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return regimeEscape(ts);
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+  } catch (err) {
+    return regimeEscape(ts);
+  }
+}
+
+function regimeRenderTable(headers, rows) {
+  if (!rows || rows.length === 0) return null;
+  const thead = '<thead><tr>' +
+    headers.map(h => `<th>${regimeEscape(h)}</th>`).join('') + '</tr></thead>';
+  const tbody = '<tbody>' + rows.map(r => {
+    if (Array.isArray(r)) {
+      return '<tr>' + r.map(c => `<td>${c == null ? '' : c}</td>`).join('') + '</tr>';
+    }
+    const cls = r.rowClass ? ` class="${r.rowClass}"` : '';
+    return `<tr${cls}>` + r.cells.map(c => `<td>${c == null ? '' : c}</td>`).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  return `<table>${thead}${tbody}</table>`;
+}
+
+const REGIME_TABS = {
+  regime: {
+    url: '/api/regime/states',
+    empty: "Classifier hasn't run yet — first run typically happens after market close.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Raw regime', 'Confidence', 'Smoothed', 'Days in regime', 'Last classified'],
+      rows.slice().sort((a, b) => (a.instrument || '').localeCompare(b.instrument || '')).map(r => [
+        regimeEscape(r.instrument || ''),
+        regimePill(r.raw_regime),
+        r.confidence != null ? Number(r.confidence).toFixed(2) : '<span class="muted">--</span>',
+        regimePill(r.smoothed_regime),
+        r.days_in_regime != null ? String(r.days_in_regime) : '<span class="muted">--</span>',
+        formatTs(r.last_classified),
+      ])
+    ),
+  },
+  overlays: {
+    url: '/api/overlays/active',
+    empty: "No overlays currently active. This is normal during shadow phase. (MACRO_LOCKOUT events from the calendar would appear here; DATA_QUALITY and LOW_LIQUIDITY require bot runtime context and are not displayed in this view — check the Pauses tab.)",
+    render: rows => regimeRenderTable(
+      ['Overlay', 'Reason', 'Instruments affected'],
+      rows.map(r => [
+        `<span class="engine-pill">${regimeEscape(r.overlay_name || '')}</span>`,
+        regimeEscape(r.reason || ''),
+        Array.isArray(r.instruments_affected) ? r.instruments_affected.map(regimeEscape).join(', ') : '',
+      ])
+    ),
+  },
+  routing: {
+    url: '/api/routing/decisions',
+    empty: "Router hasn't been invoked yet.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Smoothed regime', 'Selected engine', 'Allow new entries', 'Block reason'],
+      rows.slice().sort((a, b) => (a.instrument || '').localeCompare(b.instrument || '')).map(r => [
+        regimeEscape(r.instrument || ''),
+        regimePill(r.smoothed_regime),
+        enginePill(r.selected_engine),
+        r.allow_new_entries
+          ? '<span class="regime-bool-yes">YES</span>'
+          : '<span class="regime-bool-no">NO</span>',
+        regimeEscape(r.block_reason || ''),
+      ])
+    ),
+  },
+  shadow: {
+    url: '/api/shadow/comparison',
+    empty: "No shadow decisions logged yet — bot needs to complete more cycles.",
+    render: rows => regimeRenderTable(
+      ['Timestamp', 'Instrument', 'Live engine', 'Live action', 'Shadow engine', 'Shadow action', 'Disagreement'],
+      rows.map(r => {
+        const disagreed = r.disagreement_type && String(r.disagreement_type).trim() !== '';
+        return {
+          cells: [
+            formatTs(r.ts),
+            regimeEscape(r.instrument || ''),
+            enginePill(r.live_engine),
+            regimeEscape(r.live_action_taken || ''),
+            enginePill(r.shadow_engine_selected),
+            regimeEscape(r.shadow_action_would_be || ''),
+            disagreed
+              ? `<span class="regime-bool-no">${regimeEscape(r.disagreement_type)}</span>`
+              : '<span class="muted">—</span>',
+          ],
+          rowClass: disagreed ? 'disagreement-row' : '',
+        };
+      })
+    ),
+  },
+  degradation: {
+    url: '/api/degradation/events',
+    empty: "No degradation events recorded. System is healthy.",
+    render: rows => regimeRenderTable(
+      ['Timestamp', 'Component', 'Severity', 'Trigger reason', 'Action taken'],
+      rows.map(r => [
+        formatTs(r.ts),
+        `<span class="engine-pill">${regimeEscape(r.component || '')}</span>`,
+        r.severity === 'hard'
+          ? '<span class="regime-bool-no">HARD</span>'
+          : `<span class="muted">${regimeEscape(r.severity || '')}</span>`,
+        regimeEscape(r.trigger_reason || ''),
+        regimeEscape(r.action_taken || ''),
+      ])
+    ),
+  },
+  pauses: {
+    url: '/api/pauses/list',
+    empty: "No instruments currently paused.",
+    render: rows => regimeRenderTable(
+      ['Instrument', 'Reason', 'Paused at', 'Overlay'],
+      rows.map(r => [
+        regimeEscape(r.instrument || ''),
+        regimeEscape(r.reason || ''),
+        formatTs(r.paused_at),
+        `<span class="engine-pill">${regimeEscape(r.paused_by_overlay || '')}</span>`,
+      ])
+    ),
+  },
+  filter: {
+    url: '/api/regime/filter_performance',
+    usesRawData: true,
+    empty: "No filter performance data — flag is off or no rows yet.",
+    render: renderFilterTile,
+  },
+};
+
+function _fmtPct(v) {
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  const n = Number(v);
+  const cls = n > 0 ? 'green' : (n < 0 ? 'red' : '');
+  return `<span class="${cls}">${n >= 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
+}
+function _fmtCount(n) {
+  return n === null || n === undefined ? '<span class="muted">—</span>' : String(n);
+}
+function renderFilterTile(data) {
+  if (!data || typeof data !== 'object') return '';
+  const live = data.live_trades || {};
+  const blocked = data.blocked_entries || {};
+  const cmp = data.comparison || {};
+  const byReg = blocked.by_regime || {};
+  const sinceStr = data.since ? regimeEscape(data.since) : 'all-time';
+  return `
+    <div style="padding:14px 16px;">
+      <div class="regime-meta" style="border:none;padding:0 0 10px 0;">
+        Window: <span class="gold">${sinceStr}</span>
+        &nbsp;·&nbsp; Auto-refreshes every 30s
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px;">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;">
+          <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Live trades</div>
+          <div style="font-size:1.1rem;font-weight:700;">${_fmtCount(live.n)}<span class="muted" style="font-size:0.7rem;font-weight:400;"> closed</span></div>
+          <div style="margin-top:4px;font-size:0.72rem;">Mean P&amp;L: ${_fmtPct(live.mean_pnl_pct)}</div>
+          <div style="font-size:0.7rem;color:var(--muted);">Win rate: ${live.win_rate === null || live.win_rate === undefined ? '—' : (live.win_rate * 100).toFixed(0) + '%'}
+            &nbsp;·&nbsp; ${live.n_wins || 0}W / ${live.n_losses || 0}L</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;">
+          <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Blocked entries</div>
+          <div style="font-size:1.1rem;font-weight:700;">${_fmtCount(blocked.n_total)}<span class="muted" style="font-size:0.7rem;font-weight:400;"> total</span></div>
+          <div style="margin-top:4px;font-size:0.72rem;">RANGING: ${_fmtCount(byReg.RANGING && byReg.RANGING.n)}
+            &nbsp;·&nbsp; UNCLEAR: ${_fmtCount(byReg.UNCLEAR && byReg.UNCLEAR.n)}
+            &nbsp;·&nbsp; unknown: ${_fmtCount(byReg.unknown && byReg.unknown.n)}</div>
+          <div style="font-size:0.7rem;color:var(--muted);">Shadows: ${blocked.n_closed_shadows || 0} closed, ${blocked.n_open_shadows || 0} open</div>
+        </div>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--gold);border-radius:6px;padding:12px 14px;">
+        <div style="color:var(--gold);font-size:0.66rem;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Net effect</div>
+        <div style="font-size:0.78rem;line-height:1.5;">
+          Live mean: ${_fmtPct(cmp.mean_live_pnl_pct)}
+          &nbsp;·&nbsp; Would-have-blocked mean: ${_fmtPct(cmp.mean_blocked_shadow_pnl_pct)}
+          &nbsp;·&nbsp; Net per trade: ${_fmtPct(cmp.net_effect_pct_per_trade)}
+        </div>
+        <div style="margin-top:6px;font-size:0.72rem;color:var(--text);font-style:italic;">${regimeEscape(cmp.verdict || '')}</div>
+      </div>
+      <div style="margin-top:10px;font-size:0.66rem;color:var(--muted);">
+        P&amp;L is raw % return from entry (LONG-assumed). Includes only closed shadow trades.
+      </div>
+    </div>
+  `;
+}
+
+let _activeRegimeTab = 'regime';
+let _regimeRefreshTimer = null;
+
+async function fetchRegimeTab(key) {
+  const cfg = REGIME_TABS[key];
+  if (!cfg) return;
+  const pane = document.getElementById('regime-pane-' + key);
+  if (!pane) return;
+  const token = localStorage.getItem('jwt_token') || '';
+  try {
+    const r = await fetch(cfg.url + '?t=' + Date.now(), {
+      headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+    });
+    if (r.status === 401) {
+      pane.innerHTML = '<div class="regime-empty">Session expired — <a href="login.html" style="color:#f5c842">log in</a> again.</div>';
+      return;
+    }
+    if (!r.ok) {
+      pane.innerHTML = `<div class="regime-empty">Error: HTTP ${r.status}.</div>`;
+      return;
+    }
+    const data = await r.json();
+    const rows = Array.isArray(data) ? data : [];
+    const tab = REGIME_TABS[key];
+    const btn = document.querySelector(`.regime-tab[data-tab="${key}"]`);
+    if (btn) {
+      const existing = btn.querySelector('.count');
+      if (existing) existing.remove();
+      if (rows.length > 0) {
+        const span = document.createElement('span');
+        span.className = 'count';
+        span.textContent = '(' + rows.length + ')';
+        btn.appendChild(span);
+      }
+    }
+    const table = tab.render(tab.usesRawData ? data : rows);
+    pane.innerHTML = table || `<div class="regime-empty">${regimeEscape(tab.empty)}</div>`;
+    const meta = document.getElementById('regimeMeta');
+    if (meta) meta.textContent = 'Last refresh: ' + new Date().toISOString().slice(11, 19) + ' UTC · ' + key;
+  } catch (err) {
+    pane.innerHTML = `<div class="regime-empty">Fetch error: ${regimeEscape(err.message || String(err))}</div>`;
+  }
+}
+
+function activateRegimeTab(key) {
+  if (key !== 'classify' && !REGIME_TABS[key]) return;
+  _activeRegimeTab = key;
+  document.querySelectorAll('.regime-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === key);
+  });
+  document.querySelectorAll('.regime-pane').forEach(p => {
+    p.classList.toggle('active', p.id === 'regime-pane-' + key);
+  });
+  if (_regimeRefreshTimer) clearInterval(_regimeRefreshTimer);
+  if (key === 'classify') {
+    initializeClassifyTab();
+    return;
+  }
+  fetchRegimeTab(key);
+  _regimeRefreshTimer = setInterval(() => fetchRegimeTab(_activeRegimeTab), 30000);
+}
+
+const _regimeNav = document.getElementById('regimeNav');
+if (_regimeNav) {
+  _regimeNav.addEventListener('click', e => {
+    const btn = e.target.closest('.regime-tab');
+    if (btn) activateRegimeTab(btn.dataset.tab);
+  });
+  activateRegimeTab('regime');
+}
+
+// ──────────────────────────────────────────────────────
+// Classify tab — operator-triggered re-roll of Claude on
+// the most recent cached features (commit 3 of 4)
+// ──────────────────────────────────────────────────────
+const _classifyState = { instruments: [], costPer: 0.02, initialized: false };
+
+function _classifyAuthHeaders() {
+  const token = localStorage.getItem('jwt_token') || '';
+  return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
+
+function _classifyShowError(msg) {
+  const el = document.getElementById('classifyError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function _classifyHideError() {
+  document.getElementById('classifyError').style.display = 'none';
+}
+
+function _classifyShowProgress(msg) {
+  const el = document.getElementById('classifyProgress');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function _classifyHideProgress() {
+  document.getElementById('classifyProgress').style.display = 'none';
+}
+
+async function _classifyRefreshBudget() {
+  try {
+    const r = await fetch('/api/regime/budget?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (!r.ok) return;
+    const b = await r.json();
+    const el = document.getElementById('classifyBudget');
+    const remainingPct = b.max_daily_cost_usd > 0
+      ? b.remaining_usd / b.max_daily_cost_usd : 0;
+    let cls = '';
+    if (b.remaining_usd <= 0) cls = ' classify-budget-exhausted';
+    else if (remainingPct < 0.2) cls = ' classify-budget-low';
+    el.className = 'classify-budget' + cls;
+    el.innerHTML = `Today's API budget: $${b.remaining_usd.toFixed(2)} of `
+      + `$${b.max_daily_cost_usd.toFixed(2)} remaining`
+      + ` <span class="classify-budget-spent">`
+      + `($${b.spent_today_usd.toFixed(4)} spent today)</span>`;
+  } catch (err) {
+    // Best-effort: leave the previous banner in place.
+  }
+}
+
+function _classifyPopulateDropdown() {
+  const select = document.getElementById('classifyInstrument');
+  const items = _classifyState.instruments;
+  let html = '<option value="" disabled selected>Select an instrument…</option>';
+  items.forEach(s => {
+    html += `<option value="${regimeEscape(s)}">${regimeEscape(s)}</option>`;
+  });
+  if (items.length > 0) {
+    html += `<option value="__ALL__">— ALL INSTRUMENTS (${items.length}) —</option>`;
+  }
+  select.innerHTML = html;
+  select.disabled = items.length === 0;
+  document.getElementById('classifyBtn').disabled = items.length === 0;
+  document.getElementById('classifyShowLastBtn').disabled = items.length === 0;
+  _classifyUpdateCostEstimate();
+}
+
+function _classifyUpdateCostEstimate() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  const el = document.getElementById('classifyCostEstimate');
+  if (sel === '__ALL__') {
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    el.textContent = `Cost estimate: ~$${cost} (${n} instruments)`;
+  } else if (sel) {
+    el.textContent = `Cost estimate: ~$${_classifyState.costPer.toFixed(2)}`;
+  } else {
+    el.textContent = '';
+  }
+}
+
+async function initializeClassifyTab() {
+  _classifyHideError();
+  _classifyHideProgress();
+  await _classifyRefreshBudget();
+
+  try {
+    const r = await fetch('/api/regime/instruments?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (r.status === 401) {
+      _classifyShowError('Session expired — log in again.');
+      return;
+    }
+    if (!r.ok) {
+      _classifyShowError('Failed to load instruments: HTTP ' + r.status);
+      return;
+    }
+    const data = await r.json();
+    _classifyState.instruments = data.instruments || [];
+    _classifyState.costPer = data.estimated_cost_per_classification_usd || 0.02;
+    _classifyState.initialized = true;
+    _classifyPopulateDropdown();
+  } catch (err) {
+    _classifyShowError('Failed to load instruments: ' + (err.message || err));
+  }
+}
+
+function _classifyOpenModal(bodyHtml, onConfirm) {
+  const modal = document.getElementById('classifyModal');
+  document.getElementById('classifyModalBody').innerHTML = bodyHtml;
+  modal.classList.add('classify-modal-open');
+
+  // Replace buttons to clear any prior listeners.
+  const oldConfirm = document.getElementById('classifyModalConfirm');
+  const newConfirm = oldConfirm.cloneNode(true);
+  oldConfirm.parentNode.replaceChild(newConfirm, oldConfirm);
+
+  const oldCancel = document.getElementById('classifyModalCancel');
+  const newCancel = oldCancel.cloneNode(true);
+  oldCancel.parentNode.replaceChild(newCancel, oldCancel);
+
+  const close = () => modal.classList.remove('classify-modal-open');
+  newConfirm.addEventListener('click', () => { close(); onConfirm(); });
+  newCancel.addEventListener('click', close);
+  document.getElementById('classifyModalBackdrop').onclick = close;
+}
+
+function _classifyRenderResultCard(r) {
+  const conf = (r.confidence == null ? 0 : r.confidence).toFixed(2);
+  const days = r.days_in_regime == null ? 0 : r.days_in_regime;
+  const cost = (r.cost_usd == null ? 0 : r.cost_usd).toFixed(4);
+  const dayLabel = days === 1 ? '1 day' : `${days} days`;
+  const datedLine = r.features_dated
+    ? `<div class="classify-result-features-dated">Features dated: ${regimeEscape(r.features_dated)}</div>`
+    : '';
+  const rationaleLine = r.rationale
+    ? `<div class="classify-result-rationale">${regimeEscape(r.rationale)}</div>`
+    : '';
+  return `<div class="classify-result-card">
+      <div class="classify-result-title">✓ ${regimeEscape(r.instrument)} classified</div>
+      <div class="classify-result-row"><span class="classify-result-label">Raw regime:</span>
+        ${regimePill(r.raw_regime)} <span style="color:var(--muted)">(confidence ${conf})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Smoothed:</span>
+        ${regimePill(r.smoothed_regime)} <span style="color:var(--muted)">(${dayLabel})</span></div>
+      <div class="classify-result-row"><span class="classify-result-label">Cost:</span>
+        $${cost}</div>
+      ${rationaleLine}
+      ${datedLine}
+    </div>`;
+}
+
+async function _classifyRun(payload) {
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML = '';
+
+  if (payload.all) {
+    _classifyShowProgress(
+      `Classifying ${_classifyState.instruments.length} instruments sequentially — `
+      + `takes about ${Math.ceil(_classifyState.instruments.length * 2)}s…`,
+    );
+  } else {
+    _classifyShowProgress(`Classifying ${payload.instrument}…`);
+  }
+
+  document.getElementById('classifyBtn').disabled = true;
+  document.getElementById('classifyShowLastBtn').disabled = true;
+
+  try {
+    const r = await fetch('/api/regime/classify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ..._classifyAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    let body;
+    try { body = await r.json(); } catch { body = {}; }
+    _classifyHideProgress();
+
+    if (r.status === 200) {
+      const results = body.results || [body];
+      const html = results.map(_classifyRenderResultCard).join('');
+      document.getElementById('classifyResult').innerHTML = html;
+    } else {
+      let msg = body.error || `HTTP ${r.status}`;
+      if (body.partial_results && body.partial_results.length > 0) {
+        const html = body.partial_results.map(_classifyRenderResultCard).join('');
+        document.getElementById('classifyResult').innerHTML = html;
+        msg = `Stopped after ${body.partial_results.length} instrument(s) at `
+          + `${body.stopped_on || '?'}: ${msg}`;
+      }
+      if (r.status === 429 && body.retry_after_seconds) {
+        msg += ` (retry in ${body.retry_after_seconds}s)`;
+      }
+      _classifyShowError(msg);
+    }
+    await _classifyRefreshBudget();
+  } catch (err) {
+    _classifyHideProgress();
+    _classifyShowError('Request failed: ' + (err.message || err));
+  } finally {
+    document.getElementById('classifyBtn').disabled = false;
+    document.getElementById('classifyShowLastBtn').disabled = false;
+  }
+}
+
+function _classifyOnClick() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel) {
+    _classifyShowError('Pick an instrument first.');
+    return;
+  }
+  if (sel === '__ALL__') {
+    const n = _classifyState.instruments.length;
+    const cost = (n * _classifyState.costPer).toFixed(2);
+    _classifyOpenModal(
+      `Re-classify all ${n} instruments using their most recently cached features? `
+      + `This will replace today's cached classifications. Cost: ~$${cost}. `
+      + `Takes about 30 seconds.`,
+      () => _classifyRun({ all: true }),
+    );
+  } else {
+    _classifyOpenModal(
+      `Re-classify ${regimeEscape(sel)}? `
+      + `This will replace today's cached classification. `
+      + `Cost: ~$${_classifyState.costPer.toFixed(2)}.`,
+      () => _classifyRun({ instrument: sel }),
+    );
+  }
+}
+
+async function _classifyShowLast() {
+  const select = document.getElementById('classifyInstrument');
+  const sel = select.value;
+  if (!sel || sel === '__ALL__') {
+    _classifyShowError('Pick a single instrument first.');
+    return;
+  }
+  _classifyHideError();
+  document.getElementById('classifyResult').innerHTML =
+    '<div class="classify-result-card"><span style="color:var(--muted)">Loading…</span></div>';
+  try {
+    const r = await fetch('/api/regime/states?t=' + Date.now(), {
+      headers: _classifyAuthHeaders(),
+    });
+    if (!r.ok) {
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`Failed to load last classification: HTTP ${r.status}`);
+      return;
+    }
+    const all = await r.json();
+    const match = (all || []).find(x => x.instrument === sel);
+    if (!match) {
+      document.getElementById('classifyResult').innerHTML = '';
+      _classifyShowError(`No prior classification found for ${sel}.`);
+      return;
+    }
+    document.getElementById('classifyResult').innerHTML = _classifyRenderResultCard({
+      instrument: match.instrument,
+      raw_regime: match.raw_regime,
+      confidence: match.confidence,
+      smoothed_regime: match.smoothed_regime,
+      days_in_regime: match.days_in_regime,
+      cost_usd: 0,
+      rationale: 'Last cached classification — no fresh API call made.',
+      features_dated: match.trading_date,
+    });
+  } catch (err) {
+    document.getElementById('classifyResult').innerHTML = '';
+    _classifyShowError('Request failed: ' + (err.message || err));
+  }
+}
+
+// Wire static event listeners once at script load.
+const _classifySelect = document.getElementById('classifyInstrument');
+if (_classifySelect) {
+  _classifySelect.addEventListener('change', _classifyUpdateCostEstimate);
+}
+const _classifyBtnEl = document.getElementById('classifyBtn');
+if (_classifyBtnEl) _classifyBtnEl.addEventListener('click', _classifyOnClick);
+const _classifyShowLastEl = document.getElementById('classifyShowLastBtn');
+if (_classifyShowLastEl) _classifyShowLastEl.addEventListener('click', _classifyShowLast);
 </script>
 </body>
 </html>

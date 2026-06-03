@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Macro Calendar — CogniflowAI</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #0a0a0a; color: #e0e0e0; }
+.nav { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #111; border-bottom: 1px solid #333; }
+.nav a { color: #4fc3f7; text-decoration: none; margin-right: 16px; }
+.nav a:hover { text-decoration: underline; }
+.nav .right { color: #888; }
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+.tab { padding: 8px 16px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; cursor: pointer; color: #ccc; }
+.tab.active { background: #2a2a4a; border-color: #4fc3f7; color: #fff; }
+.toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.toolbar input, .toolbar select { padding: 6px 10px; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; border-radius: 4px; }
+.btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.btn-primary { background: #1976d2; color: #fff; }
+.btn-danger { background: #c62828; color: #fff; }
+.btn-success { background: #2e7d32; color: #fff; }
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #222; }
+th { background: #1a1a1a; color: #888; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+tr:hover { background: #151520; }
+.severity-high { color: #ef5350; font-weight: 600; }
+.severity-medium { color: #ffa726; }
+.severity-low { color: #66bb6a; }
+.modal-bg { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 100; }
+.modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 24px; min-width: 400px; z-index: 101; }
+.modal h3 { margin-bottom: 16px; }
+.modal label { display: block; margin-bottom: 4px; color: #888; font-size: 13px; }
+.modal input, .modal select, .modal textarea { width: 100%; padding: 8px; margin-bottom: 12px; background: #0a0a0a; border: 1px solid #333; color: #e0e0e0; border-radius: 4px; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+.status { padding: 8px 16px; margin-bottom: 16px; border-radius: 4px; display: none; }
+.status.success { display: block; background: #1b5e20; }
+.status.error { display: block; background: #b71c1c; }
+#auditPanel { display: none; }
+.audit-detail { font-size: 12px; color: #888; max-height: 200px; overflow: auto; background: #111; padding: 8px; border-radius: 4px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div>
+    <a href="/dashboard.html">Dashboard</a>
+    <a href="/instruments.html">Instruments</a>
+    <a href="/admin/calendars" class="active">Macro Calendar</a>
+  </div>
+  <div class="right">
+    <span id="userLabel">Logged in as: —</span>
+    <a href="#" onclick="logout()" style="margin-left:12px;color:#ef5350;">Logout</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('events')">Macro Calendar</div>
+    <div class="tab" onclick="showTab('audit')">Audit Log</div>
+  </div>
+
+  <div id="statusBar" class="status"></div>
+
+  <!-- Events Tab -->
+  <div id="eventsPanel">
+    <div class="toolbar">
+      <input type="date" id="filterFrom" placeholder="From">
+      <input type="date" id="filterTo" placeholder="To">
+      <select id="filterRegion">
+        <option value="">All Regions</option>
+        <option value="US">US</option>
+        <option value="UK">UK</option>
+        <option value="EU">EU</option>
+        <option value="GLOBAL">GLOBAL</option>
+      </select>
+      <button class="btn btn-primary" onclick="loadEvents()">Filter</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-success" onclick="showAddModal()">+ Add Event</button>
+      <label class="btn btn-primary" style="cursor:pointer">
+        Import CSV
+        <input type="file" accept=".csv" onchange="importCSV(this)" style="display:none">
+      </label>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Time (UTC)</th><th>Event</th><th>Region</th><th>Severity</th><th>Notes</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="eventsBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Audit Tab -->
+  <div id="auditPanel">
+    <div class="toolbar">
+      <select id="auditAction">
+        <option value="">All Actions</option>
+        <option value="create">Create</option>
+        <option value="update">Update</option>
+        <option value="delete">Delete</option>
+        <option value="bulk_import">Bulk Import</option>
+        <option value="bulk_delete">Bulk Delete</option>
+      </select>
+      <button class="btn btn-primary" onclick="loadAudit()">Filter</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Time</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr>
+      </thead>
+      <tbody id="auditBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal-bg" id="modalBg" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 id="modalTitle">Add Event</h3>
+    <input type="hidden" id="editId">
+    <label>Date</label>
+    <input type="date" id="fDate">
+    <label>Time (UTC)</label>
+    <input type="time" id="fTime">
+    <label>Event Name</label>
+    <input type="text" id="fEvent" placeholder="FOMC_RATE_DECISION" pattern="[A-Z][A-Z0-9_]*">
+    <label>Region</label>
+    <select id="fRegion">
+      <option value="US">US</option>
+      <option value="UK">UK</option>
+      <option value="EU">EU</option>
+      <option value="GLOBAL">GLOBAL</option>
+    </select>
+    <label>Severity</label>
+    <select id="fSeverity">
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+    <label>Notes</label>
+    <textarea id="fNotes" rows="2" maxlength="500"></textarea>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEvent()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal-bg" id="deleteModalBg" onclick="closeDeleteModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3>Confirm Delete</h3>
+    <p style="margin-bottom:12px">Type the event name to confirm deletion:</p>
+    <p style="margin-bottom:8px;color:#ef5350;font-weight:600" id="deleteEventName"></p>
+    <input type="text" id="deleteConfirm" placeholder="Type event name here">
+    <div class="actions">
+      <button class="btn" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" id="deleteBtn" onclick="confirmDelete()" disabled>Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/calendar';
+let token = localStorage.getItem('jwt_token') || '';
+let deleteTarget = null;
+
+function headers(extra) {
+  return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', ...extra };
+}
+
+function status(msg, type) {
+  const bar = document.getElementById('statusBar');
+  bar.textContent = msg;
+  bar.className = 'status ' + type;
+  setTimeout(() => bar.className = 'status', 4000);
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('eventsPanel').style.display = name === 'events' ? 'block' : 'none';
+  document.getElementById('auditPanel').style.display = name === 'audit' ? 'block' : 'none';
+  if (name === 'audit') loadAudit();
+}
+
+async function loadEvents() {
+  const from = document.getElementById('filterFrom').value;
+  const to = document.getElementById('filterTo').value;
+  const region = document.getElementById('filterRegion').value;
+  let url = API + '/macro?';
+  if (from) url += 'from=' + from + '&';
+  if (to) url += 'to=' + to + '&';
+  try {
+    const r = await fetch(url, { headers: headers() });
+    if (r.status === 401) { window.location = '/login.html'; return; }
+    let events = await r.json();
+    if (region) events = events.filter(e => e.region === region);
+    renderEvents(events);
+  } catch (e) { status('Failed to load events: ' + e, 'error'); }
+}
+
+function renderEvents(events) {
+  const tbody = document.getElementById('eventsBody');
+  tbody.innerHTML = events.map(e => `<tr>
+    <td>${e.event_date}</td>
+    <td>${e.event_time || '—'}</td>
+    <td>${e.name}</td>
+    <td>${e.region || e.source || '—'}</td>
+    <td class="severity-${e.impact}">${e.impact}</td>
+    <td>${e.notes || ''}</td>
+    <td>
+      <button class="btn btn-primary" onclick="editEvent(${e.id})">Edit</button>
+      <button class="btn btn-danger" onclick="showDeleteModal(${e.id},'${e.name}')">Delete</button>
+    </td>
+  </tr>`).join('');
+}
+
+function showAddModal() {
+  document.getElementById('modalTitle').textContent = 'Add Event';
+  document.getElementById('editId').value = '';
+  document.getElementById('fDate').value = '';
+  document.getElementById('fTime').value = '';
+  document.getElementById('fEvent').value = '';
+  document.getElementById('fRegion').value = 'US';
+  document.getElementById('fSeverity').value = 'high';
+  document.getElementById('fNotes').value = '';
+  document.getElementById('modalBg').style.display = 'block';
+}
+
+async function editEvent(id) {
+  const r = await fetch(API + '/macro/' + id, { headers: headers() });
+  const e = await r.json();
+  document.getElementById('modalTitle').textContent = 'Edit Event';
+  document.getElementById('editId').value = id;
+  document.getElementById('fDate').value = e.event_date;
+  document.getElementById('fTime').value = e.event_time || '';
+  document.getElementById('fEvent').value = e.name;
+  document.getElementById('fRegion').value = e.region || 'US';
+  document.getElementById('fSeverity').value = e.impact || 'medium';
+  document.getElementById('fNotes').value = e.notes || '';
+  document.getElementById('modalBg').style.display = 'block';
+}
+
+function closeModal() { document.getElementById('modalBg').style.display = 'none'; }
+
+async function saveEvent() {
+  const id = document.getElementById('editId').value;
+  const body = {
+    date: document.getElementById('fDate').value,
+    time_utc: document.getElementById('fTime').value,
+    event: document.getElementById('fEvent').value,
+    region: document.getElementById('fRegion').value,
+    severity: document.getElementById('fSeverity').value,
+    notes: document.getElementById('fNotes').value,
+  };
+  try {
+    const url = id ? API + '/macro/' + id : API + '/macro';
+    const method = id ? 'PUT' : 'POST';
+    const r = await fetch(url, { method, headers: headers(), body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) { status(data.message || data.error || JSON.stringify(data.details), 'error'); return; }
+    closeModal();
+    status(id ? 'Event updated' : 'Event created', 'success');
+    loadEvents();
+  } catch (e) { status('Save failed: ' + e, 'error'); }
+}
+
+function showDeleteModal(id, name) {
+  deleteTarget = { id, name };
+  document.getElementById('deleteEventName').textContent = name;
+  document.getElementById('deleteConfirm').value = '';
+  document.getElementById('deleteBtn').disabled = true;
+  document.getElementById('deleteModalBg').style.display = 'block';
+  document.getElementById('deleteConfirm').oninput = function() {
+    document.getElementById('deleteBtn').disabled = this.value !== name;
+  };
+}
+
+function closeDeleteModal() { document.getElementById('deleteModalBg').style.display = 'none'; deleteTarget = null; }
+
+async function confirmDelete() {
+  if (!deleteTarget) return;
+  try {
+    const r = await fetch(API + '/macro/' + deleteTarget.id, {
+      method: 'DELETE',
+      headers: { ...headers(), 'X-Confirm-Event': deleteTarget.name },
+    });
+    if (!r.ok) { status('Delete failed', 'error'); return; }
+    closeDeleteModal();
+    status('Event deleted', 'success');
+    loadEvents();
+  } catch (e) { status('Delete failed: ' + e, 'error'); }
+}
+
+async function importCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const text = await file.text();
+  try {
+    const r = await fetch(API + '/macro/import', {
+      method: 'POST', headers: headers(), body: text,
+    });
+    const data = await r.json();
+    if (!r.ok) { status(data.error, 'error'); return; }
+    let msg = `Imported: ${data.inserted}`;
+    if (data.skipped_duplicates) msg += `, skipped: ${data.skipped_duplicates}`;
+    if (data.validation_errors.length) msg += `, errors: ${data.validation_errors.length}`;
+    status(msg, data.validation_errors.length ? 'error' : 'success');
+    loadEvents();
+  } catch (e) { status('Import failed: ' + e, 'error'); }
+  input.value = '';
+}
+
+async function loadAudit() {
+  const action = document.getElementById('auditAction').value;
+  let url = API + '/audit?limit=50';
+  if (action) url += '&action=' + action;
+  try {
+    const r = await fetch(url, { headers: headers() });
+    const rows = await r.json();
+    renderAudit(rows);
+  } catch (e) { status('Failed to load audit: ' + e, 'error'); }
+}
+
+function renderAudit(rows) {
+  const tbody = document.getElementById('auditBody');
+  tbody.innerHTML = rows.map(a => {
+    const detail = a.before_json || a.after_json ? `<div class="audit-detail"><pre>${a.before_json ? 'Before: ' + a.before_json + '\n' : ''}${a.after_json ? 'After: ' + a.after_json : ''}</pre></div>` : '';
+    return `<tr>
+      <td>${a.ts}</td>
+      <td>${a.user_jwt_sub}</td>
+      <td>${a.action}</td>
+      <td>${a.target_id || (a.affected_count ? a.affected_count + ' rows' : '—')}</td>
+      <td>${a.notes || ''}${detail}</td>
+    </tr>`;
+  }).join('');
+}
+
+function logout() { localStorage.removeItem('jwt_token'); window.location = '/login.html'; }
+
+// Init
+try {
+  const payload = JSON.parse(atob(token.split('.')[1]));
+  document.getElementById('userLabel').textContent = 'Logged in as: ' + payload.sub;
+} catch(e) {}
+loadEvents();
+</script>
+</body>
+</html>

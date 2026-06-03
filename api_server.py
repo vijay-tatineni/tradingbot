@@ -34,6 +34,8 @@ load_dotenv(Path(__file__).parent / '.env')
 
 import argparse as _argparse
 
+from bot.guardrails import validate_no_edge_guardrails
+
 BASE_DIR    = Path(__file__).parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
 BACKUP_DIR  = str(BASE_DIR / 'backups')
@@ -187,6 +189,13 @@ def load():
 
 
 def save(data):
+    # Universal no-edge guardrail backstop: every write path (layer1,
+    # layer2, settings, toggle-enable, update, apply-wf, optimise) funnels
+    # through save(). Refuse before any write — the atomic write below has
+    # not started, so a raise leaves instruments.json untouched.
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        raise ValueError("No-edge guardrail failed: " + "; ".join(guard_errors))
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     shutil.copy(CONFIG_FILE, f'{BACKUP_DIR}/instruments_{ts}.json')
@@ -267,6 +276,9 @@ def validate_config(data: dict) -> list:
                     sym = inst.get('symbol', f'index {i}')
                     errors.append(f"layer1_active '{sym}' missing required field: '{field}'")
 
+    # ── no-edge guardrail ────────────────────────────────────
+    errors.extend(validate_no_edge_guardrails(data))
+
     return errors
 
 
@@ -276,6 +288,10 @@ def save_layer1():
     instruments = request.get_json()
     data = load()
     data['layer1_active'] = instruments
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        return jsonify({'ok': False, 'message': 'No-edge guardrail failed',
+                        'errors': guard_errors}), 400
     save(data)
     return jsonify({'ok': True})
 
@@ -296,6 +312,10 @@ def save_settings():
     settings = request.get_json()
     data = load()
     data['settings'].update(settings)
+    guard_errors = validate_no_edge_guardrails(data)
+    if guard_errors:
+        return jsonify({'ok': False, 'message': 'No-edge guardrail failed',
+                        'errors': guard_errors}), 400
     save(data)
     return jsonify({'ok': True})
 
@@ -1370,6 +1390,482 @@ def advisor_news():
         return jsonify(headlines)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Regime dashboard routes (§15.5) ─────────────────────
+REGIME_DB = str(BASE_DIR / 'regime.db')
+
+
+def _init_overlay_registry_safe():
+    try:
+        from bot.overlays.registry import init_overlay_registry
+        init_overlay_registry(REGIME_DB)
+    except Exception as e:
+        print(f"[Regime] Overlay registry init failed: {e}")
+
+
+_init_overlay_registry_safe()
+
+
+def _active_instruments_from_config():
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+        return [
+            i['symbol']
+            for i in data.get('layer1_active', [])
+            if i.get('enabled', True) and i.get('symbol')
+        ]
+    except Exception:
+        return []
+
+
+@app.route('/api/regime/states', methods=['GET'])
+@require_auth
+def regime_states_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_regime_states(REGIME_DB))
+
+
+@app.route('/api/overlays/active', methods=['GET'])
+@require_auth
+def regime_overlays_active_route():
+    """
+    Live-compute active overlays by calling active_overlays() per
+    configured instrument with an empty ctx. MACRO_LOCKOUT will fire
+    correctly because macro events load from the DB. DATA_QUALITY and
+    LOW_LIQUIDITY require bot runtime context (recent bars, volume) and
+    will not appear in this view — see docs/TECH_DEBT.md.
+    """
+    try:
+        from bot.overlays.registry import active_overlays as _active_overlays
+    except Exception as e:
+        return jsonify({'error': f'overlays unavailable: {e}'}), 500
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    by_overlay = {}
+    for sym in _active_instruments_from_config():
+        try:
+            checks = _active_overlays(sym, now, {})
+        except Exception:
+            continue
+        for check in checks:
+            key = check.overlay_name
+            if key not in by_overlay:
+                by_overlay[key] = {
+                    'overlay_name': key,
+                    'reason': check.reason,
+                    'instruments_affected': [],
+                }
+            by_overlay[key]['instruments_affected'].append(sym)
+    return jsonify(list(by_overlay.values()))
+
+
+@app.route('/api/routing/decisions', methods=['GET'])
+@require_auth
+def regime_routing_decisions_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_current_routing(REGIME_DB))
+
+
+@app.route('/api/shadow/comparison', methods=['GET'])
+@require_auth
+def regime_shadow_comparison_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_shadow_decisions(REGIME_DB, limit=50))
+
+
+@app.route('/api/degradation/events', methods=['GET'])
+@require_auth
+def regime_degradation_events_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_degradation_events(REGIME_DB, limit=50))
+
+
+@app.route('/api/pauses/list', methods=['GET'])
+@require_auth
+def regime_pauses_route():
+    from bot.regime import dashboard_data
+    return jsonify(dashboard_data.get_instrument_pauses(REGIME_DB, active_only=True))
+
+
+# ── Manual regime classification routes (Classify tab) ───
+# Operator-triggered classifier re-rolls. Bypasses enable_classifier_shadow
+# and the daily input-hash cache. Reads features from the most recent cached
+# classification per instrument — daily bars don't change intraday, so the
+# scheduler's last fetch is the freshest features available outside the bot
+# process.
+
+_CLASSIFY_RATE_LIMIT_SECONDS = 300  # 5 min per instrument
+_classify_last_ts: dict = {}  # symbol → unix timestamp of last classification
+_classify_lock = threading.Lock()
+ESTIMATED_COST_PER_CLASSIFICATION = 0.02  # display-only; logged value is real
+
+
+def _cached_features(db_path: str, instrument: str) -> "tuple[dict, str] | None":
+    """Read features + their source trading_date from the most recent
+    regime_classification_cache row. Returns (features, trading_date) or
+    None if the instrument has never been classified."""
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT classification_json, trading_date "
+            "FROM regime_classification_cache "
+            "WHERE instrument = ? ORDER BY created_at DESC LIMIT 1",
+            (instrument,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        features = json.loads(row[0]).get("features")
+        if features is None:
+            return None
+        return features, row[1]
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _rate_limit_remaining(symbol: str) -> float:
+    last = _classify_last_ts.get(symbol)
+    if last is None:
+        return 0.0
+    remaining = _CLASSIFY_RATE_LIMIT_SECONDS - (_time.time() - last)
+    return max(remaining, 0.0)
+
+
+def _classify_one_locked(symbol: str) -> "tuple[dict | None, int, str | None]":
+    """Returns (result_payload, http_status, error_msg).
+
+    Caller already holds _classify_lock. Persists to cache + smoothed store
+    and bumps the rate-limit timestamp on success."""
+    from bot.regime.cache import RegimeCache
+    from bot.regime.classifier import RegimeClassifier
+    from bot.regime.cost_tracker import CostTracker, DEFAULT_MAX_DAILY_COST_USD
+    from bot.regime.smoothing import update, update_first_run, initial_state
+    from bot.regime.smoothing_store import SmoothedStateStore
+
+    cache = RegimeCache(REGIME_DB)
+    cost_tracker = CostTracker(REGIME_DB)
+    store = SmoothedStateStore(REGIME_DB)
+
+    trading_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    if cost_tracker.is_budget_exceeded(trading_date):
+        return None, 402, (
+            f"Daily classifier budget exhausted "
+            f"(${cost_tracker.get_daily_spend(trading_date):.4f} of "
+            f"${DEFAULT_MAX_DAILY_COST_USD:.2f})"
+        )
+
+    cached = _cached_features(REGIME_DB, symbol)
+    if cached is None:
+        return None, 409, (
+            f"This instrument hasn't been classified yet. The next "
+            f"scheduled classification will run at ~21:30 UTC (US) / "
+            f"~17:00 UTC (LSE). Or restart the bot to force a fresh cycle."
+        )
+    features, features_trading_date = cached
+
+    classifier = RegimeClassifier(cache, cost_tracker)
+    if not classifier.is_available():
+        return None, 503, "Anthropic client unavailable (ANTHROPIC_API_KEY not set)"
+
+    # Cost before/after delta for the per-call cost_usd in the response.
+    spend_before = cost_tracker.get_daily_spend(trading_date)
+    classification = classifier.classify(symbol, trading_date, features, force=True)
+    spend_after = cost_tracker.get_daily_spend(trading_date)
+    cost_usd = max(spend_after - spend_before, 0.0)
+
+    # Make sure the cache row exists even on fallback paths (classifier only
+    # writes happy-path; mirroring the scheduler's behaviour for idempotency).
+    cache.put(classification)
+
+    prior = store.get_latest(symbol)
+    if prior is None:
+        prior = initial_state(symbol)
+        smoothed = update_first_run(prior, classification)
+    else:
+        smoothed = update(prior, classification)
+    store.put(smoothed)
+
+    _classify_last_ts[symbol] = _time.time()
+
+    return {
+        "instrument": symbol,
+        "raw_regime": classification.raw_regime,
+        "confidence": classification.confidence,
+        "smoothed_regime": smoothed.effective_regime,
+        "days_in_regime": smoothed.days_in_regime,
+        "cost_usd": cost_usd,
+        "rationale": classification.rationale,
+        "features_dated": features_trading_date,
+    }, 200, None
+
+
+@app.route('/api/regime/budget', methods=['GET'])
+@require_auth
+def regime_budget_route():
+    from bot.regime.cost_tracker import CostTracker, DEFAULT_MAX_DAILY_COST_USD
+    trading_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    spent = CostTracker(REGIME_DB).get_daily_spend(trading_date)
+    return jsonify({
+        "spent_today_usd": round(spent, 6),
+        "max_daily_cost_usd": DEFAULT_MAX_DAILY_COST_USD,
+        "remaining_usd": round(max(DEFAULT_MAX_DAILY_COST_USD - spent, 0.0), 6),
+    })
+
+
+@app.route('/api/regime/instruments', methods=['GET'])
+@require_auth
+def regime_instruments_route():
+    """Active instrument symbols + per-instrument display metadata for the
+    Classify dropdown. Excludes disabled/no-edge entries."""
+    return jsonify({
+        "instruments": _active_instruments_from_config(),
+        "estimated_cost_per_classification_usd": ESTIMATED_COST_PER_CLASSIFICATION,
+    })
+
+
+@app.route('/api/regime/classify', methods=['POST'])
+@require_auth
+def regime_classify_route():
+    body = request.get_json(silent=True) or {}
+    do_all = bool(body.get('all'))
+    symbol = body.get('instrument')
+
+    if not do_all and not symbol:
+        return jsonify({'error': "Body must include 'instrument' or 'all: true'"}), 400
+
+    active = set(_active_instruments_from_config())
+
+    if do_all:
+        targets = sorted(active)
+        if not targets:
+            return jsonify({'error': 'No active instruments configured'}), 400
+    else:
+        if symbol not in active:
+            return jsonify({'error': f"Unknown or inactive instrument: {symbol}"}), 400
+        targets = [symbol]
+
+    # Serialise all classifier calls — Anthropic billing is shared and we
+    # want a stable per-day budget check between iterations.
+    with _classify_lock:
+        # Pre-flight rate limit: any target inside the cooldown window aborts.
+        for s in targets:
+            remaining = _rate_limit_remaining(s)
+            if remaining > 0:
+                return jsonify({
+                    'error': f"Rate limited for {s}: retry in "
+                             f"{int(remaining)}s",
+                    'retry_after_seconds': int(remaining),
+                }), 429
+
+        results = []
+        for s in targets:
+            payload, status, err = _classify_one_locked(s)
+            if status == 200:
+                results.append(payload)
+            else:
+                # Budget / no-features / API-unavailable failures stop the
+                # 'all' loop so the operator sees a clean partial result
+                # instead of churning through more failed calls.
+                if do_all:
+                    return jsonify({
+                        'partial_results': results,
+                        'stopped_on': s,
+                        'error': err,
+                    }), status
+                return jsonify({'error': err}), status
+
+    if do_all:
+        return jsonify({'results': results})
+    return jsonify(results[0])
+
+
+# ── Calendar UI routes (§15.4) ─────────────────────────
+def _maybe_register_calendar():
+    """Register calendar blueprint if enable_calendar_ui is true."""
+    try:
+        cfg_path = Path(CONFIG_FILE)
+        if cfg_path.exists():
+            with open(cfg_path) as f:
+                data = json.load(f)
+            flag = data.get('settings', {}).get('feature_flags', {}).get(
+                'enable_calendar_ui', False)
+        else:
+            flag = False
+
+        if flag:
+            from bot.calendar_ui.routes import calendar_bp, init_calendar_routes
+            regime_db = str(BASE_DIR / 'regime.db')
+            init_calendar_routes(regime_db, JWT_SECRET)
+            app.register_blueprint(calendar_bp)
+    except Exception as e:
+        print(f"[Calendar UI] Failed to register: {e}")
+
+_maybe_register_calendar()
+
+
+# ── Labelling worksheet endpoints (classifier evaluation) ──
+import fcntl as _fcntl  # noqa: E402
+
+LABELS_FILE = str(BASE_DIR / 'specs' / 'regime_labels.json')
+LABELS_BARS_FILE = str(BASE_DIR / 'specs' / 'regime_labels_bars.json')
+VALID_LABELS = {"TRENDING", "RANGING", "UNCLEAR"}
+MAX_NOTES_LEN = 500
+
+
+@app.route('/api/labels', methods=['GET'])
+@require_auth
+def labels_get():
+    """Return the full labelling worksheet."""
+    if not os.path.exists(LABELS_FILE):
+        return jsonify({"error": "worksheet not generated yet"}), 404
+    with open(LABELS_FILE, 'r') as f:
+        return jsonify(json.load(f))
+
+
+@app.route('/api/labels/bars', methods=['GET'])
+@require_auth
+def labels_bars_get():
+    """Return the chart-bar dataset for the labelling worksheet."""
+    if not os.path.exists(LABELS_BARS_FILE):
+        return jsonify({"error": "bars not generated yet"}), 404
+    with open(LABELS_BARS_FILE, 'r') as f:
+        return jsonify(json.load(f))
+
+
+@app.route('/api/labels/save', methods=['POST'])
+@require_auth
+def labels_save():
+    """Save one window's label (read-modify-write under fcntl lock)."""
+    payload = request.get_json(silent=True) or {}
+    window_id = payload.get('window_id')
+    my_label = payload.get('my_label')
+    my_confidence = payload.get('my_confidence')
+    my_notes = payload.get('my_notes')
+
+    if not window_id or not isinstance(window_id, str):
+        return jsonify({"error": "window_id required"}), 400
+    if my_label not in VALID_LABELS:
+        return jsonify({
+            "error": f"my_label must be one of {sorted(VALID_LABELS)}"
+        }), 400
+    if not isinstance(my_confidence, int) or not (1 <= my_confidence <= 5):
+        return jsonify({"error": "my_confidence must be int 1..5"}), 400
+    if my_notes is not None:
+        if not isinstance(my_notes, str):
+            return jsonify({"error": "my_notes must be string"}), 400
+        if len(my_notes) > MAX_NOTES_LEN:
+            return jsonify({
+                "error": f"my_notes exceeds {MAX_NOTES_LEN} chars"
+            }), 400
+
+    if not os.path.exists(LABELS_FILE):
+        return jsonify({"error": "worksheet not generated yet"}), 404
+
+    # Read-modify-write under exclusive lock so concurrent POSTs don't
+    # clobber each other.
+    with open(LABELS_FILE, 'r+') as f:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+        try:
+            data = json.load(f)
+            updated = False
+            for inst in data.get('instruments', []):
+                for w in inst.get('windows', []):
+                    if w.get('window_id') == window_id:
+                        w['my_label'] = my_label
+                        w['my_confidence'] = my_confidence
+                        w['my_notes'] = my_notes
+                        updated = True
+                        break
+                if updated:
+                    break
+            if not updated:
+                return jsonify({"error": "window_id not found"}), 404
+            f.seek(0)
+            f.truncate()
+            json.dump(data, f, indent=2)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+
+    return jsonify({"ok": True, "window_id": window_id})
+
+
+# ── Regime filter experiment performance endpoint ──
+@app.route('/api/regime/filter_performance', methods=['GET'])
+@require_auth
+def regime_filter_performance_route():
+    """Aggregate live-trades vs would-have-been-blocked shadow-trades
+    P&L for the regime-filter experiment. Optional ?since=YYYY-MM-DD
+    narrows live trades and blocked-entries to a date window; default
+    is the earliest blocked-entry timestamp (so the comparison covers
+    only the period since the experiment started); falls back to
+    all-time if no blocked entries exist yet.
+    """
+    from bot.regime.filter_performance import aggregate as _agg
+
+    since = request.args.get("since")
+
+    def _connect_ro(path):
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    # Determine the comparison window if the caller didn't override.
+    blocked_rows: list = []
+    try:
+        rdb = _connect_ro(REGIME_DB)
+        if since is None:
+            row = rdb.execute(
+                "SELECT MIN(ts) FROM regime_blocked_entries"
+            ).fetchone()
+            since = row[0]  # may still be None if no rows
+        if since:
+            blocked_rows = [dict(r) for r in rdb.execute(
+                "SELECT * FROM regime_blocked_entries WHERE ts >= ? "
+                "ORDER BY id", (since,)
+            ).fetchall()]
+        else:
+            blocked_rows = [dict(r) for r in rdb.execute(
+                "SELECT * FROM regime_blocked_entries ORDER BY id"
+            ).fetchall()]
+        shadow_ids = [r["shadow_trade_id"] for r in blocked_rows
+                      if r.get("shadow_trade_id")]
+        if shadow_ids:
+            placeholders = ",".join("?" for _ in shadow_ids)
+            shadow_rows = [dict(r) for r in rdb.execute(
+                f"SELECT * FROM shadow_hypothetical_trades "
+                f"WHERE id IN ({placeholders})", shadow_ids
+            ).fetchall()]
+        else:
+            shadow_rows = []
+        rdb.close()
+    except sqlite3.Error as e:
+        return jsonify({"error": f"regime DB read failed: {e}"}), 500
+
+    try:
+        ldb = _connect_ro(LEARNING_DB)
+        if since:
+            live_rows = [dict(r) for r in ldb.execute(
+                "SELECT entry_price, exit_price, pnl_usd FROM trades "
+                "WHERE open = 0 AND timestamp >= ? ORDER BY id",
+                (since,)
+            ).fetchall()]
+        else:
+            live_rows = [dict(r) for r in ldb.execute(
+                "SELECT entry_price, exit_price, pnl_usd FROM trades "
+                "WHERE open = 0 ORDER BY id"
+            ).fetchall()]
+        ldb.close()
+    except sqlite3.Error as e:
+        return jsonify({"error": f"learning_loop DB read failed: {e}"}), 500
+
+    summary = _agg(live_rows, blocked_rows, shadow_rows)
+    summary["since"] = since
+    return jsonify(summary)
 
 
 if __name__ == '__main__':
