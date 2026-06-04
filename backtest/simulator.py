@@ -194,6 +194,211 @@ class SimulationSummary:
     avg_loss_pnl: float
 
 
+class OpenPosition:
+    """A single in-flight trade, driven one bar at a time.
+
+    Holds the one and only copy of the honest per-trade mechanics:
+      Fix 1   next-bar-open entry + entry-bar-inclusive scan
+      Fix 1b  check-then-ratchet trailing stop (no intra-bar lookahead)
+      Fix 2   adverse fills (half-spread + slippage) + gap-through + commission
+      Fix 3   target_notional sizing
+    Both simulate_trades() (per-instrument) and the portfolio event loop drive
+    THIS class, so the exit/fill/cost logic exists once and can't drift.
+
+    Lifecycle (per-instrument loop):
+        pos = OpenPosition.open_from_signal(sig, df, ...)   # None if unfillable
+        for j in range(pos.scan_start, len(df)):
+            if pos.step(j) is not None:                     # exit triggered
+                break
+        trade = pos.finalize()                              # -> TradeResult
+
+    A portfolio scheduler instead calls step(j) only on the bars it chooses (in
+    global timestamp order, while the position is open) and finalize() when
+    step() returns an outcome or the instrument's data ends.
+    """
+
+    def __init__(self, sig, df, stop_pct, tp_pct, qty, currency,
+                 target_notional, trailing_mode, cost_config,
+                 entry_idx, scan_start, raw_entry):
+        self.sig = sig
+        self.df = df
+        self.stop_pct = stop_pct
+        self.tp_pct = tp_pct
+        self.qty = qty
+        self.currency = currency
+        self.target_notional = target_notional
+        self.trailing_mode = trailing_mode
+        self.cost_config = cost_config
+        self.entry_idx = entry_idx
+        self.scan_start = scan_start
+
+        self.is_buy = sig.direction == "BUY"
+        # Adverse entry fill: a buy pays up, a sell sells down (half-spread +
+        # slippage). With cost_config=None this is exactly raw_entry. Stops/TP
+        # are set off the ACTUAL fill, matching the live bot.
+        self.entry_price = _adverse_fill(raw_entry, self.is_buy, cost_config)
+        if self.is_buy:
+            self.stop_price = self.entry_price * (1 - stop_pct / 100)
+            self.tp_price = self.entry_price * (1 + tp_pct / 100)
+        else:  # SELL
+            self.stop_price = self.entry_price * (1 + stop_pct / 100)
+            self.tp_price = self.entry_price * (1 - tp_pct / 100)
+        self.peak_price = self.entry_price
+
+        self.outcome = "open"
+        self.exit_level = self.entry_price     # raw (pre-cost) exit; set on trigger
+        self.exit_bar_open = self.entry_price  # bar open at exit, for gap fills
+        self.exit_date = str(df.iloc[-1]["datetime"])
+        self.holding_bars = len(df) - entry_idx - 1
+
+    @classmethod
+    def open_from_signal(cls, sig, df, stop_pct, tp_pct, qty=1,
+                         long_only=True, currency="USD", target_notional=None,
+                         trailing_mode=True, entry_on="next_open",
+                         cost_config=None):
+        """Resolve the entry fill per entry_on and build an OpenPosition, or
+        return None if the signal can't be taken.
+
+        entry_on="next_open" (honest): signal known at bar i's close; first
+        tradeable price is bar i+1's open. Fill there; the stop/TP go live
+        immediately, so the exit scan is entry-bar-inclusive (scan_start =
+        entry bar). A signal on the last bar has no next bar -> None.
+        entry_on="signal_close" (legacy lookahead): fill at the signal bar's own
+        close; that bar is already complete, so the scan starts the NEXT bar.
+        """
+        if sig.direction == "SELL" and long_only:
+            return None
+        signal_idx = sig.bar_index
+        if entry_on == "next_open":
+            fill_idx = signal_idx + 1
+            if fill_idx >= len(df):
+                return None
+            raw_entry = float(df.iloc[fill_idx]["open"])
+            entry_idx = fill_idx
+            scan_start = entry_idx            # entry-bar-inclusive
+        elif entry_on == "signal_close":
+            raw_entry = sig.price
+            entry_idx = signal_idx
+            scan_start = entry_idx + 1
+        else:
+            raise ValueError(f"unknown entry_on mode: {entry_on!r}")
+        return cls(sig, df, stop_pct, tp_pct, qty, currency, target_notional,
+                   trailing_mode, cost_config, entry_idx, scan_start, raw_entry)
+
+    def step(self, j: int):
+        """Process bar j against the live stop/TP, then ratchet from its close.
+
+        Returns the outcome ("loss"/"win") if this bar triggers an exit, else
+        None. HONEST ORDER (no intra-bar lookahead): the stop entering this bar
+        is whatever the PREVIOUS bar's close set (or the initial stop, incl. the
+        entry bar). Test this bar's low/high against that pre-existing stop
+        FIRST; only after surviving do we ratchet from this bar's close, which
+        can only affect the NEXT bar.
+        """
+        bar = self.df.iloc[j]
+        if self.sig.direction == "BUY":
+            hit_stop = bar["low"] <= self.stop_price
+            hit_tp = bar["high"] >= self.tp_price
+        else:  # SELL
+            hit_stop = bar["high"] >= self.stop_price
+            hit_tp = bar["low"] <= self.tp_price
+
+        # Stop-first: a bar that hits both stop and TP is booked as a LOSS
+        # (conservative). hit_stop alone or hit_stop+hit_tp -> loss.
+        if hit_stop:
+            self.outcome = "loss"
+            self.exit_level = self.stop_price
+            self.exit_bar_open = float(bar["open"])
+            self.exit_date = str(bar["datetime"])
+            self.holding_bars = j - self.entry_idx
+            return self.outcome
+        elif hit_tp:
+            self.outcome = "win"
+            self.exit_level = self.tp_price
+            self.exit_bar_open = float(bar["open"])
+            self.exit_date = str(bar["datetime"])
+            self.holding_bars = j - self.entry_idx
+            return self.outcome
+
+        # Survived — ratchet the stop from this bar's close (live bar-close
+        # trailing logic); applies from the next bar onward.
+        if self.trailing_mode:
+            close = bar["close"]
+            if self.sig.direction == "BUY":
+                if close > self.peak_price:
+                    self.peak_price = close
+                    new_stop = self.peak_price * (1 - self.stop_pct / 100)
+                    self.stop_price = max(self.stop_price, new_stop)
+            else:  # SELL (short)
+                if close < self.peak_price:
+                    self.peak_price = close
+                    new_stop = self.peak_price * (1 + self.stop_pct / 100)
+                    self.stop_price = min(self.stop_price, new_stop)
+        return None
+
+    def finalize(self) -> "TradeResult":
+        """Close the position and produce the TradeResult. Call after step()
+        returns an outcome, or at end of data (outcome stays 'open' -> mark out
+        at the last close, an adverse liquidation with no stop/TP gap logic)."""
+        # GBP pence→pounds divisor (LSE quotes in pence, P&L needs pounds)
+        pence_divisor = 100.0 if is_pence_instrument(self.currency) else 1.0
+
+        if self.outcome == "open":
+            self.exit_level = float(self.df.iloc[-1]["close"])
+            self.exit_bar_open = float(self.df.iloc[-1]["open"])
+            self.exit_date = str(self.df.iloc[-1]["datetime"])
+            self.holding_bars = len(self.df) - self.entry_idx - 1
+            raw_exit = self.exit_level
+        else:
+            # Gap-through: a bar that opened past the level fills at the open.
+            raw_exit = _exit_level(self.outcome, self.sig.direction,
+                                   self.stop_price, self.tp_price,
+                                   self.exit_bar_open, self.cost_config)
+
+        # Adverse exit fill: closing a long is a SELL (fills lower); closing a
+        # short is a BUY (fills higher). None cost_config -> exactly raw_exit.
+        exit_price = _adverse_fill(raw_exit, is_buy=not self.is_buy,
+                                   cfg=self.cost_config)
+
+        # If target_notional is set, compute qty from the actual entry fill.
+        trade_qty = self.qty
+        if self.target_notional is not None:
+            inst_stub = {'qty': self.qty, 'currency': self.currency}
+            trade_qty = calculate_qty(inst_stub, self.entry_price,
+                                      self.target_notional)
+        # Commission charged per side, in base currency, then netted off P&L.
+        commission = (_commission(self.entry_price, trade_qty, self.cost_config, pence_divisor)
+                      + _commission(exit_price, trade_qty, self.cost_config, pence_divisor))
+        # Raw P&L in price units (pence for GBP, dollars for USD)
+        if self.is_buy:
+            raw_pnl = (exit_price - self.entry_price) * trade_qty
+        else:
+            raw_pnl = (self.entry_price - exit_price) * trade_qty
+        # Convert pence → pounds for GBP instruments, then net out commission.
+        pnl = raw_pnl / pence_divisor - commission
+        pnl_pct = ((exit_price - self.entry_price) / self.entry_price * 100
+                   if self.is_buy
+                   else (self.entry_price - exit_price) / self.entry_price * 100)
+
+        return TradeResult(
+            symbol=self.sig.symbol,
+            direction=self.sig.direction,
+            entry_date=str(self.df.iloc[self.entry_idx]["datetime"]),
+            entry_price=round(self.entry_price, 4),
+            exit_date=self.exit_date,
+            exit_price=round(exit_price, 4),
+            pnl=round(pnl, 2),
+            pnl_pct=round(pnl_pct, 2),
+            holding_bars=self.holding_bars,
+            outcome=self.outcome,
+            stop_pct=self.stop_pct,
+            tp_pct=self.tp_pct,
+            commission=round(commission, 4),
+            signal_date=self.sig.datetime,
+            signal_price=self.sig.price,
+        )
+
+
 def simulate_trades(
     signals: list[Signal],
     df: pd.DataFrame,
@@ -241,174 +446,24 @@ def simulate_trades(
     pence then divided by 100 to convert to pounds, matching the live bot's
     logic in bot/portfolio.py and bot/layer3_silver.py.
     """
-    # GBP pence→pounds divisor (LSE quotes in pence, P&L needs pounds)
-    pence_divisor = 100.0 if is_pence_instrument(currency) else 1.0
-
     trades = []
-
     for sig in signals:
-        if sig.direction == "SELL" and long_only:
+        # Resolve the entry fill (Fix 1 next-open, or legacy signal_close) and
+        # build the position. None => signal can't be taken (long_only SELL, or
+        # a next_open signal on the last bar with no next bar to fill at).
+        pos = OpenPosition.open_from_signal(
+            sig, df, stop_pct, tp_pct, qty=qty, long_only=long_only,
+            currency=currency, target_notional=target_notional,
+            trailing_mode=trailing_mode, entry_on=entry_on,
+            cost_config=cost_config,
+        )
+        if pos is None:
             continue
-
-        signal_idx = sig.bar_index
-
-        if entry_on == "next_open":
-            # Signal is known at bar i's close; first tradeable price is the
-            # NEXT bar's open. Fill there. Once filled at the open, the stop
-            # and TP are immediately live, so the exit scan starts on that SAME
-            # bar (entry-bar-inclusive) — that bar's later high/low can trigger.
-            fill_idx = signal_idx + 1
-            if fill_idx >= len(df):
-                # Signal on the last bar — no next bar to fill at; skip it.
-                continue
-            raw_entry = float(df.iloc[fill_idx]["open"])
-            entry_idx = fill_idx
-            scan_start = entry_idx  # entry-bar-inclusive
-        elif entry_on == "signal_close":
-            # Legacy lookahead: fill at the signal bar's own close. The bar is
-            # already complete at fill time, so its high/low are in the past —
-            # scanning it would be lookahead. Exit scan starts the NEXT bar.
-            raw_entry = sig.price
-            entry_idx = signal_idx
-            scan_start = entry_idx + 1
-        else:
-            raise ValueError(f"unknown entry_on mode: {entry_on!r}")
-
-        is_buy = sig.direction == "BUY"
-        # Adverse entry fill: a buy pays up, a sell sells down (half-spread +
-        # slippage). With cost_config=None this is exactly raw_entry. Stops/TP
-        # are set off the ACTUAL fill, matching the live bot.
-        entry_price = _adverse_fill(raw_entry, is_buy, cost_config)
-
-        if is_buy:
-            stop_price = entry_price * (1 - stop_pct / 100)
-            tp_price = entry_price * (1 + tp_pct / 100)
-            peak_price = entry_price
-        else:  # SELL
-            stop_price = entry_price * (1 + stop_pct / 100)
-            tp_price = entry_price * (1 - tp_pct / 100)
-            peak_price = entry_price
-
-        outcome = "open"
-        exit_level = entry_price       # raw (pre-cost) exit price; set on trigger
-        exit_bar_open = entry_price    # bar open at the exit, for gap-through fills
-        exit_date = str(df.iloc[-1]["datetime"])
-        holding_bars = len(df) - entry_idx - 1
-
-        # Scan forward for the exit. next_open starts on the entry bar itself
-        # (stops/TP are live the moment we fill at the open); signal_close
-        # starts the bar after the fill (the fill bar is already complete).
-        for j in range(scan_start, len(df)):
-            bar = df.iloc[j]
-
-            # HONEST ORDER (no intra-bar lookahead): the stop entering this bar
-            # is whatever the PREVIOUS bar's close set it to (or the initial
-            # stop, including for the entry bar). Test THIS bar's low/high
-            # against that pre-existing stop FIRST. Only after the bar closes do
-            # we ratchet the stop from this bar's close — and that ratcheted
-            # level can only affect the NEXT bar. Ratcheting from this bar's
-            # close and then checking this bar's own low against it would use
-            # end-of-bar info to set an intra-bar exit, which is lookahead.
-            if sig.direction == "BUY":
-                hit_stop = bar["low"] <= stop_price
-                hit_tp = bar["high"] >= tp_price
-            else:  # SELL
-                hit_stop = bar["high"] >= stop_price
-                hit_tp = bar["low"] <= tp_price
-
-            if hit_stop and hit_tp:
-                # Both hit in same bar — assume LOSS (conservative, stop-first)
-                outcome = "loss"
-                exit_level = stop_price
-                exit_bar_open = float(bar["open"])
-                exit_date = str(bar["datetime"])
-                holding_bars = j - entry_idx
+        # Drive the position one bar at a time until it exits or data ends.
+        for j in range(pos.scan_start, len(df)):
+            if pos.step(j) is not None:
                 break
-            elif hit_stop:
-                outcome = "loss"
-                exit_level = stop_price
-                exit_bar_open = float(bar["open"])
-                exit_date = str(bar["datetime"])
-                holding_bars = j - entry_idx
-                break
-            elif hit_tp:
-                outcome = "win"
-                exit_level = tp_price
-                exit_bar_open = float(bar["open"])
-                exit_date = str(bar["datetime"])
-                holding_bars = j - entry_idx
-                break
-
-            # Survived this bar — NOW ratchet the stop from this bar's close so
-            # it applies from the next bar onward (matches the live bot's
-            # bar-close trailing logic).
-            if trailing_mode:
-                close = bar["close"]
-                if sig.direction == "BUY":
-                    if close > peak_price:
-                        peak_price = close
-                        new_stop = peak_price * (1 - stop_pct / 100)
-                        stop_price = max(stop_price, new_stop)
-                else:  # SELL (short)
-                    if close < peak_price:
-                        peak_price = close
-                        new_stop = peak_price * (1 + stop_pct / 100)
-                        stop_price = min(stop_price, new_stop)
-
-        if outcome == "open":
-            # Still open at end of data — mark out at the last close (no
-            # stop/TP level, so no gap logic; just an adverse liquidation).
-            exit_level = float(df.iloc[-1]["close"])
-            exit_bar_open = float(df.iloc[-1]["open"])
-            exit_date = str(df.iloc[-1]["datetime"])
-            holding_bars = len(df) - entry_idx - 1
-            raw_exit = exit_level
-        else:
-            # Gap-through: a bar that opened past the level fills at the open.
-            raw_exit = _exit_level(outcome, sig.direction, stop_price,
-                                   tp_price, exit_bar_open, cost_config)
-
-        # Adverse exit fill: closing a long is a SELL (fills lower); closing a
-        # short is a BUY (fills higher). None cost_config -> exactly raw_exit.
-        exit_price = _adverse_fill(raw_exit, is_buy=not is_buy, cfg=cost_config)
-
-        # Calculate P&L
-        # If target_notional is set, compute qty from the actual entry fill
-        trade_qty = qty
-        if target_notional is not None:
-            inst_stub = {'qty': qty, 'currency': currency}
-            trade_qty = calculate_qty(inst_stub, entry_price, target_notional)
-        # Commission charged per side, in base currency, then netted off P&L.
-        commission = (_commission(entry_price, trade_qty, cost_config, pence_divisor)
-                      + _commission(exit_price, trade_qty, cost_config, pence_divisor))
-        # Raw P&L in price units (pence for GBP, dollars for USD)
-        if is_buy:
-            raw_pnl = (exit_price - entry_price) * trade_qty
-        else:
-            raw_pnl = (entry_price - exit_price) * trade_qty
-        # Convert pence → pounds for GBP instruments, then net out commission.
-        pnl = raw_pnl / pence_divisor - commission
-        pnl_pct = ((exit_price - entry_price) / entry_price * 100
-                    if is_buy
-                    else (entry_price - exit_price) / entry_price * 100)
-
-        trades.append(TradeResult(
-            symbol=sig.symbol,
-            direction=sig.direction,
-            entry_date=str(df.iloc[entry_idx]["datetime"]),
-            entry_price=round(entry_price, 4),
-            exit_date=exit_date,
-            exit_price=round(exit_price, 4),
-            pnl=round(pnl, 2),
-            pnl_pct=round(pnl_pct, 2),
-            holding_bars=holding_bars,
-            outcome=outcome,
-            stop_pct=stop_pct,
-            tp_pct=tp_pct,
-            commission=round(commission, 4),
-            signal_date=sig.datetime,
-            signal_price=sig.price,
-        ))
+        trades.append(pos.finalize())
 
     return trades
 
