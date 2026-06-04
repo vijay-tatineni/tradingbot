@@ -20,8 +20,8 @@ class TradeResult:
     """Outcome of a single simulated trade."""
     symbol: str
     direction: str        # "BUY" or "SELL"
-    entry_date: str
-    entry_price: float
+    entry_date: str       # bar we actually FILLED on (next_open: bar i+1)
+    entry_price: float    # fill price (next_open: bar i+1's open)
     exit_date: str
     exit_price: float
     pnl: float
@@ -30,6 +30,11 @@ class TradeResult:
     outcome: str          # "win" (hit TP), "loss" (hit SL), "open" (end of data)
     stop_pct: float
     tp_pct: float
+    # Reference-only: the bar/price the signal was COMPUTED at (bar i's close).
+    # Kept for traceability; NOT used as the fill. Defaults so older call
+    # sites and result readers stay valid.
+    signal_date: str = None
+    signal_price: float = None
 
 
 @dataclass
@@ -57,6 +62,7 @@ def simulate_trades(
     currency: str = "USD",
     target_notional: float = None,
     trailing_mode: bool = True,
+    entry_on: str = "next_open",
 ) -> list[TradeResult]:
     """
     Simulate each signal as a trade with stop% and TP%.
@@ -69,6 +75,15 @@ def simulate_trades(
     If trailing_mode=False:
       - Fixed stop = entry × (1 ± stop_pct/100)
       - Never changes after entry (original behavior)
+
+    entry_on controls the fill price:
+      - "next_open" (default, honest): the signal is computed from bar i's
+        close (when the bar completes and the signal is first known), but the
+        fill happens at bar i+1's OPEN — the first price actually tradeable
+        after the signal. A signal on the last bar has no next bar and is
+        skipped (the trade can't be taken). This removes the same-bar lookahead.
+      - "signal_close" (legacy, LOOKAHEAD): fills at the signal bar's own close
+        (sig.price). Retained only for A/B comparison; not realistic.
 
     GBP instruments: LSE stocks are quoted in pence. P&L is calculated in
     pence then divided by 100 to convert to pounds, matching the live bot's
@@ -83,8 +98,29 @@ def simulate_trades(
         if sig.direction == "SELL" and long_only:
             continue
 
-        entry_price = sig.price
-        entry_idx = sig.bar_index
+        signal_idx = sig.bar_index
+
+        if entry_on == "next_open":
+            # Signal is known at bar i's close; first tradeable price is the
+            # NEXT bar's open. Fill there. Once filled at the open, the stop
+            # and TP are immediately live, so the exit scan starts on that SAME
+            # bar (entry-bar-inclusive) — that bar's later high/low can trigger.
+            fill_idx = signal_idx + 1
+            if fill_idx >= len(df):
+                # Signal on the last bar — no next bar to fill at; skip it.
+                continue
+            entry_price = float(df.iloc[fill_idx]["open"])
+            entry_idx = fill_idx
+            scan_start = entry_idx  # entry-bar-inclusive
+        elif entry_on == "signal_close":
+            # Legacy lookahead: fill at the signal bar's own close. The bar is
+            # already complete at fill time, so its high/low are in the past —
+            # scanning it would be lookahead. Exit scan starts the NEXT bar.
+            entry_price = sig.price
+            entry_idx = signal_idx
+            scan_start = entry_idx + 1
+        else:
+            raise ValueError(f"unknown entry_on mode: {entry_on!r}")
 
         if sig.direction == "BUY":
             stop_price = entry_price * (1 - stop_pct / 100)
@@ -100,8 +136,10 @@ def simulate_trades(
         exit_date = str(df.iloc[-1]["datetime"])
         holding_bars = len(df) - entry_idx - 1
 
-        # Scan forward from the bar AFTER the signal
-        for j in range(entry_idx + 1, len(df)):
+        # Scan forward for the exit. next_open starts on the entry bar itself
+        # (stops/TP are live the moment we fill at the open); signal_close
+        # starts the bar after the fill (the fill bar is already complete).
+        for j in range(scan_start, len(df)):
             bar = df.iloc[j]
 
             # Trailing stop: update peak and ratchet stop on bar close
@@ -170,8 +208,8 @@ def simulate_trades(
         trades.append(TradeResult(
             symbol=sig.symbol,
             direction=sig.direction,
-            entry_date=sig.datetime,
-            entry_price=entry_price,
+            entry_date=str(df.iloc[entry_idx]["datetime"]),
+            entry_price=round(entry_price, 4),
             exit_date=exit_date,
             exit_price=round(exit_price, 4),
             pnl=round(pnl, 2),
@@ -180,6 +218,8 @@ def simulate_trades(
             outcome=outcome,
             stop_pct=stop_pct,
             tp_pct=tp_pct,
+            signal_date=sig.datetime,
+            signal_price=sig.price,
         ))
 
     return trades

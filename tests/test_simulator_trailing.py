@@ -44,36 +44,56 @@ def test_trailing_stop_ratchets_up():
 
 
 def test_trailing_stop_never_ratchets_down():
-    """If price rises to 110 then falls to 105, stop stays at
-    110 × (1 - 5%) = 104.5, not 105 × (1 - 5%) = 99.75."""
+    """If price rises to 110 then falls back, the stop stays at the high-water
+    110 × (1 - 5%) = 104.5, not 105 × (1 - 5%) = 99.75.
+
+    Fill is bar 1's open. The entry bar is flat (close == open) so it does not
+    ratchet — keeping the triggering stop level set by a prior bar's close, so
+    the hand-computed exit (104.5) carries no intra-bar lookahead.
+      bar 1 (entry): open 100, close 100 -> peak 100, stop 95
+      bar 2: close 110 -> peak 110, stop 104.5; low 105 > 104.5, no trigger
+      bar 3: close 105 (< peak) no ratchet; low 104 <= 104.5 -> stop @ 104.5
+    """
     df = _make_df([
-        ("2024-01-01", 100, 101, 99, 100),   # entry
-        ("2024-01-02", 100, 111, 100, 110),   # peak 110, stop=104.5
-        ("2024-01-03", 110, 110, 104, 105),   # close drops, stop stays 104.5
-        ("2024-01-04", 105, 106, 104.4, 105), # low 104.4 < 104.5 → stop
+        ("2024-01-01", 100, 101, 99, 100),    # bar 0: signal
+        ("2024-01-02", 100, 101, 99, 100),    # bar 1: entry @ open 100, flat
+        ("2024-01-03", 105, 111, 105, 110),   # bar 2: peak 110, stop 104.5
+        ("2024-01-04", 110, 110, 104, 105),   # bar 3: low 104 <= 104.5 -> stop
     ])
     sigs = [_signal(price=100.0, bar_index=0)]
     trades = simulate_trades(sigs, df, stop_pct=5.0, tp_pct=30.0,
                              trailing_mode=True)
 
     assert len(trades) == 1
-    assert trades[0].outcome == "loss"
-    assert abs(trades[0].exit_price - 104.5) < 0.01
+    t = trades[0]
+    assert t.entry_price == 100.0
+    assert t.outcome == "loss"
+    assert abs(t.exit_price - 104.5) < 0.01, "stop held at 104.5, did not ratchet down"
+    assert t.holding_bars == 2, "filled bar 1, exited bar 3 -> 2 bars"
 
 
 def test_trailing_stop_triggers_on_bar_low():
-    """Stop triggers when bar low goes below stop level,
-    even if close is above stop."""
+    """Stop triggers when the bar's low pierces the stop level, even though
+    the bar closes back ABOVE the stop.
+
+    Fill is bar 1's open (100). The entry bar closes at 98 (<= open) so it
+    does not ratchet; the stop stays at the clean 100 * 0.95 = 95. The bar's
+    low 94 pierces it while its close 98 is still above 95.
+    """
     df = _make_df([
-        ("2024-01-01", 100, 101, 99, 100),   # entry
-        ("2024-01-02", 100, 102, 94, 101),    # low 94 < stop 95 → triggered
+        ("2024-01-01", 100, 101, 99, 100),    # bar 0: signal
+        ("2024-01-02", 100, 102, 94, 98),     # bar 1: entry @ 100; low 94 <= stop 95
     ])
     sigs = [_signal(price=100.0, bar_index=0)]
     trades = simulate_trades(sigs, df, stop_pct=5.0, tp_pct=20.0,
                              trailing_mode=True)
 
     assert len(trades) == 1
-    assert trades[0].outcome == "loss"
+    t = trades[0]
+    assert t.entry_price == 100.0
+    assert t.outcome == "loss"
+    assert t.exit_price == 95.0, "exit at the un-ratcheted stop 95, not the bar low"
+    assert t.holding_bars == 0, "stop hit on the entry bar itself"
 
 
 def test_trailing_stop_exit_price_is_stop_level():
@@ -111,18 +131,26 @@ def test_fixed_stop_does_not_trail():
 
 
 def test_trailing_tp_uses_bar_high():
-    """TP triggers when bar high reaches tp_price."""
+    """TP triggers when the bar's high reaches tp_price, on the entry bar.
+
+    Fill is bar 1's open (100); tp_pct=10 -> tp = 110. The entry bar closes
+    flat at 100 (no ratchet, stop stays 95), so its low 100 cannot trip the
+    stop and only the TP is in play.
+    """
     df = _make_df([
-        ("2024-01-01", 100, 101, 99, 100),
-        ("2024-01-02", 100, 111, 105, 108),   # high 111 >= tp 110, low above stop
+        ("2024-01-01", 100, 101, 99, 100),    # bar 0: signal
+        ("2024-01-02", 100, 111, 100, 100),   # bar 1: entry @ 100; high 111 >= tp 110
     ])
     sigs = [_signal(price=100.0, bar_index=0)]
     trades = simulate_trades(sigs, df, stop_pct=5.0, tp_pct=10.0,
                              trailing_mode=True)
 
     assert len(trades) == 1
-    assert trades[0].outcome == "win"
-    assert trades[0].exit_price == 110.0
+    t = trades[0]
+    assert t.entry_price == 100.0
+    assert t.outcome == "win"
+    assert t.exit_price == 110.0
+    assert t.holding_bars == 0
 
 
 def test_trailing_mode_default_true():
@@ -155,10 +183,16 @@ def test_trailing_produces_different_results():
 
 
 def test_trailing_stop_gbp_pnl():
-    """Trailing stop P&L for GBP instruments uses pence_to_pounds."""
+    """Trailing-stop P&L for GBP instruments converts pence -> pounds.
+
+    Fill is bar 1's open (250p). The entry bar closes at 248 (<= open) so it
+    does not ratchet; stop stays at 250 * 0.95 = 237.5p. The bar low 236
+    pierces it.
+      P&L = (237.5 - 250) * 100 = -1250p = -£12.50
+    """
     df = _make_df([
-        ("2024-01-01", 250, 251, 249, 250),   # entry at 250p
-        ("2024-01-02", 250, 260, 236, 240),   # low 236 < stop 237.5 → stop
+        ("2024-01-01", 250, 251, 249, 250),   # bar 0: signal
+        ("2024-01-02", 250, 252, 236, 248),   # bar 1: entry @ 250; low 236 <= stop 237.5
     ])
     sigs = [_signal(price=250.0, bar_index=0)]
     trades = simulate_trades(sigs, df, stop_pct=5.0, tp_pct=20.0,
@@ -166,6 +200,8 @@ def test_trailing_stop_gbp_pnl():
 
     assert len(trades) == 1
     t = trades[0]
+    assert t.entry_price == 250.0
     assert t.outcome == "loss"
-    # P&L: (237.5 - 250) * 100 = -1250p = -£12.50
+    assert abs(t.exit_price - 237.5) < 0.01
+    assert t.holding_bars == 0
     assert abs(t.pnl - (-12.50)) < 0.01
