@@ -93,6 +93,8 @@ class PortfolioResult:
     max_drawdown_usd: float
     total_pnl_usd: float
     peak_concurrent: int       # max positions ever held at once
+    concurrency_hist: dict     # n_open -> count of timestamps ending with n held
+    n_timestamps: int          # distinct timestamps walked
 
 
 def _signal_fill_map(spec: InstrumentSpec) -> dict:
@@ -133,6 +135,8 @@ def run_portfolio(specs: list, cfg: PortfolioConfig) -> PortfolioResult:
     blocked_by_cap = {s.symbol: 0 for s in specs}
     blocked_by_open = {s.symbol: 0 for s in specs}
     peak_concurrent = 0
+    concurrency_hist = {}     # n_open after each timestamp -> count
+    n_timestamps = 0
 
     def _finalize(symbol):
         pos = open_positions.pop(symbol)
@@ -201,6 +205,12 @@ def run_portfolio(specs: list, cfg: PortfolioConfig) -> PortfolioResult:
             if pos.step(j) is not None:
                 _finalize(sym)
 
+        # Record how many positions are held after this timestamp resolved —
+        # lets us report how often the portfolio sat at the cap.
+        n_timestamps += 1
+        held = len(open_positions)
+        concurrency_hist[held] = concurrency_hist.get(held, 0) + 1
+
     # End of data: mark out any still-open positions at their last bar.
     for sym in list(open_positions.keys()):
         _finalize(sym)
@@ -240,6 +250,8 @@ def run_portfolio(specs: list, cfg: PortfolioConfig) -> PortfolioResult:
         max_drawdown_usd=round(max_dd, 2),
         total_pnl_usd=round(cum, 2),
         peak_concurrent=peak_concurrent,
+        concurrency_hist=concurrency_hist,
+        n_timestamps=n_timestamps,
     )
 
 
