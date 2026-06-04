@@ -840,3 +840,50 @@ reason text shown.
 
 **Severity:** moderate — caused real operational churn and required manual
 cleanup, but no real money at risk (paper account).
+
+---
+
+## Backtest short-side cost/fill paths lack dedicated tests (Fix 2 follow-up)
+
+**Status:** Implemented, not yet covered by tests. Recorded during Fix 2
+(commission + spread/slippage + gap-through). Must be closed BEFORE the
+full-universe Phase 2 run, since some instruments are shortable CFDs.
+
+`backtest/simulator.py`'s cost layer handles shorts symmetrically:
+adverse entry/exit fills use `is_buy = not is_buy` (closing a short is a
+BUY, fills higher), and gap-through `_exit_level()` flips the `min`/`max`
+for SELL direction. The LONG path is tested in `tests/test_simulator_costs.py`
+AND reproduced bit-for-bit by the zero-cost test. The SHORT path has only
+one test — `test_entry_fill_adverse_for_short` (entry side). Untested:
+  - short EXIT adverse fill (buy-to-cover should fill ABOVE the level)
+  - short stop gap-through (gap UP through a short's stop -> fill at open)
+  - short TP gap-through (gap DOWN through a short's TP -> fill at open)
+
+AAPL (long-only) is unaffected, so this did not block Fixes 1–3. Add the
+three cases above before enabling shorts in Phase 2.
+
+---
+
+## Dashboard backtest path is still costless (Fix 2 / Fix 3 deferral)
+
+**Status:** Intentional deferral. The CLI backtest path (`backtest/run.py`
+-> `run_simple_backtest`) is now the AUTHORITATIVE costed + realistically
+sized path: it applies base transaction costs (commission, spread,
+slippage, gap-through) and threads `default_target_notional` into sizing.
+
+The DASHBOARD path (`api_server.py` -> `run_walk_forward` at line ~903 and
+`full_optimise` at line ~1091) still calls `simulate_trades` WITHOUT a
+`cost_config` and WITHOUT `default_target_notional`, so it remains
+frictionless and fixed-qty. This was left unwired deliberately to avoid a
+`cogniflowai-api.service` restart and to keep the live regime experiment's
+dashboard numbers stable during the experiment window.
+
+**Consequence:** dashboard backtest/optimise numbers are OPTIMISTIC
+(costless) and use fixed `qty`, not realistic notional sizing. They will
+NOT match the CLI's costed numbers. Treat the CLI output as ground truth
+until this is wired.
+
+**To close:** pass `cost_config=CostConfig.from_settings(...)` and
+`default_target_notional=settings.get("default_target_notional")` into the
+`api_server.py` backtest calls, then restart `cogniflowai-api.service` and
+re-verify the routes per CLAUDE.md.

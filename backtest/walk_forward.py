@@ -70,6 +70,7 @@ def run_walk_forward(
     instrument_config: dict,
     train_months: int = 6,
     test_months: int = 3,
+    default_target_notional: float = None,
 ) -> WalkForwardResult | None:
     """
     Run walk-forward optimisation on a single instrument.
@@ -89,6 +90,9 @@ def run_walk_forward(
     long_only = instrument_config.get("long_only", True)
     timeframe = instrument_config.get("timeframe", "daily")
     currency = instrument_config.get("currency", "USD")
+    # Realistic position sizing: per-instrument target_notional override, else
+    # the global default. None -> simulator falls back to fixed qty (unchanged).
+    target_notional = instrument_config.get("target_notional") or default_target_notional
 
     result = WalkForwardResult(symbol=symbol, timeframe=timeframe)
 
@@ -159,7 +163,7 @@ def run_walk_forward(
         # scans forward from each signal's bar_index within train_slice
         grid = run_grid_search(
             train_signals, train_slice, qty=qty, long_only=long_only,
-            symbol=symbol, currency=currency,
+            symbol=symbol, currency=currency, target_notional=target_notional,
         )
 
         if grid is None:
@@ -181,6 +185,7 @@ def run_walk_forward(
             qty=qty,
             long_only=long_only,
             currency=currency,
+            target_notional=target_notional,
         )
         oos_summary = summarise(oos_trades)
 
