@@ -15,7 +15,10 @@ from pathlib import Path
 import pandas as pd
 
 from backtest.offline_signals import generate_signals
-from backtest.simulator import simulate_trades, summarise, TradeResult, SimulationSummary
+from backtest.simulator import (
+    simulate_trades, summarise, TradeResult, SimulationSummary,
+    CostConfig, classify_instrument,
+)
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -62,7 +65,14 @@ def run_simple_backtest(
     signals = generate_signals(df, indicator_settings, symbol)
     print(f"{len(signals)} signals")
 
-    print(f"  Simulating trades (stop={stop_pct}%, TP={tp_pct}%)...", end=" ", flush=True)
+    # Default to BASE (realistic) transaction costs, resolved for this
+    # instrument's class. Override via a "cost_model" block in settings, or
+    # pass CostConfig.zero() to recover the frictionless number.
+    inst_class = classify_instrument(currency, instrument_config.get("sec_type", "STK"))
+    cost_config = CostConfig.from_settings(indicator_settings, inst_class, preset="base")
+
+    print(f"  Simulating trades (stop={stop_pct}%, TP={tp_pct}%, costs=base/{inst_class})...",
+          end=" ", flush=True)
     trades = simulate_trades(
         signals, df,
         stop_pct=stop_pct,
@@ -70,6 +80,7 @@ def run_simple_backtest(
         qty=qty,
         long_only=long_only,
         currency=currency,
+        cost_config=cost_config,
     )
     summary = summarise(trades)
     print(f"{summary.trade_count} trades")
