@@ -142,20 +142,14 @@ def simulate_trades(
         for j in range(scan_start, len(df)):
             bar = df.iloc[j]
 
-            # Trailing stop: update peak and ratchet stop on bar close
-            if trailing_mode:
-                close = bar["close"]
-                if sig.direction == "BUY":
-                    if close > peak_price:
-                        peak_price = close
-                        new_stop = peak_price * (1 - stop_pct / 100)
-                        stop_price = max(stop_price, new_stop)
-                else:  # SELL (short)
-                    if close < peak_price:
-                        peak_price = close
-                        new_stop = peak_price * (1 + stop_pct / 100)
-                        stop_price = min(stop_price, new_stop)
-
+            # HONEST ORDER (no intra-bar lookahead): the stop entering this bar
+            # is whatever the PREVIOUS bar's close set it to (or the initial
+            # stop, including for the entry bar). Test THIS bar's low/high
+            # against that pre-existing stop FIRST. Only after the bar closes do
+            # we ratchet the stop from this bar's close — and that ratcheted
+            # level can only affect the NEXT bar. Ratcheting from this bar's
+            # close and then checking this bar's own low against it would use
+            # end-of-bar info to set an intra-bar exit, which is lookahead.
             if sig.direction == "BUY":
                 hit_stop = bar["low"] <= stop_price
                 hit_tp = bar["high"] >= tp_price
@@ -182,6 +176,22 @@ def simulate_trades(
                 exit_date = str(bar["datetime"])
                 holding_bars = j - entry_idx
                 break
+
+            # Survived this bar — NOW ratchet the stop from this bar's close so
+            # it applies from the next bar onward (matches the live bot's
+            # bar-close trailing logic).
+            if trailing_mode:
+                close = bar["close"]
+                if sig.direction == "BUY":
+                    if close > peak_price:
+                        peak_price = close
+                        new_stop = peak_price * (1 - stop_pct / 100)
+                        stop_price = max(stop_price, new_stop)
+                else:  # SELL (short)
+                    if close < peak_price:
+                        peak_price = close
+                        new_stop = peak_price * (1 + stop_pct / 100)
+                        stop_price = min(stop_price, new_stop)
 
         if outcome == "open":
             exit_price = float(df.iloc[-1]["close"])

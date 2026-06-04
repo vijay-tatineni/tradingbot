@@ -182,6 +182,46 @@ def test_trailing_produces_different_results():
     assert trailing[0].exit_price != fixed[0].exit_price
 
 
+def test_trailing_ratchet_checks_prior_stop_before_ratcheting():
+    """Fix 1b: within a bar, the stop is checked against the level set by the
+    PREVIOUS bar's close BEFORE ratcheting from this bar's close. Ratcheting
+    first and then testing the same bar's low would be intra-bar lookahead.
+
+    Fixtures chosen so honest vs lookahead diverge on BOTH exit bar and price.
+      entry = bar 1 open = 100; initial stop = 95; tp = 140 (never hit)
+      bar 2: close 110 -> would-be ratcheted stop 104.5; low 104 sits BETWEEN
+             the initial stop (95) and that would-be stop (104.5)
+      bar 3: rises, close 120 -> ratchets stop to 114; low 110 doesn't trip
+      bar 4: low 113 <= 114 -> stop @ 114
+
+    HONEST (check-then-ratchet): bar 2 low 104 vs prior stop 95 -> survives;
+      stop ratchets to 104.5 for bar 3, then 114 for bar 4; exit @ 114 on bar 4.
+    LOOKAHEAD (ratchet-then-check, the OLD bug): bar 2 ratchets to 104.5 then
+      its own low 104 <= 104.5 -> exits @ 104.5 on bar 2.
+    Asserting 114 on bar 4 proves the honest order.
+    """
+    df = _make_df([
+        ("2024-01-01", 100, 101, 99, 100),    # bar 0: signal
+        ("2024-01-02", 100, 101, 99, 100),    # bar 1: entry @ 100, flat (stop 95)
+        ("2024-01-03", 100, 111, 104, 110),   # bar 2: low 104 in (95, 104.5)
+        ("2024-01-04", 110, 121, 110, 120),   # bar 3: ratchets stop to 114
+        ("2024-01-05", 115, 116, 113, 114),   # bar 4: low 113 <= 114 -> stop
+    ])
+    sigs = [_signal(price=100.0, bar_index=0)]
+    trades = simulate_trades(sigs, df, stop_pct=5.0, tp_pct=40.0,
+                             trailing_mode=True)
+
+    assert len(trades) == 1
+    t = trades[0]
+    assert t.entry_price == 100.0
+    assert t.outcome == "loss"
+    assert abs(t.exit_price - 114.0) < 0.01, (
+        "honest order exits @ 114 on bar 4; the lookahead bug would exit "
+        "@ 104.5 on bar 2")
+    assert t.exit_date == "2024-01-05", "exit on bar 4, not bar 2"
+    assert t.holding_bars == 3, "filled bar 1, exited bar 4 -> 3 bars (not 1)"
+
+
 def test_trailing_stop_gbp_pnl():
     """Trailing-stop P&L for GBP instruments converts pence -> pounds.
 
