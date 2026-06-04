@@ -12,10 +12,36 @@ cooldown are not modelled — each would only reduce entries further).
 
 Reproduce: `PYTHONPATH=/root/trading python3 backtest/results/portfolio_loop_run.py`
 
-## Correctness: signal conservation
+## Accounting check: signal conservation
 
 For every instrument, `taken + blocked_by_open + blocked_by_cap = preliminary
-trade count` exactly (all 14 verified). No signal is lost or invented.
+trade count` exactly (all 14 verified). Every signal is bucketed exactly once —
+nothing lost or invented. (This is an *accounting* check. Logic correctness comes
+from the byte-identical refactor verification and the skeleton's sane-sequence /
+synthetic cap tests, not from conservation.)
+
+## ⚠ Cap contamination — read before trusting any portfolio PF
+
+The cap binds 29% of the time (below), so an instrument's portfolio PF is **not
+intrinsic**: it omits the signals dropped while the portfolio was full, and *which*
+signals get dropped is order-dependent. Contamination = `blk_cap / baseline` (% of
+an instrument's signals never tested):
+
+| high contamination | | low contamination | |
+|----|----|----|----|
+| NBIS | 57% | SSLN | 15% |
+| NVTS | 48% | SU | 14% |
+| ANTO | 33% | BARC | 12% |
+| **SCCO** | **30%** | PLTR | 7% |
+| AVGO | 24% | SGLN | 1% |
+| **MSFT** | **21%** | | |
+| ANET | 19% | | |
+
+**The tier reshuffle at the 1.20 line is the shakiest conclusion in this run.**
+SCCO (fell out, 1.33→1.02) and MSFT (climbed in, 1.06→1.21) are the two most
+cap-contaminated names in the top group — a third of SCCO's and a fifth of MSFT's
+signals were never tested. PLTR (7%) and SGLN (1%) PFs are trustworthy; the
+boundary cases are not.
 
 ## Results (sorted by portfolio PF ↓; * = preliminary "winner")
 
@@ -38,9 +64,16 @@ trade count` exactly (all 14 verified). No signal is lost or invented.
 
 ## Four-tier summary (after collapse)
 
-- **Survives PF ≥ 1.20 (real winners): 5** — SGLN 2.05, ANET 1.87, SSLN 1.84,
-  PLTR 1.58, **MSFT 1.21**. Membership *changed* vs the preliminary 5: a middle
-  name (MSFT) climbed in; a preliminary winner (SCCO) dropped out.
+- **PF ≥ 1.20 after collapse: 5** — but trust-tier them by sample size + cap
+  contamination rather than reading "5 survive" as 5 equal results:
+  - **PLTR 1.58 (39 trd, 7% capped)** — most trustworthy survivor.
+  - **SSLN 1.84 (32, 15%)** — solid.
+  - **SGLN 2.05 (16, 1%)** — clean PF but thin sample.
+  - **ANET 1.87 (11, 19%)** — thin *and* contaminated.
+  - **MSFT 1.21 (24, 21%, barely over)** — shakiest; a *positive signal*, not a
+    confirmed survivor (thin, contaminated, just over the line).
+  Membership shifted vs the preliminary 5 (MSFT in, SCCO out) — but per the cap
+  caveat above, that boundary swap is the least reliable part of the table.
 - **Marginal 1.00–1.20: 1** — SCCO 1.02.
 - **Sub-breakeven < 1.00: 8** — AAPL 0.94, BARC 0.94, AVGO 0.86, ANTO 0.79,
   SU 0.67, TSM 0.63, NBIS 0.58, NVTS 0.28.
@@ -50,9 +83,10 @@ trade count` exactly (all 14 verified). No signal is lost or invented.
 
 ## Middle-tier resolution (the question Phase 1b existed to answer)
 
-- **MSFT 1.06 → 1.21**: crosses and clears 1.20. Robustly live-positive (this is
-  a conservative upper bound on turnover, so live ≥ this) — but on a thin 24-trade
-  sample.
+- **MSFT 1.06 → 1.21**: crosses 1.20 — a *positive signal*, not proof. The
+  upper-bound argument cleanly bounds turnover/commission (live trades less, pays
+  less) but does **not** cleanly bound PF, and MSFT is thin (24 trades) and 21%
+  cap-contaminated. Treat as a candidate, not a confirmed survivor.
 - **AAPL 0.78 → 0.94**, **BARC 0.98 → 0.94**: improved (BARC's commission collapsed
   £1,527 → £117) but still sub-1.0. Genuinely unresolved; reentry cooldown is the
   named next lever.
@@ -74,7 +108,9 @@ trade count` exactly (all 14 verified). No signal is lost or invented.
 - Total trades across universe: **582** (vs ~3,473 baseline independent trades).
 - Combined P&L (USD, static FX GBP 1.27/EUR 1.08): **+$259.50** over ~2 yr.
 - Deployable capital (5 slots × $1,000): $5,000 → **return on deployable capital ≈ 5.2%** over ~2yr (~2.6%/yr).
-- Max drawdown on the real (exit-timestamp-ordered) equity curve: **$756 (15.1% of deployable)**.
+- **Realized-trade** drawdown (P&L booked at exits only, exit-timestamp-ordered):
+  **$756 (15.1% of deployable)**. NOT mark-to-market — with holds up to 200 bars,
+  true intra-trade MTM drawdown is materially larger.
 - Peak concurrent: 5/5.
 
 ### Does the cap bind, or does one-per-instrument do all the work?
@@ -93,9 +129,19 @@ trade count` exactly (all 14 verified). No signal is lost or invented.
   | 4 | 15.5% |
   | **5 (at cap)** | **29.3%** |
 
-- **Implication:** with all 14 enabled, the 8 sub-breakeven instruments compete
-  for slots and displace winner entries 29% of the time. The +$259 combined P&L is
-  the *unselected* portfolio; the within-instrument PFs say which to keep, and a
-  selected portfolio (winners only) would not face the same cap contention. The
-  cap binding this often also means there's little room to add instruments without
-  a bigger cap or tighter selection.
+- **Implication:** binding is *bursty*, not saturating — the portfolio holds 0–1
+  positions 29% of the time too (avg ≈2.8/5), so the cap saturates only during
+  broad-trend hot spells when many names signal at once. With all 14 enabled, the
+  8 sub-breakeven names compete for slots and displace winner entries during those
+  spells. The +$259 combined P&L is the *unselected* portfolio; there IS room to
+  add instruments (they'd just face contention in hot periods), and a survivors-only
+  portfolio would largely de-contaminate the per-instrument PFs (cap rarely binds
+  with 5–6 names). Tighter selection, not a bigger cap, is the lever.
+
+## Decision-relevant next step (not yet run)
+
+The all-14 P&L is the *unselected* portfolio with 8 known-dead names hogging slots.
+The run that answers the go/no-go is **survivors-only through the loop** — which
+also removes the cap-contamination confound (5–6 instruments → cap rarely binds →
+clean per-instrument PFs + the real deployable-capital P&L). Deferred pending
+interpretation of this table.
