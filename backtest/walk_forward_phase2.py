@@ -161,14 +161,26 @@ def select_in_window(full_specs: list, w: Window) -> list:
     return rows
 
 
-def run_test_window(full_specs: list, selected: list, w: Window):
+def _scale_cost(cc, mult: float):
+    """Scale ONLY slippage + half-spread by mult; commission (a real IBKR
+    schedule, not a stress knob) is left untouched (§5 cost-stress)."""
+    return replace(cc, half_spread_bps=cc.half_spread_bps * mult,
+                   slippage_bps=cc.slippage_bps * mult)
+
+
+def run_test_window(full_specs: list, selected: list, w: Window,
+                    cost_mult: float = 1.0):
     """Run the portfolio loop on ONLY the frozen selection over the TEST window.
-    Returns (PortfolioResult or None, list_of_windowed_specs)."""
+    cost_mult scales slippage+spread for the cost-stress sensitivity (selection
+    is unchanged — it was frozen at base cost). Returns (PortfolioResult or
+    None, list_of_windowed_specs)."""
     by_sym = {s.symbol: s for s in full_specs}
     test_specs = []
     for sym in selected:
         sub = slice_spec(by_sym[sym], w.test_start, w.test_end)
         if sub is not None and len(sub.df):
+            if cost_mult != 1.0:
+                sub = replace(sub, cost_config=_scale_cost(sub.cost_config, cost_mult))
             test_specs.append(sub)
     if not test_specs:
         return None, []
