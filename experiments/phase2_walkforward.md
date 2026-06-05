@@ -1,20 +1,19 @@
 # Phase 2 — Nested Portfolio-Level Walk-Forward (PRE-REGISTRATION)
 
-**Status: FROZEN DESIGN, pending one confirmation. Pre-registration only — no
-walk-forward code exists yet and no OOS result has been seen.** This document is
-committed *before* the test is built so selection bias cannot enter through how the
-test is constructed. Once the first OOS result is produced, any change to anything
-below is logged as a dated **deviation** with rationale in the "Deviation log"
-section — the original text is never edited away.
+**Status: FROZEN DESIGN — fully locked. Pre-registration only — no walk-forward
+code exists yet and no OOS result has been seen.** This document is committed
+*before* the test is built so selection bias cannot enter through how the test is
+constructed. Once the first OOS result is produced, any change to anything below is
+logged as a dated **deviation** with rationale in the "Deviation log" section — the
+original text is never edited away.
 
-> **⚠ ONE OPEN DECISION — confirm before any code runs (see §2 Stage 1).**
-> Everything in this file is frozen *except* how parameters are handled during
-> selection. The registered default is **freeze the live per-instrument params and
-> walk-forward the instrument *selection* only** (zero parameter degrees of
-> freedom). The alternatives are a minimal per-instrument grid or a single global
-> set. This is the one genuinely user-facing selection-logic fork; it is flagged
-> for sign-off rather than silently locked. Finalizing it now is still valid
-> pre-registration — it happens before any code, any window, any result.
+> **✓ The one open decision (parameter handling) is now LOCKED — Option A,
+> confirmed 2026-06-05, before any code.** Parameters are **not** searched: each
+> instrument's live `instruments.json` (stop, TP, timeframe) is frozen and the
+> walk-forward tests the instrument *selection* decision only — zero parameter
+> degrees of freedom, directly comparable to the Phase 1b in-sample selection
+> finding, fewest ways to overfit thin windows. Options B (minimal per-instrument
+> grid) and C (single global set) are recorded as rejected in §2.
 
 Branch: backtest-honesty · bot/ and main.py untouched · this is analysis-harness
 design, not a live-trading change.
@@ -91,7 +90,7 @@ so even a positive result is provisional by our own §6 criteria.**
 Everything in this section uses **only** the train sub-window's bars. Test-window
 bars are never touched during selection. Two stages.
 
-### Stage 1 — parameters (⚠ OPEN DECISION — registered default = freeze live params)
+### Stage 1 — parameters (LOCKED — Option A: freeze live params, no search)
 
 **Timeframe is a data property, not a tunable** — it stays per-instrument as
 configured in instruments.json, in every option below.
@@ -108,29 +107,29 @@ TP = 3 (MSFT) to 20 (PLTR) and stop 1.0–5.0; one global TP would test a *diffe
 parameterization than Phase 1b did, breaking comparability with the in-sample PFs
 that motivated Phase 2 in the first place.
 
-**Registered default — Option A: no parameter search.** Freeze each instrument's
-**live instruments.json (stop, TP, timeframe)** and walk-forward the *instrument
-selection* only. This is the most conservative reading of "favour stable regions,
-do not select by max PF" (there is nothing to overfit), it keeps the OOS run
-directly comparable to Phase 1b (same params), and it minimizes degrees of freedom
-— the right call on thin data. The walk-forward then tests the one thing Phase 1b
-did in-sample: **does selecting instruments on a training window hold up out of
-sample.**
+**LOCKED — Option A: no parameter search (confirmed 2026-06-05).** Freeze each
+instrument's **live instruments.json (stop, TP, timeframe)** and walk-forward the
+*instrument selection* only. This is the most conservative reading of "favour
+stable regions, do not select by max PF" (there is nothing to overfit), it keeps
+the OOS run directly comparable to Phase 1b (same params), and it minimizes
+degrees of freedom — the right call on thin data. The walk-forward then tests the
+one thing Phase 1b did in-sample: **does selecting instruments on a training window
+hold up out of sample.**
 
-**Alternatives considered (require explicit sign-off to adopt instead):**
+**Alternatives rejected (recorded for the audit trail; not adopted):**
 
 - **Option B — minimal per-instrument grid.** Each name picks its own (stop, TP)
   from a small grid that *covers its live value*, chosen by a stability plateau
-  (maximin over grid neighbours, NOT argmax PF); a name with no stable region that
-  window is dropped. Adds DoF but stays per-instrument so it doesn't homogenize.
-  Adopt only if we explicitly want to test parameter robustness too, accepting the
-  overfitting cost on thin windows.
-- **Option C — single global (stop, TP).** Rejected as the default for the
-  homogenization/comparability/satisfiability reasons above; documented only so the
-  rejection is on record.
+  (maximin over grid neighbours, NOT argmax PF). Rejected: adds DoF on thin
+  windows for a parameter-robustness question Phase 2 was not scoped to answer.
+- **Option C — single global (stop, TP).** Rejected: a single global set
+  homogenizes the strategy (live TP spans 3→20), testing a *different*
+  parameterization than Phase 1b and breaking comparability; it also makes any
+  cross-instrument parameter-quality gate near-unsatisfiable.
 
 The literal Phase 2 brief said "select instruments *and parameters*," so Option A
-is a deliberate, flagged departure — surfaced for confirmation, not assumed.
+is a deliberate departure — surfaced and **confirmed by the user on 2026-06-05**
+before any code, not assumed.
 
 ### Stage 2 — instrument inclusion (threshold, not ranking)
 
@@ -194,15 +193,36 @@ reselection, no parameter change, no peeking at later windows.
 - Report, in addition to the pooled headline: per-window (= per-quarter) PF and
   net, per-instrument contribution, and per-test-window cap-saturation %.
 
+### Selection stability is a first-class result (FROZEN reporting requirement)
+
+Report **explicitly which instruments each training window selected**, and **how
+much the selected set churns window-to-window** (e.g. Jaccard overlap between
+consecutive windows' selected sets, and a count of names that appear in all 4 vs
+in only one). This is not decoration — it is itself a finding:
+
+- **Unstable selection** (a largely different name set every window) means
+  *"select instruments on a training window" is not a reliable procedure* — the
+  pooled PF, however high, is then riding on a selection rule that doesn't
+  generalize, and confidence must be marked down accordingly **regardless of the
+  pooled number.**
+- **Stable selection** (the same core names recur across windows) is *more
+  reassuring than a high PF on churning selections*, because it means the training
+  window is identifying a persistent property, not window-specific noise.
+
+So the final report must read the pooled PF **and** the selection-stability
+picture together; a strong PF on an unstable selection is explicitly a weaker
+result than a moderate PF on a stable one.
+
 ---
 
 ## 5. Decision criteria — portfolio level, PRE-REGISTERED, FROZEN
 
 All thresholds below are fixed now and not tunable after results.
 
-1. **Sample size:** ≥ 100 pooled OOS trades preferred. **< 100 → result is
-   provisional even if positive** (and per §1 power analysis, < 100 is the likely
-   case).
+1. **Sample size:** ≥ 100 pooled OOS trades preferred. **< 100 → the headline is
+   "provisional", full stop** — a positive number under 100 OOS trades is reported
+   as provisional and is not allowed to read as more than the sample supports (and
+   per §1 power analysis, < 100 is the likely case).
 2. **OOS profit factor > 1.15–1.20 after base costs** (pooled, all test windows).
    Below 1.15 is not a pass; 1.15–1.20 is a marginal pass read together with the
    robustness checks; the headline bar is 1.20.
