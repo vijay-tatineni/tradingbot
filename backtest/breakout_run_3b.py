@@ -233,9 +233,9 @@ def format_report(out):
       f"(pass if >= {-0.02*d['initial']:,.0f} = -2% of initial OOS equity)")
 
     p("")
-    p("--- EPISODE-BLOCK BOOTSTRAP (transitive overlap, 90% CI, seed %d, 10k samples) ---" % R.BOOTSTRAP_SEED)
+    p(f"--- EPISODE-BLOCK BOOTSTRAP (transitive overlap, 90% CI, seed {R.BOOTSTRAP_SEED}, 10k samples) ---")
     lo, hi, ne = d["bootstrap"]
-    p(f"  Episodes: {ne}   90%% CI for total net P&L: [{lo:,.2f}, {hi:,.2f}]")
+    p(f"  Episodes: {ne}   90% CI for total net P&L: [{lo:,.2f}, {hi:,.2f}]")
 
     p("")
     p("--- END_OF_TEST_LIQUIDATION exits ---")
