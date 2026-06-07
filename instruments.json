@@ -5,6 +5,7 @@
     {
       "currency": "USD",
       "disabled_reason": "no_cfd_market_data_paper_account",
+      "hard_disabled": true,
       "enabled": false,
       "exchange": "SMART",
       "flag": "\ud83e\udd47",
@@ -24,6 +25,7 @@
     {
       "currency": "USD",
       "disabled_reason": "no_cfd_market_data_paper_account",
+      "hard_disabled": true,
       "enabled": false,
       "exchange": "SMART",
       "flag": "\ud83e\udd48",

@@ -34,7 +34,53 @@ load_dotenv(Path(__file__).parent / '.env')
 
 import argparse as _argparse
 
-from bot.guardrails import validate_no_edge_guardrails
+from bot.guardrails import (
+    validate_no_edge_guardrails,
+    validate_hard_disabled_instruments,
+    HardDisabledViolation,
+)
+
+import logging
+
+# Audit logger — every hard-disabled rejection (and the admin override
+# endpoint, when added) must leave a durable trail. Propagates so pytest's
+# caplog can assert on it; also writes to a dedicated audit file.
+_audit_log = logging.getLogger("cogniflowai.audit")
+if not _audit_log.handlers:
+    try:
+        _audit_dir = Path(__file__).parent / 'logs'
+        _audit_dir.mkdir(exist_ok=True)
+        _ah = logging.FileHandler(str(_audit_dir / 'api_audit.log'))
+        _ah.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        _audit_log.addHandler(_ah)
+    except OSError:
+        # If the log dir is not writable, still emit via root/propagation.
+        pass
+    _audit_log.setLevel(logging.INFO)
+
+
+def _audit_hard_disabled_rejection(route: str, errors: list) -> None:
+    """Emit one audit entry for a rejected hard-disabled-enable attempt."""
+    _audit_log.warning(
+        "HARD_DISABLED_REJECT route=%s errors=%s", route, "; ".join(errors)
+    )
+
+
+def _reject_if_hard_disabled(data: dict, route: str):
+    """Explicit pre-save guard for the named writer routes. Returns a Flask
+    (response, 409) tuple to return-early, or None if the config is clean.
+    Audits the rejection. The save() backstop + errorhandler are the safety
+    net for any route that does not call this; this gives the explicitly
+    enumerated routes a clean 409 before save() is ever reached."""
+    hard_errors = validate_hard_disabled_instruments(data)
+    if hard_errors:
+        _audit_hard_disabled_rejection(route, hard_errors)
+        return jsonify({
+            'ok': False,
+            'message': 'Hard-disabled invariant failed',
+            'errors': hard_errors,
+        }), 409
+    return None
 
 BASE_DIR    = Path(__file__).parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
@@ -196,6 +242,17 @@ def save(data):
     guard_errors = validate_no_edge_guardrails(data)
     if guard_errors:
         raise ValueError("No-edge guardrail failed: " + "; ".join(guard_errors))
+    # Hard-disabled invariant backstop: every write path funnels through
+    # save(). Raising here — before the backup copy and atomic write below —
+    # leaves instruments.json untouched. The errorhandler maps the typed
+    # exception to HTTP 409 and emits the audit entry for routes that did
+    # not pre-check (layer2, settings, update, global-settings).
+    hard_errors = validate_hard_disabled_instruments(data)
+    if hard_errors:
+        exc = HardDisabledViolation(
+            "Hard-disabled invariant failed: " + "; ".join(hard_errors))
+        exc.errors = hard_errors
+        raise exc
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     shutil.copy(CONFIG_FILE, f'{BACKUP_DIR}/instruments_{ts}.json')
@@ -204,6 +261,20 @@ def save(data):
     with open(tmp_path, 'w') as f:
         json.dump(data, f, indent=2)
     os.replace(tmp_path, CONFIG_FILE)
+
+
+@app.errorhandler(HardDisabledViolation)
+def _handle_hard_disabled(exc):
+    """Final safety net: any writer route whose save() backstop raises the
+    hard-disabled violation returns a clean 409 (never an unhandled 500),
+    leaving the previous config untouched, and emits an audit entry."""
+    errs = getattr(exc, 'errors', [str(exc)])
+    _audit_hard_disabled_rejection(request.path, errs)
+    return jsonify({
+        'ok': False,
+        'message': 'Hard-disabled invariant failed',
+        'errors': errs,
+    }), 409
 
 
 # ── Protected routes ──────────────────────────────────
@@ -225,9 +296,17 @@ def save_instruments():
         return jsonify({'ok': False, 'message': 'Validation failed',
                         'errors': errors}), 400
 
+    # ── Hard-disabled invariant (full-editor / bulk save) ────
+    rejection = _reject_if_hard_disabled(data, '/api/instruments')
+    if rejection:
+        return rejection
+
     try:
         save(data)
         return jsonify({'ok': True, 'message': 'Saved successfully'})
+    except HardDisabledViolation:
+        # Defense in depth — never collapse the invariant into a 500.
+        raise
     except Exception as e:
         return jsonify({'ok': False, 'message': str(e)}), 500
 
@@ -292,6 +371,9 @@ def save_layer1():
     if guard_errors:
         return jsonify({'ok': False, 'message': 'No-edge guardrail failed',
                         'errors': guard_errors}), 400
+    rejection = _reject_if_hard_disabled(data, '/api/instruments/layer1')
+    if rejection:
+        return rejection
     save(data)
     return jsonify({'ok': True})
 
@@ -786,6 +868,9 @@ def apply_wf():
         applied.append(sym)
 
     if applied:
+        rejection = _reject_if_hard_disabled(data, '/api/instruments/apply-wf')
+        if rejection:
+            return rejection
         save(data)
 
     return jsonify({'ok': True, 'applied': applied, 'skipped': skipped})
@@ -814,6 +899,10 @@ def toggle_enable():
 
     if not found:
         return jsonify({'error': f"Unknown symbol: '{sym}'"}), 400
+
+    rejection = _reject_if_hard_disabled(data, '/api/instruments/toggle-enable')
+    if rejection:
+        return rejection
 
     save(data)
     return jsonify({'ok': True, 'symbol': sym, 'enabled': bool(enabled)})
