@@ -415,3 +415,151 @@ def test_xau_xag_remain_disabled_after_all_writer_paths(api):
     final = _read(cfg_file)
     assert _sym(final, "XAUUSD")["enabled"] is False
     assert _sym(final, "XAGUSD")["enabled"] is False
+
+
+# ════════════════════════════════════════════════════════════════════
+# All-section coverage (generalized hard-disabled invariant)
+# ════════════════════════════════════════════════════════════════════
+#
+# The hard-disabled invariant is a broker-eligibility / administrative
+# safety field and applies to EVERY instrument-bearing section. The no-edge
+# guardrail is a Layer-1 strategy-edge policy and stays Layer-1-only. These
+# tests pin both scopes.
+
+from bot.guardrails import (                       # noqa: E402
+    iter_all_configured_instruments,
+    INSTRUMENT_SECTIONS,
+    validate_no_edge_guardrails,
+)
+
+
+def test_instrument_sections_cover_known_collections():
+    """The centralized section list must include every current instrument-
+    bearing collection, so a new section cannot silently bypass the guard."""
+    assert "layer1_active" in INSTRUMENT_SECTIONS
+    assert "layer2_accumulation" in INSTRUMENT_SECTIONS
+    assert "layer3_silver" in INSTRUMENT_SECTIONS
+
+
+def test_iter_all_configured_instruments_yields_every_section():
+    cfg = {
+        "layer1_active": [{"symbol": "A"}],
+        "layer2_accumulation": [{"symbol": "B"}],
+        "layer3_silver": [{"symbol": "C"}],
+    }
+    seen = {(s, i["symbol"]) for s, i in iter_all_configured_instruments(cfg)}
+    assert seen == {
+        ("layer1_active", "A"),
+        ("layer2_accumulation", "B"),
+        ("layer3_silver", "C"),
+    }
+
+
+def test_validator_flags_hard_disabled_in_layer2():
+    errs = validate_hard_disabled_instruments(
+        {"layer2_accumulation": [_inst("XAUUSD", enabled=True, hard_disabled=True)]})
+    assert len(errs) == 1
+    assert "XAUUSD" in errs[0] and "layer2_accumulation" in errs[0]
+
+
+def test_validator_flags_legacy_reason_in_layer2():
+    errs = validate_hard_disabled_instruments(
+        {"layer2_accumulation": [
+            _inst("XAGUSD", enabled=True, disabled_reason=HARD_DISABLED_REASON)]})
+    assert len(errs) == 1
+    assert "XAGUSD" in errs[0] and "layer2_accumulation" in errs[0]
+
+
+def test_validator_flags_hard_disabled_in_layer3():
+    errs = validate_hard_disabled_instruments(
+        {"layer3_silver": [_inst("XAGUSD", enabled=True, hard_disabled=True)]})
+    assert len(errs) == 1
+    assert "XAGUSD" in errs[0] and "layer3_silver" in errs[0]
+
+
+def test_validator_passes_disabled_hard_disabled_in_all_sections():
+    """The correct resting state (disabled + hard_disabled) is clean in
+    every section."""
+    cfg = {sec: [_inst("X", enabled=False, hard_disabled=True)]
+           for sec in INSTRUMENT_SECTIONS}
+    assert validate_hard_disabled_instruments(cfg) == []
+
+
+# ── no-edge guardrail stays Layer-1-only ──────────────────────────────
+
+def test_no_edge_guardrail_remains_layer1_only():
+    """The no-edge guardrail is a Layer-1 strategy-edge policy. An enabled
+    layer2/layer3 instrument whose notes say 'no edge'/'marginal' must NOT be
+    flagged — the hard-disabled generalization did not widen this scope."""
+    cfg = {
+        "layer1_active": [],
+        "layer2_accumulation": [_inst("ACC", enabled=True, notes="no edge here")],
+        "layer3_silver": [_inst("SLV", enabled=True, notes="marginal at best")],
+    }
+    assert validate_no_edge_guardrails(cfg) == []
+
+
+def test_layer2_no_edge_notes_do_not_trigger_layer1_invariant():
+    """A 'no edge'/'marginal' note in layer2 must not newly trip the Layer 1
+    no-edge invariant while layer1 itself is clean."""
+    cfg = {
+        "layer1_active": [_inst("MSFT", enabled=True)],
+        "layer2_accumulation": [_inst("XYZ", enabled=True, notes="marginal / no edge")],
+    }
+    assert validate_no_edge_guardrails(cfg) == []
+
+
+def test_layer1_no_edge_still_flagged_regression():
+    """Regression: the Layer 1 no-edge guardrail itself is unchanged — an
+    enabled layer1 'no edge' instrument with no override is still flagged."""
+    errs = validate_no_edge_guardrails(
+        {"layer1_active": [_inst("ANET", enabled=True, notes="no edge")]})
+    assert len(errs) == 1 and "ANET" in errs[0]
+
+
+# ── real writer routes: layer2 (save() backstop → 409) ────────────────
+
+def test_layer2_save_route_rejects_hard_disabled(api, caplog):
+    """POST /api/instruments/layer2 with an enabled hard-disabled instrument
+    in layer2 is rejected (save() backstop → errorhandler → 409), leaves the
+    file byte-for-byte unchanged, and audits."""
+    client, token, cfg_file, _ = api
+    layer2 = _read(cfg_file).get("layer2_accumulation", [])
+    layer2.append(_ibkr_inst("XAUUSD", True, hard_disabled=True,
+                             disabled_reason=HARD_DISABLED_REASON))
+    before = open(cfg_file).read()
+    with caplog.at_level(logging.WARNING, logger="cogniflowai.audit"):
+        r = client.post("/api/instruments/layer2", headers=_hdr(token),
+                        data=json.dumps(layer2))
+    assert r.status_code in (400, 409)
+    assert open(cfg_file).read() == before
+    assert any("HARD_DISABLED_REJECT" in m for m in caplog.messages)
+
+
+def test_layer2_save_route_valid_change_succeeds(api):
+    """A valid layer2 save (normal accumulation instrument) still works."""
+    client, token, cfg_file, _ = api
+    layer2 = _read(cfg_file).get("layer2_accumulation", [])
+    layer2.append(_ibkr_inst("KO", True))
+    r = client.post("/api/instruments/layer2", headers=_hdr(token),
+                    data=json.dumps(layer2))
+    assert r.status_code == 200
+    saved = _read(cfg_file)["layer2_accumulation"]
+    assert any(i["symbol"] == "KO" for i in saved)
+
+
+# ── real writer route: layer3 via full-config save ────────────────────
+
+def test_full_config_save_rejects_hard_disabled_in_layer3(api, caplog):
+    """A full-config save carrying an enabled hard-disabled instrument in the
+    layer3_silver section is rejected (409), file unchanged, audited."""
+    client, token, cfg_file, _ = api
+    data = _read(cfg_file)
+    data["layer3_silver"] = [_ibkr_inst("XAGUSD", True, hard_disabled=True)]
+    before = open(cfg_file).read()
+    with caplog.at_level(logging.WARNING, logger="cogniflowai.audit"):
+        r = client.post("/api/instruments", headers=_hdr(token),
+                        data=json.dumps(data))
+    assert r.status_code in (400, 409)
+    assert open(cfg_file).read() == before
+    assert any("HARD_DISABLED_REJECT" in m for m in caplog.messages)

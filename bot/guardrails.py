@@ -25,7 +25,29 @@ BAD_EDGE_TERMS = ("no edge", "marginal")
 # `hard_disabled: true` is the authoritative structured flag. The legacy
 # free-text reason below is accepted as backward-compatible defense-in-depth
 # ONLY — safety must never depend solely on matching this string.
+#
+# Unlike the no-edge guardrail (Layer 1 only — a strategy-edge policy), the
+# hard-disabled invariant is a broker-eligibility / administrative safety
+# field and MUST apply to every instrument-bearing config section. Add any
+# future instrument collection to INSTRUMENT_SECTIONS rather than writing
+# separate validation logic, so a new section can never silently bypass it.
 HARD_DISABLED_REASON = "no_cfd_market_data_paper_account"
+
+INSTRUMENT_SECTIONS = (
+    "layer1_active",
+    "layer2_accumulation",
+    "layer3_silver",
+)
+
+
+def iter_all_configured_instruments(config: dict):
+    """Yield (section, instrument) for every instrument in every known
+    instrument-bearing section. Centralizes section enumeration so a guard
+    that must cover the whole config (e.g. the hard-disabled invariant) can
+    never miss a section by accident."""
+    for section in INSTRUMENT_SECTIONS:
+        for instrument in config.get(section, []):
+            yield section, instrument
 
 
 class ConfigGuardrailError(RuntimeError):
@@ -70,8 +92,8 @@ def validate_hard_disabled_instruments(config: dict) -> list:
     """Return a list of error strings (empty list = config is clean).
 
     Hard-disabled invariant: no normal write may leave a broker-ineligible /
-    administratively hard-disabled instrument enabled. An instrument is
-    flagged when:
+    administratively hard-disabled instrument enabled, in ANY instrument-
+    bearing section (see INSTRUMENT_SECTIONS). An instrument is flagged when:
 
         enabled == true
         AND (
@@ -92,7 +114,7 @@ def validate_hard_disabled_instruments(config: dict) -> list:
     normal dashboard toggle, full save or walk-forward application.
     """
     errors = []
-    for inst in config.get("layer1_active", []):
+    for section, inst in iter_all_configured_instruments(config):
         if not inst.get("enabled", True):
             continue
         is_hard_disabled = inst.get("hard_disabled") is True
@@ -103,8 +125,8 @@ def validate_hard_disabled_instruments(config: dict) -> list:
             else:
                 why = f"disabled_reason=='{HARD_DISABLED_REASON}'"
             errors.append(
-                f"{inst.get('symbol')} is hard-disabled ({why}) and cannot be "
-                "enabled by a normal write; use the administrative override "
-                "endpoint instead"
+                f"{inst.get('symbol')} [{section}] is hard-disabled ({why}) and "
+                "cannot be enabled by a normal write; use the administrative "
+                "override endpoint instead"
             )
     return errors
