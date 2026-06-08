@@ -563,3 +563,43 @@ def test_full_config_save_rejects_hard_disabled_in_layer3(api, caplog):
     assert r.status_code in (400, 409)
     assert open(cfg_file).read() == before
     assert any("HARD_DISABLED_REJECT" in m for m in caplog.messages)
+
+
+# ── backstop coverage: non-enabling config routes fail closed (409, not 500) ──
+#
+# /api/instruments/update and /api/settings cannot set an instrument's
+# `enabled` field (enabled is not in EDITABLE_TRADING_FIELDS; settings only
+# mutates the settings block), so they are not instrument-enabling writers.
+# They still funnel through save(); if the on-disk config is already corrupt
+# (an enabled hard-disabled instrument), they must surface a clean 409 via the
+# errorhandler — never an unhandled 500 — and audit. These pin that backstop.
+
+def test_update_route_returns_409_not_500_on_corrupt_config(api, caplog):
+    client, token, cfg_file, _ = api
+    data = _read(cfg_file)
+    _sym(data, "XAUUSD")["enabled"] = True          # seed corrupt on-disk state
+    with open(cfg_file, "w") as f:
+        json.dump(data, f)
+    before = open(cfg_file).read()
+    with caplog.at_level(logging.WARNING, logger="cogniflowai.audit"):
+        r = client.post("/api/instruments/update", headers=_hdr(token),
+                        data=json.dumps({"changes": [
+                            {"symbol": "MSFT", "trail_stop_pct": 3.0}]}))
+    assert r.status_code == 409
+    assert open(cfg_file).read() == before
+    assert any("HARD_DISABLED_REJECT" in m for m in caplog.messages)
+
+
+def test_settings_route_returns_409_not_500_on_corrupt_config(api, caplog):
+    client, token, cfg_file, _ = api
+    data = _read(cfg_file)
+    _sym(data, "XAUUSD")["enabled"] = True          # seed corrupt on-disk state
+    with open(cfg_file, "w") as f:
+        json.dump(data, f)
+    before = open(cfg_file).read()
+    with caplog.at_level(logging.WARNING, logger="cogniflowai.audit"):
+        r = client.post("/api/settings", headers=_hdr(token),
+                        data=json.dumps({"check_interval_mins": 2}))
+    assert r.status_code == 409
+    assert open(cfg_file).read() == before
+    assert any("HARD_DISABLED_REJECT" in m for m in caplog.messages)
