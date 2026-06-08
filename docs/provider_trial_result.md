@@ -107,6 +107,29 @@ action completeness, point-in-time identifier stability, bar/gap counts) could b
 account access, which is unauthorized here. A decision of `SUITABLE…` would require asserting those
 unverified facts — which the rules forbid.
 
+## 3a. IBKR reconciliation procedure (documented; NOT executed)
+
+IBKR is the proposed recent-bar reconciliation source. **Not executed this trial**: there is no
+provider data to compare against (no approved EODHD/Polygon access), and a second live IBKR
+session was **not** opened (the bot is live on IBKR now — a second session risks contention and is
+prohibited). Procedure for a future, separately approved run:
+
+```text
+1. Select active instruments present in BOTH IBKR and the provider (e.g. AAPL, MSFT; LSE: BARC/SGLN).
+2. Provider side: pull raw daily OHLCV for a small recent window (e.g. last ~20 sessions).
+3. IBKR side: obtain the same window from EXISTING cached/offline data, OR a read-only
+   reqHistoricalData call under separate approval — NOT a second live trading session.
+4. Align by date; compare close and volume per session.
+5. EXPECTED differences: provider split/dividend-adjusted vs IBKR raw/unadjusted; GBX-vs-GBP for
+   LSE names; timezone/session-boundary. Record these as expected, not discrepancies.
+6. Flag only MATERIAL, UNEXPLAINED diffs beyond a stated tolerance (e.g. >0.5% close with no
+   corporate action) for review.
+7. Do NOT submit orders; do NOT alter broker configuration.
+```
+
+Reconciliation feasibility verdict: **feasible but not executed** — depends on approved provider
+access plus either cached IBKR bars or an approved read-only IBKR pull.
+
 ## 4. Specific questions answered
 
 | Question | Answer (this trial) |

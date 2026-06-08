@@ -60,8 +60,8 @@ sign up before it is recorded.
 
 ```text
 [ ] Do NOT open a second IBKR session for reconciliation: the bot is live on IBKR now and a second
-    session risks contention. Use the documented offline procedure in
-    consolidation_c0_cutover_risk.md / provider_trial_result.md instead, under separate approval.
+    session risks contention. Use the documented offline reconciliation procedure in
+    provider_trial_result.md §3a instead, under separate approval.
 ```
 
 ## Hard stops (unchanged)
