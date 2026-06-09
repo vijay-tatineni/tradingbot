@@ -24,6 +24,12 @@ KNOWN_FLAGS = {
     "enable_calendar_ui",
     "data_quality_strict_mode",
     "enable_regime_filter_live",
+    # Dynamic Universe v1 shadow foundation (additive; default OFF). Registered here
+    # so it is a validated, default-disabled flag and so a future
+    # settings.feature_flags entry can never crash startup with "Unknown flag".
+    # No dependency: the shadow evaluator is decoupled from the regime pipeline and
+    # is not wired into main.py.
+    "enable_dynamic_universe_shadow",
 }
 
 SAFE_DEFAULTS = {
@@ -41,6 +47,7 @@ SAFE_DEFAULTS = {
     "enable_calendar_ui": False,
     "data_quality_strict_mode": False,
     "enable_regime_filter_live": False,
+    "enable_dynamic_universe_shadow": False,
 }
 
 # §6.3: dependency graph (child → list of parents)
