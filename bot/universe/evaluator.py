@@ -96,6 +96,7 @@ class ShadowEvaluator:
                     "selected=%d", trading_date,
                     sum(1 for o in outcomes if "skipped" not in o), expired,
                     len(contention["selected"]))
+        self._log_shadow_outputs(trading_date, contention)  # §9 store/log hypothetical outputs
         return {
             "ran": True, "trading_date": trading_date,
             "evaluated": sum(1 for o in outcomes if "skipped" not in o),
@@ -242,9 +243,25 @@ class ShadowEvaluator:
             heat_used += order.risk_usd
             if sector:
                 sector_counts[sector] = sector_counts.get(sector, 0) + 1
-            selected.append({**c, "hypothetical_order": order.__dict__})
+            selected.append({**c, "slot_rank": len(selected) + 1,
+                             "hypothetical_order": order.__dict__})
 
         return {"selected": selected, "rejected": rejected}
+
+    def _log_shadow_outputs(self, trading_date: str, contention: dict) -> None:
+        """§9: store/log the hypothetical contention outputs (never PF/returns)."""
+        for s in contention["selected"]:
+            o = s["hypothetical_order"]
+            logger.info(
+                "shadow %s SELECT %s rank=%d gateway=%s qty=%d risk_usd=%.2f "
+                "notional_usd=%.2f source=%s", trading_date,
+                s["canonical_instrument_id"], s["slot_rank"], o["primary_gateway"],
+                o["qty"], o["risk_usd"], o["notional_usd"],
+                s.get("primary_gateway"))
+        for r in contention["rejected"]:
+            logger.info("shadow %s REJECT %s reason=%s sector=%s adv20=%s",
+                        trading_date, r["canonical_instrument_id"],
+                        r.get("rejected_reason"), r.get("sector"), r.get("adv20"))
 
     def _hypothetical_order(self, c: dict, atr: float, price: float) -> HypotheticalOrder:
         stop_distance = params.INITIAL_STOP_ATR_MULT * atr

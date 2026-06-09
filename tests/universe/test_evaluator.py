@@ -100,6 +100,25 @@ def test_slot_contention_orders_by_adv(tmp_path):
     assert r["rejected"][0]["canonical_instrument_id"] == canonical_id("S0", "USD", "NASDAQ")
 
 
+def test_shadow_outputs_logged_and_ranked(tmp_path, caplog):
+    import logging
+    syms = [f"R{i}" for i in range(6)]
+    db = _seed(tmp_path, syms)
+    reg = Registry(db)
+    sources = {canonical_id(s, "USD", "NASDAQ"): _uptrend_source(
+        sector=f"sec{i}", volume=1_000_000.0 * (i + 1)) for i, s in enumerate(syms)}
+    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000)
+    ev.maybe_run("2026-06-10")
+    with caplog.at_level(logging.INFO, logger="universe.evaluator"):
+        r = ev.maybe_run("2026-06-11")
+    # selected carry deterministic 1..5 slot ranks
+    assert sorted(s["slot_rank"] for s in r["selected"]) == [1, 2, 3, 4, 5]
+    # §9: hypothetical selections AND rejection reason are logged
+    assert "SELECT" in caplog.text
+    assert "REJECT" in caplog.text and "reason=slot_cap_reached" in caplog.text
+    assert "gateway=IBKR" in caplog.text
+
+
 def test_sector_cap(tmp_path):
     syms = ["A1", "A2", "A3"]
     db = _seed(tmp_path, syms)
