@@ -5,6 +5,12 @@
 > (`https://eodhd.com/financial-apis/terms-conditions`) plus the C0 pricing-page findings. Reading
 > public terms is **not** sign-up, authentication, purchase, or download. No credential exists; no
 > account was created. Unclear/absent terms are labelled **UNKNOWN** with the clarification needed.
+>
+> **Provenance caveat:** the quoted clauses below come from a single **WebFetch extraction**
+> (which summarizes the page through a small model) on 2026-06-09; a sibling LSE page 404'd that
+> session, so the site structure may not match the extractor's assumptions. Treat the quotes as
+> **indicative pending operator confirmation of the exact contractual wording** with EODHD —
+> not as a settled legal reading. This does not change the trial verdict (TRIAL ACCESS REQUIRED).
 
 ## Label legend
 

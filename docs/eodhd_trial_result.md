@@ -89,8 +89,10 @@ Carried forward and re-confirmed from C0 (`provider_trial_result.md` §2a,
 | Rate limit | 100,000 API requests/day per key | **VERIFIED (T&C, NEW)** |
 | API caching / derived-data / bulk-download rights | **clauses absent from the fetched T&C** | **UNKNOWN — requires provider clarification** |
 
-See `eodhd_field_coverage_matrix.md` and `eodhd_licensing_and_storage_review.md` for the full
-field-by-field tables.
+The three **NEW** T&C rows come from a single WebFetch extraction (2026-06-09) and are **indicative
+pending operator confirmation of exact contractual wording** — see the provenance caveat in
+`eodhd_licensing_and_storage_review.md`. See `eodhd_field_coverage_matrix.md` and that review for the
+full field-by-field tables.
 
 ---
 

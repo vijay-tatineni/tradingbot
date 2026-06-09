@@ -169,7 +169,7 @@ config, because its absence silently flips a live flag.
 | `bot/layer1.py` 21 IG-only lines | **Resolved** — predecessor of the modern superset; ALREADY_EQUIVALENT, no live behaviour change on adoption (§3). |
 | `bot/regime/cost_tracker.py` | **Resolved** — modern is a strict bug-fix supersession; no schema issue; STALE_DROP of the IG copy (§4). |
 | `instruments_ig.json` settings delta | **Resolved** — the delta is the `feature_flags` block incl. `enable_regime_filter_live`; PORT_REQUIRED, with a regime-filter runtime blocker (§5). |
-| `docs/` + `specs/` (IG untracked) | Out of audited scope for behaviour; they are documentation. No IG-only *behavioural* logic resides there (all executable subsystems are tracked supersets in the modern tree per C0). Recommend a redacted content sweep during C1 prep; no behavioural blocker. |
+| `docs/` + `specs/` (IG untracked) | **Resolved — reviewed read-only.** `specs/CLAUDE_STRATEGY_SPEC_v3.md` and `specs/prompts/` are **identical** to the modern tree (diff = 0); the spec's "IG-specific adaptations" line sits in a **future-work backlog list** (a deferred idea, not implemented IG-only behaviour). `docs/TECH_DEBT.md` differs but the **modern tree is 119 lines ahead** and the **4 IG-only lines** are a non-behavioural `.gitignore` SQLite-sidecar housekeeping note. **No IG-only intended behavioural divergence is documented.** Disposition: STALE_DROP (modern strictly ahead); no behavioural blocker. |
 
 ---
 
