@@ -45,27 +45,87 @@ consecutive_passes increments on a pass (resets to 0 on a fail); consecutive_fai
 the converse.
 ```
 
-## Cooldown
+## Cooldown (FROZEN — task §2)
 
-A hypothetical exit (trend-break / stop) closes the position **this session** and sets
-the post-exit cooldown to 3 sessions; the exit session counts as the first cooldown
-session. The remaining count decrements each subsequent flat session; the instrument is
-COOLDOWN while remaining > 0 and re-eligible when it reaches 0. (v1 counts in completed
-evaluated sessions — no trading-calendar dependency.)
+A hypothetical exit closes the position on session **E**. The exit session itself does
+**NOT** count as a completed post-exit cooldown session. The instrument is blocked for
+the next **three completed sessions** and the earliest re-eligibility *evaluation* is
+E+4:
+
+```text
+E      position exits            → COOLDOWN, cooldown_remaining = 3 (not decremented)
+E+1    still COOLDOWN            → cooldown_remaining = 2
+E+2    still COOLDOWN            → cooldown_remaining = 1
+E+3    still COOLDOWN (last)     → cooldown_remaining = 0
+E+4    cooldown block released   → may transition out of COOLDOWN if all else passes
+```
+
+On the exit session the count is set to `COOLDOWN_SESSIONS` (3) and is **not**
+decremented. On each subsequent confirmed-flat session it is decremented (check-then-
+decrement). While a hypothetical position is still open — OR while the position status
+is UNKNOWN (cannot confirm flat) — the count is **held**, never advanced. (v1 counts in
+completed evaluated sessions — no trading-calendar dependency.)
+
+Because `in_cooldown` is itself a blocking structural reason, the 2-pass entry
+hysteresis counter resets during cooldown. So at E+4 the instrument leaves COOLDOWN into
+WATCHLIST and must re-accrue two passing sessions (ENTRY_ELIGIBLE at E+5). The cooldown
+*block* is fully released at E+4 — that is the §2 invariant; the re-accrual is the
+ordinary entry hysteresis, applied conservatively.
+
+## Position status seam (task §3)
+
+POSITION_OPEN / EXIT_ONLY / COOLDOWN are driven by an INJECTED, broker-free
+`PositionSnapshotProvider` returning one of `NO_POSITION`, `POSITION_OPEN`,
+`POSITION_EXITED_TODAY`, `UNKNOWN`. The provider never calls a broker. When no provider
+is injected the evaluator falls back to the legacy prior-state + trend-break derivation.
+
+```text
+NO_POSITION            → flat branch (WATCHLIST/ENTRY_ELIGIBLE/COOLDOWN/…)
+POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused)
+POSITION_EXITED_TODAY  → COOLDOWN (exit on E)
+UNKNOWN                → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
+                         never forced liquidation, cooldown held (do not assume flat)
+```
+
+`UNKNOWN` is fail-safe: a provider error or any unrecognised value is coerced to UNKNOWN.
 
 ## Structural eligibility (inputs to the transition)
 
 `bot/universe/eligibility.py` evaluates (task §7): ≥250 valid completed daily bars,
 fresh completed bar, valid OHLC, required indicators available (SMA50/200, ATR14, ADX14,
 20-day high), price ≥ $10, ADV20 ≥ $20M, valid research mapping, valid IBKR mapping, not
-in cooldown, and corporate-action status. **If corporate-action data is unavailable a
-reason code (`corp_action_data_unavailable`) is recorded and eligibility FAILS — never a
-silent pass.** Unknown sector records `sector_unknown` (non-blocking) so the sector cap
-reasons about it explicitly downstream.
+in cooldown, and corporate-action status. Unknown sector records `sector_unknown`
+(non-blocking) so the sector cap reasons about it explicitly downstream.
+
+### Corporate-action policy (FROZEN — task §4)
+
+`structural_eligibility(snapshot, mode)` applies one of two distinct, never-confused
+policies for an **unknown / unavailable** corporate-action status:
+
+```text
+Shadow (ELIGIBILITY_MODE_SHADOW):       WARNING, not blocking.
+                                        Records `corporate_action_status_unknown`;
+                                        the instrument stays structurally eligible so
+                                        scheduling, state changes, contention and
+                                        logging can be exercised operationally.
+
+Paper/live (ELIGIBILITY_MODE_PAPER_LIVE, the DEFAULT / fail-closed):
+                                        HARD BLOCK for new entries.
+                                        Records `corp_action_data_unavailable`.
+```
+
+The default mode is the **fail-closed** paper/live policy: a forgotten or wrong `mode`
+argument blocks rather than silently permits. The shadow evaluator opts in to the
+shadow policy explicitly. The two reason codes are disjoint, so the policies can never
+be conflated (asserted in `tests/universe/test_eligibility.py`). **Neither mode is ever
+a silent pass** — the unknown is always recorded. A detected `anomaly` (a known
+problem, not an unknown) BLOCKS in **both** modes. The paper/live policy is a tested
+code path only; it is **not** wired or enabled in this task.
 
 ## Reason codes
 
 Every transition records reason codes (e.g. `hard_disabled`, `insufficient_history`,
-`in_cooldown`, `sector_unknown`, `slot_cap_reached`, `sector_cap_reached`,
-`portfolio_heat_exceeded`, `eligible`, `passed_entry_hysteresis`) into
-`universe_state.reason_codes` and the append-only `universe_state_history`.
+`in_cooldown`, `sector_unknown`, `corporate_action_status_unknown`,
+`corp_action_data_unavailable`, `position_status_unknown`, `slot_cap_reached`,
+`sector_cap_reached`, `portfolio_heat_exceeded`, `eligible`, `passed_entry_hysteresis`)
+into `universe_state.reason_codes` and the append-only `universe_state_history`.

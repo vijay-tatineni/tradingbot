@@ -10,10 +10,16 @@ NEVER silently assumed correct. Unknown sector is recorded (non-blocking) so the
 sector cap can reason about it downstream rather than passing silently.
 """
 from bot.universe import params
-from bot.universe.models import BLOCKING_REASONS, EligibilityResult, Reason
+from bot.universe.models import (
+    BLOCKING_REASONS, ELIGIBILITY_MODE_PAPER_LIVE, ELIGIBILITY_MODE_SHADOW,
+    EligibilityResult, Reason,
+)
 
 
-def structural_eligibility(snapshot: dict) -> EligibilityResult:
+def structural_eligibility(
+    snapshot: dict,
+    mode: str = ELIGIBILITY_MODE_PAPER_LIVE,
+) -> EligibilityResult:
     """snapshot scalar keys (all optional; missing → conservative fail):
         bar_count (int)              valid completed daily bars
         fresh_bar (bool)             a fresh completed bar exists
@@ -26,7 +32,19 @@ def structural_eligibility(snapshot: dict) -> EligibilityResult:
         cooldown_remaining (int)
         corp_action_status (str)     'ok' | 'unavailable' | 'anomaly'
         sector (str | None)
+
+    mode (task §4) controls ONLY the unknown/unavailable corporate-action policy:
+      * ELIGIBILITY_MODE_PAPER_LIVE (default, fail-closed): unknown corp-action data
+        is a HARD BLOCK on new entries (records ``corp_action_data_unavailable``).
+      * ELIGIBILITY_MODE_SHADOW: unknown corp-action data is a WARNING that does NOT
+        block (records ``corporate_action_status_unknown``) so scheduling, state
+        changes, contention, and logging can be exercised operationally.
+    In BOTH modes a detected ``anomaly`` (a known problem, not an unknown) always
+    blocks. The two policies are deliberately distinct reason codes so they can never
+    be confused, and neither is ever a silent pass.
     """
+    if mode not in (ELIGIBILITY_MODE_PAPER_LIVE, ELIGIBILITY_MODE_SHADOW):
+        raise ValueError(f"unknown eligibility mode: {mode!r}")
     reasons = []
 
     if int(snapshot.get("bar_count", 0)) < params.MIN_HISTORY_BARS:
@@ -59,10 +77,15 @@ def structural_eligibility(snapshot: dict) -> EligibilityResult:
         reasons.append(Reason.IN_COOLDOWN)
 
     corp = snapshot.get("corp_action_status", "unavailable")
-    if corp == "unavailable":
-        reasons.append(Reason.CORP_ACTION_DATA_UNAVAILABLE)
-    elif corp == "anomaly":
+    if corp == "anomaly":
+        # A detected anomaly is a known problem, not an unknown — blocks in BOTH modes.
         reasons.append(Reason.CORP_ACTION_ANOMALY)
+    elif corp != "ok":
+        # 'unavailable' / unknown: shadow warns (non-blocking), paper/live hard-blocks.
+        if mode == ELIGIBILITY_MODE_SHADOW:
+            reasons.append(Reason.CORP_ACTION_STATUS_UNKNOWN)   # warning, non-blocking
+        else:
+            reasons.append(Reason.CORP_ACTION_DATA_UNAVAILABLE)  # paper/live hard block
 
     if not snapshot.get("sector"):
         reasons.append(Reason.SECTOR_UNKNOWN)  # informational, non-blocking

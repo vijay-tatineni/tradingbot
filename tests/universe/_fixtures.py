@@ -67,3 +67,29 @@ class SpyProvider:
         cid = rec["canonical_instrument_id"]
         self.calls.append(cid)
         return self.sources.get(cid)
+
+
+def _date_iso(trading_date):
+    return trading_date.isoformat() if hasattr(trading_date, "isoformat") else str(trading_date)
+
+
+class StubPositionProvider:
+    """Broker-free, read-only PositionSnapshotProvider stub (tests / rehearsal only).
+
+    Maps canonical_instrument_id -> PositionStatus, with an optional per-(cid, date)
+    override. Records every call so tests can prove the seam was used; it never imports
+    or calls a broker. Returning a non-PositionStatus value lets tests exercise the
+    evaluator's fail-safe UNKNOWN coercion."""
+    def __init__(self, statuses=None, by_date=None):
+        from bot.universe.models import PositionStatus
+        self._default = PositionStatus.NO_POSITION
+        self.statuses = dict(statuses or {})
+        self.by_date = dict(by_date or {})
+        self.calls = []
+
+    def get_position_status(self, canonical_instrument_id, trading_date):
+        self.calls.append((canonical_instrument_id, _date_iso(trading_date)))
+        key = (canonical_instrument_id, _date_iso(trading_date))
+        if key in self.by_date:
+            return self.by_date[key]
+        return self.statuses.get(canonical_instrument_id, self._default)

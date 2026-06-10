@@ -65,6 +65,7 @@ def transition(
     admin_paused = bool(ctx.get("admin_paused", False))
     has_open = bool(ctx.get("has_open_position", False))
     exited = bool(ctx.get("exited_this_session", False))
+    position_unknown = bool(ctx.get("position_unknown", False))
 
     reasons = list(structural.reason_codes)
 
@@ -79,13 +80,25 @@ def transition(
         passes = 0
         failures = prior_failures + 1
 
-    # ── cooldown countdown (check-then-decrement) ─────────────────────
-    # An exit sets the post-exit cooldown to COOLDOWN_SESSIONS; the exit session
-    # itself counts as the first cooldown session. While cooling (and flat), the
-    # remaining count is decremented for storage after the state decision.
-    cooldown = params.COOLDOWN_SESSIONS if exited else int(prior_cooldown_remaining or 0)
-    in_cooldown = cooldown > 0
-    cooldown_out = cooldown - 1 if (in_cooldown and not effective_open) else cooldown
+    # ── cooldown countdown (FROZEN semantics — task §2) ───────────────
+    # The exit session E does NOT count as a completed post-exit cooldown session.
+    # On exit, cooldown is set to COOLDOWN_SESSIONS and is NOT decremented that
+    # session, so the instrument is blocked for the next three COMPLETED sessions
+    # (E+1, E+2, E+3) and the earliest re-eligibility evaluation is E+4. On a
+    # subsequent flat cooldown session the remaining count is decremented (post
+    # state-decision) using the check-then-decrement rule; while a (hypothetical)
+    # position is still open the count is held (not advanced).
+    if exited:
+        cooldown = params.COOLDOWN_SESSIONS
+        in_cooldown = True
+        cooldown_out = cooldown                      # exit session is not counted
+    else:
+        cooldown = int(prior_cooldown_remaining or 0)
+        in_cooldown = cooldown > 0
+        # Advance only on a confirmed-flat session: hold while a (hypothetical)
+        # position is open OR while the position status is UNKNOWN (cannot confirm flat).
+        advancing = in_cooldown and not effective_open and not position_unknown
+        cooldown_out = cooldown - 1 if advancing else cooldown
 
     # ── 1. HARD_DISABLED dominates everything ─────────────────────────
     if hard_disabled:
@@ -93,6 +106,20 @@ def transition(
             reasons.append(Reason.HARD_DISABLED)
         # Counters frozen at 0 — a hard-disabled instrument never accrues entry passes.
         return StateOutcome(State.HARD_DISABLED, 0, 0, reasons, cooldown_out)
+
+    # ── 1b. UNKNOWN position status: fail safe (task §3) ──────────────
+    # We could not determine whether a position is open. Do NOT assume flat, do NOT
+    # make the instrument entry-eligible, and do NOT force liquidation: hold the
+    # safer non-entry EXIT_ONLY state (entries suppressed; deterministic exit
+    # management continues on any hypothetical position). The reason is always
+    # recorded so an unknown is a loud non-entry, never a silent pass. The cooldown
+    # advance guard above excludes position_unknown, so an unknown never advances it.
+    if position_unknown:
+        if Reason.POSITION_STATUS_UNKNOWN not in reasons:
+            reasons.append(Reason.POSITION_STATUS_UNKNOWN)
+        if admin_paused and Reason.ADMIN_PAUSED not in reasons:
+            reasons.append(Reason.ADMIN_PAUSED)
+        return StateOutcome(State.EXIT_ONLY, passes, failures, reasons, cooldown_out)
 
     # ── 2/3/4. Open hypothetical position branch ──────────────────────
     if effective_open:

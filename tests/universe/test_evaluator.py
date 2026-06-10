@@ -8,7 +8,9 @@ from bot.universe.evaluator import ShadowEvaluator
 from bot.universe.registry import Registry
 from bot.universe.seed import canonical_id, seed_registry
 from bot.universe.models import State
-from tests.universe._fixtures import OFF, ON, SpyProvider, inst, make_bars, write_configs
+from tests.universe._fixtures import (
+    OFF, ON, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+)
 
 
 def _seed(tmp_path, symbols):
@@ -35,10 +37,12 @@ def test_flag_off_is_zero_effect(tmp_path):
     db = _seed(tmp_path, ["AAPL", "MSFT"])
     reg = Registry(db)
     prov = SpyProvider({canonical_id("AAPL", "USD", "NASDAQ"): _uptrend_source()})
-    ev = ShadowEvaluator(reg, prov, OFF, equity=100_000)
+    pos = StubPositionProvider({})
+    ev = ShadowEvaluator(reg, prov, OFF, equity=100_000, position_provider=pos)
     r = ev.maybe_run("2026-06-10")
     assert r == {"ran": False, "reason": "flag_off", "evaluated": 0}
-    assert prov.calls == []                 # provider never invoked
+    assert prov.calls == []                 # bars provider never invoked
+    assert pos.calls == []                  # position provider never invoked either
     assert _state_rows(db) == (0, 0)        # no DB writes whatsoever
 
 

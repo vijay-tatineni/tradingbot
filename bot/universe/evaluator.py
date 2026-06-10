@@ -23,10 +23,14 @@ import json
 import logging
 from typing import Callable, Optional
 
+from datetime import date
+
 from backtest.breakout_strategy import compute_indicators
 from bot.universe import params
 from bot.universe.eligibility import structural_eligibility
-from bot.universe.models import HypotheticalOrder, Reason, State
+from bot.universe.models import (
+    ELIGIBILITY_MODE_SHADOW, HypotheticalOrder, PositionStatus, Reason, State,
+)
 from bot.universe.registry import Registry
 from bot.universe.state_machine import transition
 
@@ -58,13 +62,19 @@ class ShadowEvaluator:
                  bars_provider: Callable[[dict], Optional[dict]],
                  flags,
                  equity: float = 100_000.0,
-                 evaluator_version: Optional[str] = None):
+                 evaluator_version: Optional[str] = None,
+                 position_provider=None):
         from bot.universe import EVALUATOR_VERSION
         self.registry = registry
         self.bars_provider = bars_provider   # callable(canonical_rec)->dict|None ; NO broker
         self.flags = flags                   # object/dict supporting .get(name)
         self.equity = float(equity)
         self.evaluator_version = evaluator_version or EVALUATOR_VERSION
+        # Optional broker-free, read-only PositionSnapshotProvider (task §3). When
+        # injected it drives POSITION_OPEN/EXIT_ONLY/COOLDOWN organically; when None
+        # the evaluator falls back to the legacy prior-state + trend-break derivation.
+        # It is queried ONLY inside _evaluate_one, which the flag-off no-op never reaches.
+        self.position_provider = position_provider
 
     def is_enabled(self) -> bool:
         try:
@@ -149,16 +159,16 @@ class ShadowEvaluator:
             snap.update({"bar_count": 0, "price": None, "ohlc_valid": False,
                          "indicators_available": False, "adv20_usd": None})
 
-        elig = structural_eligibility(snap)
+        # Shadow eligibility policy: unknown corporate-action data WARNS (it does not
+        # block); the paper/live hard-block policy is a separate, un-wired code path.
+        elig = structural_eligibility(snap, mode=ELIGIBILITY_MODE_SHADOW)
 
-        has_open = prior_state in (State.POSITION_OPEN.value, State.EXIT_ONLY.value)
-        exited = bool(has_open and trend_break)   # hypothetical trend-break exit
+        pos = self._position_ctx(cid, trading_date, prior_state, trend_break)
         ctx = {
             "hard_disabled": bool(rec.get("hard_disabled")),
             "admin_active": bool(rec.get("administratively_active", 1)),
             "admin_paused": bool(src.get("admin_paused", False)),
-            "has_open_position": has_open,
-            "exited_this_session": exited,
+            **pos,
         }
         outcome = transition(prior_state, prior_passes, prior_failures,
                              prior_cooldown, elig, ctx)
@@ -206,6 +216,49 @@ class ShadowEvaluator:
             "spread": src.get("spread"),
             "primary_gateway": rec.get("primary_gateway"),
         }
+
+    # ── broker-free position context (task §3) ────────────────────────
+    def _position_ctx(self, cid: str, trading_date, prior_state, trend_break) -> dict:
+        """Resolve operational position context for the state transition.
+
+        With an injected PositionSnapshotProvider the status is authoritative and the
+        POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle is driven organically. Without
+        a provider the legacy derivation is used (prior open-class state + hypothetical
+        trend-break exit). UNKNOWN is fail-safe: possibly-open (no flat assumption),
+        never entry-eligible, never liquidated.
+        """
+        if self.position_provider is not None:
+            status = self._query_position(cid, trading_date)
+            if status == PositionStatus.UNKNOWN:
+                return {"has_open_position": True, "exited_this_session": False,
+                        "position_unknown": True}
+            has_open = status in (PositionStatus.POSITION_OPEN,
+                                  PositionStatus.POSITION_EXITED_TODAY)
+            exited = status == PositionStatus.POSITION_EXITED_TODAY
+            return {"has_open_position": has_open, "exited_this_session": exited,
+                    "position_unknown": False}
+        has_open = prior_state in (State.POSITION_OPEN.value, State.EXIT_ONLY.value)
+        exited = bool(has_open and trend_break)   # hypothetical trend-break exit
+        return {"has_open_position": has_open, "exited_this_session": exited,
+                "position_unknown": False}
+
+    def _query_position(self, cid: str, trading_date) -> PositionStatus:
+        """Query the injected provider, coercing any failure/garbage to UNKNOWN (fail
+        safe). The provider is broker-free by contract; this call makes no broker access."""
+        try:
+            td = (date.fromisoformat(trading_date)
+                  if isinstance(trading_date, str) else trading_date)
+            status = self.position_provider.get_position_status(cid, td)
+        except Exception:
+            logger.warning("position provider error for %s on %s; treating as UNKNOWN",
+                           cid, trading_date)
+            return PositionStatus.UNKNOWN
+        if isinstance(status, PositionStatus):
+            return status
+        try:
+            return PositionStatus(status)
+        except (ValueError, TypeError):
+            return PositionStatus.UNKNOWN
 
     # ── hypothetical slot / sector / heat contention ──────────────────
     def _apply_contention(self, outcomes: list) -> dict:

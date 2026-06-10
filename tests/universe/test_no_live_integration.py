@@ -75,3 +75,25 @@ def test_universe_package_imports_no_broker():
             if f in text:
                 offenders.append(f"{p.name}:{f}")
     assert offenders == [], f"universe package references broker modules: {offenders}"
+
+
+def test_universe_db_module_only_connects_to_its_own_path():
+    # Isolation proof: the universe store opens ONLY the db_path it is handed — there
+    # is no hard-coded live-DB filename in any executable connect() call. (Safety
+    # docstrings mention positions.db/regime.db/backtest.db to say it never touches
+    # them, so a crude substring scan would false-positive; assert the real invariant:
+    # the sole sqlite connector is db.connect(db_path).)
+    import ast
+
+    db_src = (REPO / "bot" / "universe" / "db.py").read_text()
+    tree = ast.parse(db_src)
+    connect_string_args = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "connect"):
+            for a in node.args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                    connect_string_args.append(a.value)
+    # connect() is only ever called with the variable db_path, never a literal DB file.
+    assert connect_string_args == [], \
+        f"db.connect called with a hard-coded path literal: {connect_string_args}"

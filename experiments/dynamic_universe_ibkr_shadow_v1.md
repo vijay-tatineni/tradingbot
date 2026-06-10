@@ -32,7 +32,8 @@ Minimum price:                    $10 (local-currency equivalent)
 Minimum ADV20:                    $20,000,000 equivalent
 Entry hysteresis:                 2 consecutive passing completed sessions
 Ordinary eligibility removal:     2 consecutive failing completed sessions
-Post-exit cooldown:               3 completed sessions
+Post-exit cooldown:               3 completed sessions (exit session E does NOT count;
+                                  blocked E+1/E+2/E+3, earliest re-eval E+4 — see below)
 Max total open positions:         5
 Max positions per sector:         2
 Risk per trade:                   0.50% equity
@@ -68,3 +69,12 @@ Workstream 3 (shadow):    bot/universe/*; tests/universe/*;
                                 dynamic_universe_shadow_operations}.md
 Provider status:          docs/dynamic_universe_provider_status.md (EODHD still blocked)
 ```
+
+## 5. Review-hardening (additive; not merged/deployed/enabled)
+
+Review-hardening of this foundation (frozen cooldown E+1..E+3 / E+4 semantics, broker-
+free position-status seam, corporate-action shadow-vs-paper/live policies, scheduler
+completed-bar availability + DST/holiday review, and a deterministic offline rehearsal)
+is recorded in `docs/dynamic_universe_shadow_hardening_v1.md`. It is on child branch
+`feature/dynamic-universe-ibkr-shadow-v1-hardening`; the breakout result stays
+PROVISIONAL and is untouched.

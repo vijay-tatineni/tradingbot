@@ -7,8 +7,9 @@ ATR-trail / trend-break calculation keeps running on the synthetic position; no
 broker call is made.
 """
 from dataclasses import dataclass, field
+from datetime import date
 from enum import Enum
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
 
 class State(str, Enum):
@@ -22,6 +23,49 @@ class State(str, Enum):
     ADMIN_PAUSED = "ADMIN_PAUSED"
 
 
+class PositionStatus(str, Enum):
+    """Read-only operational position status fed to the shadow evaluator via an
+    INJECTED provider (see PositionSnapshotProvider). It carries ONLY the operational
+    fact needed to drive universe-state transitions — never prices, P&L, or a ledger,
+    and the provider must never call a broker.
+
+    UNKNOWN is the fail-safe value: it means the position state could not be
+    determined, NOT that the instrument is flat. The evaluator treats it
+    conservatively (no new entry, no forced liquidation).
+    """
+    NO_POSITION = "NO_POSITION"
+    POSITION_OPEN = "POSITION_OPEN"
+    POSITION_EXITED_TODAY = "POSITION_EXITED_TODAY"
+    UNKNOWN = "UNKNOWN"
+
+
+@runtime_checkable
+class PositionSnapshotProvider(Protocol):
+    """Broker-free, read-only seam supplying operational position status.
+
+    Implementations MUST NOT import a broker adapter, call IBKR/IG, submit/amend an
+    order, or read a live broker session. They return only a PositionStatus derived
+    from an already-materialised, non-broker source (e.g. a fixture, a copied
+    non-production snapshot, or a shadow ledger). The evaluator dependency-injects an
+    instance; when none is injected it falls back to the legacy prior-state derivation.
+    """
+    def get_position_status(
+        self,
+        canonical_instrument_id: str,
+        trading_date: date,
+    ) -> "PositionStatus":
+        ...
+
+
+# Corporate-action eligibility policy modes (task §4). The default is the SAFE,
+# fail-closed paper/live policy: an unknown corporate-action status BLOCKS new
+# entries. The shadow evaluator opts in to the permissive shadow policy explicitly
+# (warn-not-block) — a forgotten/wrong argument therefore fails closed, never
+# silently permits entry on unknown corp-action data.
+ELIGIBILITY_MODE_PAPER_LIVE = "paper_live"
+ELIGIBILITY_MODE_SHADOW = "shadow"
+
+
 # Structural-eligibility / transition reason codes (recorded, never silently dropped).
 class Reason:
     HARD_DISABLED = "hard_disabled"
@@ -33,12 +77,14 @@ class Reason:
     ADV20_BELOW_MIN = "adv20_below_min"
     INDICATORS_UNAVAILABLE = "indicators_unavailable"
     INVALID_OHLC = "invalid_ohlc"
-    CORP_ACTION_DATA_UNAVAILABLE = "corp_action_data_unavailable"  # never silent-pass
+    CORP_ACTION_DATA_UNAVAILABLE = "corp_action_data_unavailable"  # paper/live: hard block
+    CORP_ACTION_STATUS_UNKNOWN = "corporate_action_status_unknown"  # shadow: warn, not block
     CORP_ACTION_ANOMALY = "corp_action_anomaly"
     RESEARCH_MAPPING_MISSING = "research_mapping_missing"
     IBKR_MAPPING_MISSING = "ibkr_mapping_missing"
     IN_COOLDOWN = "in_cooldown"
     SECTOR_UNKNOWN = "sector_unknown"                      # informational; not a hard fail
+    POSITION_STATUS_UNKNOWN = "position_status_unknown"    # safe non-entry; never silent
     # contention / routing (hypothetical)
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"

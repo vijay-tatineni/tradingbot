@@ -48,14 +48,61 @@ post-close gating and restart-safe idempotency.
   `rejected` (with `rejected_reason`: slot_cap_reached / sector_cap_reached /
   portfolio_heat_exceeded). **No PF / Sharpe / returns / rankings are computed or logged.**
 
+## Position-status seam (broker-free; task §3)
+
+The evaluator optionally takes an injected `PositionSnapshotProvider`
+(`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus`). It is
+broker-free by contract (a fixture / non-production snapshot — never a broker call) and
+drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle organically. `UNKNOWN` is
+fail-safe (no flat assumption, no entry, no forced liquidation, cooldown held); a
+provider error is coerced to `UNKNOWN`. With no provider injected the legacy
+prior-state + trend-break derivation is used.
+
+```python
+ev = ShadowEvaluator(Registry(db), bars_provider, flags, equity=100_000,
+                     position_provider=my_provider)   # my_provider: NO broker access
+```
+
+## Scheduler completed-bar availability (task §5)
+
+The fixed post-close UTC gates are conservative across both DST regimes, early closes
+and half-days (they can only run LATE, never early). They cannot prove a bar EXISTS on
+a holiday or that a late bar has arrived, so inject a `bar_available_fn(rec,
+trading_date) -> bool`: instruments whose completed bar is not confirmed are SKIPPED and
+logged (no history written) and retried idempotently next cycle. A raising check is
+treated as unavailable (fail-safe skip). `maybe_run` returns `missing_bar_skipped`.
+
+```python
+sched = DailyUniverseScheduler(ev, flags, bar_available_fn=lambda rec, td: bar_exists(rec, td))
+```
+
 ## Failure behaviour
 
 * Missing/short bars → DATA_INELIGIBLE (insufficient_history / indicators_unavailable).
-* Corporate-action data unavailable → `corp_action_data_unavailable` reason, eligibility
-  FAILS (never a silent pass).
+* Corporate-action status unknown/unavailable → **shadow** records
+  `corporate_action_status_unknown` (warning, non-blocking); **paper/live** (default,
+  fail-closed) records `corp_action_data_unavailable` and FAILS eligibility. A detected
+  `anomaly` blocks in both. Never a silent pass. See state-transitions doc §"Corporate-
+  action policy".
+* Position status UNKNOWN → `position_status_unknown`, safe non-entry EXIT_ONLY hold.
+* Completed bar not yet available (holiday/late) → scheduler skip + retry (no history).
 * Unknown sector → `sector_unknown` recorded (non-blocking).
 * Idempotency conflict on history insert → skipped (already recorded); other DB errors
   propagate (not silently swallowed).
+
+## Offline rehearsal (task §6)
+
+`tests/universe/rehearsal.py::run_rehearsal(db_path)` runs a deterministic, fully
+offline end-to-end rehearsal on synthetic fixtures (no broker, no data provider, no live
+DB, no production config writes). It exercises seed, idempotent migration rerun,
+AUTO/TTI/MANUAL candidates + 5-session TTL, entry/removal hysteresis, ADMIN_PAUSED,
+DATA_INELIGIBLE, HARD_DISABLED, the full POSITION_OPEN ⇄ EXIT_ONLY → COOLDOWN lifecycle
+with E+1..E+3 blocking and E+4 release, slot/sector/heat contention, IBKR-primary +
+IG-routing-blocked, multi-timezone scheduling, same-day idempotency, restart recovery,
+missing-bar skip, corporate-action UNKNOWN warning, and position-status UNKNOWN safe
+behaviour. It reports **operational metrics only** — never returns / PF / Sharpe /
+winners / rankings (`format_report`). Determinism and the no-performance-metric guard
+are asserted in `tests/universe/test_rehearsal.py`.
 
 ## Backup / restore
 
