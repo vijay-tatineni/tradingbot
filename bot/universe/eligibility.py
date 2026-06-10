@@ -25,8 +25,11 @@ def structural_eligibility(
         fresh_bar (bool)             a fresh completed bar exists
         ohlc_valid (bool)            last bar OHLC is internally valid
         indicators_available (bool)  SMA50/200, ATR14, ADX14, high20 all defined
-        price (float)                last completed close (local ccy)
-        adv20_usd (float)            20-day average dollar volume (USD-equiv)
+        price (float)                USD-normalized last completed close (P2-2; the
+                                     evaluator converts the local close via bot.universe.fx)
+        adv20_usd (float)            USD-normalized 20-day average dollar volume
+        fx_reason (str | None)       fail-closed currency-normalization reason code, or
+                                     None when normalization succeeded (P2-2)
         research_mapping_ok (bool)
         ibkr_mapping_ok (bool)
         cooldown_remaining (int)

@@ -1,5 +1,6 @@
 """§6/§7 — offline end-to-end shadow rehearsal: deterministic operational output,
 full-lifecycle coverage, and a guard that NO performance metric is ever produced."""
+import tests.universe.rehearsal as rehearsal_mod
 from tests.universe.rehearsal import format_report, run_rehearsal
 
 # Forbidden outcome vocabulary — the rehearsal reports operations, never performance.
@@ -13,6 +14,21 @@ def test_rehearsal_is_deterministic(tmp_path):
     a = run_rehearsal(str(da / "universe.db"))
     b = run_rehearsal(str(db / "universe.db"))
     assert a == b                       # identical operational counts across runs
+
+
+def test_rehearsal_runs_are_isolated_no_shared_fx_state(tmp_path):
+    """P3 cleanup: the FX fixture is created FRESH per run, so repeated run_rehearsal()
+    calls in one process are order-independent with no accumulated provider-call state."""
+    # No module-level mutable FX provider exists to accumulate call history.
+    assert not hasattr(rehearsal_mod, "_FX")
+    # _make_fx() yields a brand-new provider each call (distinct object, empty call log).
+    fx_a, fx_b = rehearsal_mod._make_fx(), rehearsal_mod._make_fx()
+    assert fx_a is not fx_b
+    assert fx_a.calls == [] and fx_b.calls == []
+    # Three back-to-back runs in the SAME process produce identical operational output
+    # (no mutation leaking between runs, order cannot influence the result).
+    outs = [run_rehearsal(str(tmp_path / f"u{i}.db")) for i in range(3)]
+    assert outs[0] == outs[1] == outs[2]
 
 
 def test_rehearsal_exercises_full_lifecycle(tmp_path):

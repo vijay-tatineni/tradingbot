@@ -29,7 +29,11 @@ from datetime import datetime, timezone
 
 # Deterministic, broker-free FX rates so non-USD (GBP) instruments are USD-normalised
 # for eligibility (P2-2). Effective on the requested trading date (zero staleness).
-_FX = StaticFxRateProvider({"GBP": 1.25, "EUR": 1.10})
+def _make_fx():
+    """Return a FRESH deterministic FX provider per rehearsal run, so no mutable
+    call-history accumulates across repeated run_rehearsal() invocations (each run is
+    fully self-contained and order-independent)."""
+    return StaticFxRateProvider({"GBP": 1.25, "EUR": 1.10})
 
 
 def _src(sector="Tech", bars=True, n=300, corp="ok", volume=2_000_000.0, price_unit=None):
@@ -53,6 +57,7 @@ def _heat_cap(value):
 
 
 def run_rehearsal(db_path: str) -> dict:
+    fx = _make_fx()   # fresh per-run FX provider; no shared mutable state across runs
     counts = {
         "sessions_evaluated": 0,
         "instruments_evaluated": 0,
@@ -165,7 +170,7 @@ def run_rehearsal(db_path: str) -> dict:
         canonical_id("XAUUSD", "USD", "SMART"): _src(sector="Metals"),
     }
     prov = SpyProvider(sources)
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, fx_provider=_FX)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, fx_provider=fx)
     # two completed sessions to drive entry hysteresis (WATCHLIST→ENTRY_ELIGIBLE)
     for d in ("2026-06-10", "2026-06-11"):
         r = ev.maybe_run(d)
@@ -263,7 +268,7 @@ def run_rehearsal(db_path: str) -> dict:
     sch_ev = ShadowEvaluator(sch_reg, SpyProvider({
         canonical_id("AAPL", "USD", "NASDAQ"): _src(),
         canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
-    }), ON, equity=100_000, fx_provider=_FX)
+    }), ON, equity=100_000, fx_provider=fx)
     avail = {canonical_id("AAPL", "USD", "NASDAQ"): False,    # US bar late/holiday
              canonical_id("BARC", "GBP", "SMART"): True}
     now = datetime(2026, 6, 10, 23, 0, tzinfo=timezone.utc)
@@ -279,7 +284,7 @@ def run_rehearsal(db_path: str) -> dict:
         ShadowEvaluator(Registry(sch_db), SpyProvider({
             canonical_id("AAPL", "USD", "NASDAQ"): _src(),
             canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
-        }), ON, equity=100_000, fx_provider=_FX),
+        }), ON, equity=100_000, fx_provider=fx),
         ON, now_fn=lambda: now,
         bar_available_fn=lambda rec, td: avail[rec["canonical_instrument_id"]])
     r_sched2 = sched2.maybe_run(sch_reg.all_canonical())
