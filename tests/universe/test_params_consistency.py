@@ -18,7 +18,7 @@ def test_frozen_universe_values():
     # The operator-frozen v1 values (must not be tuned from outcomes).
     assert params.CANDIDATE_TTL_SESSIONS == 5
     assert params.MIN_HISTORY_BARS == 250
-    assert params.MIN_PRICE == 10.0
+    assert params.MIN_PRICE_USD == 10.0
     assert params.MIN_ADV20_USD == 20_000_000.0
     assert params.ENTRY_HYSTERESIS_PASSES == 2
     assert params.REMOVAL_HYSTERESIS_FAILS == 2

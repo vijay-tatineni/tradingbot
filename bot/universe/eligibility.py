@@ -59,13 +59,21 @@ def structural_eligibility(
     if not snapshot.get("indicators_available", False):
         reasons.append(Reason.INDICATORS_UNAVAILABLE)
 
-    price = snapshot.get("price")
-    if price is None or float(price) < params.MIN_PRICE:
-        reasons.append(Reason.PRICE_BELOW_MIN)
+    # Currency normalisation (P2-2). ``price`` and ``adv20_usd`` are USD-NORMALISED
+    # values (converted by the evaluator via bot.universe.fx). If that conversion
+    # failed, ``fx_reason`` carries a fail-closed code (in BLOCKING_REASONS) and we do
+    # NOT compare a local value against a USD threshold — eligibility is blocked.
+    fx_reason = snapshot.get("fx_reason")
+    if fx_reason:
+        reasons.append(fx_reason)
+    else:
+        price = snapshot.get("price")  # USD-normalised last close
+        if price is None or float(price) < params.MIN_PRICE_USD:
+            reasons.append(Reason.PRICE_BELOW_MIN)
 
-    adv20 = snapshot.get("adv20_usd")
-    if adv20 is None or float(adv20) < params.MIN_ADV20_USD:
-        reasons.append(Reason.ADV20_BELOW_MIN)
+        adv20 = snapshot.get("adv20_usd")  # USD-normalised 20-day dollar volume
+        if adv20 is None or float(adv20) < params.MIN_ADV20_USD:
+            reasons.append(Reason.ADV20_BELOW_MIN)
 
     if not snapshot.get("research_mapping_ok", False):
         reasons.append(Reason.RESEARCH_MAPPING_MISSING)

@@ -73,6 +73,32 @@ def _date_iso(trading_date):
     return trading_date.isoformat() if hasattr(trading_date, "isoformat") else str(trading_date)
 
 
+class StaticFxRateProvider:
+    """Broker-free, deterministic FxRateProvider stub (tests / rehearsal only).
+
+    Returns a fixed to-USD rate per currency, effective ON the requested trading date
+    (zero staleness) unless an explicit ``as_of`` offset is configured. It never imports
+    or calls a broker / EODHD / external FX API; the rates are hard-coded fixtures.
+
+    rates:   {currency: rate_to_usd}
+    as_of_by_ccy: {currency: date} → force a specific effective date (to test freshness)
+    """
+    def __init__(self, rates=None, as_of_by_ccy=None):
+        self.rates = {k.upper(): float(v) for k, v in (rates or
+                      {"GBP": 1.25, "EUR": 1.10}).items()}
+        self.as_of_by_ccy = dict(as_of_by_ccy or {})
+        self.calls = []
+
+    def get_to_usd_rate(self, currency, trading_date):
+        from bot.universe.fx import FxQuote
+        cur = (currency or "").upper()
+        self.calls.append((cur, _date_iso(trading_date)))
+        if cur not in self.rates:
+            return None
+        as_of = self.as_of_by_ccy.get(cur, trading_date)
+        return FxQuote(rate=self.rates[cur], as_of=as_of)
+
+
 class StubPositionProvider:
     """Broker-free, read-only PositionSnapshotProvider stub (tests / rehearsal only).
 

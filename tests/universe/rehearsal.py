@@ -22,14 +22,20 @@ from bot.universe.seed import canonical_id, seed_registry
 from bot.universe.db import current_version, migrate
 
 from tests.universe._fixtures import (
-    ON, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+    ON, SpyProvider, StaticFxRateProvider, StubPositionProvider, inst, make_bars,
+    write_configs,
 )
 from datetime import datetime, timezone
 
+# Deterministic, broker-free FX rates so non-USD (GBP) instruments are USD-normalised
+# for eligibility (P2-2). Effective on the requested trading date (zero staleness).
+_FX = StaticFxRateProvider({"GBP": 1.25, "EUR": 1.10})
 
-def _src(sector="Tech", bars=True, n=300, corp="ok", volume=2_000_000.0):
+
+def _src(sector="Tech", bars=True, n=300, corp="ok", volume=2_000_000.0, price_unit=None):
     return {"bars": (make_bars(n=n, volume=volume) if bars else None),
-            "corp_action_status": corp, "sector": sector, "spread": 0.01}
+            "corp_action_status": corp, "sector": sector, "spread": 0.01,
+            "price_unit": price_unit}
 
 
 @contextmanager
@@ -152,13 +158,14 @@ def run_rehearsal(db_path: str) -> dict:
         canonical_id("MSFT", "USD", "NASDAQ"): _src(sector="Tech", volume=3_000_000.0),
         canonical_id("NVDA", "USD", "NASDAQ"): _src(sector="Tech", volume=2_500_000.0),
         # corp-action UNKNOWN: shadow policy WARNS (still eligible), never blocks.
-        canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", corp="unavailable"),
+        canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", corp="unavailable",
+                                                   price_unit="MAJOR"),
         canonical_id("PAUSE", "USD", "NASDAQ"): _src(sector="Tech"),
         canonical_id("SHORTH", "USD", "NASDAQ"): _src(sector="Energy", n=100),  # short history
         canonical_id("XAUUSD", "USD", "SMART"): _src(sector="Metals"),
     }
     prov = SpyProvider(sources)
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, fx_provider=_FX)
     # two completed sessions to drive entry hysteresis (WATCHLIST→ENTRY_ELIGIBLE)
     for d in ("2026-06-10", "2026-06-11"):
         r = ev.maybe_run(d)
@@ -255,8 +262,8 @@ def run_rehearsal(db_path: str) -> dict:
     sch_reg = Registry(sch_db)
     sch_ev = ShadowEvaluator(sch_reg, SpyProvider({
         canonical_id("AAPL", "USD", "NASDAQ"): _src(),
-        canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials"),
-    }), ON, equity=100_000)
+        canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
+    }), ON, equity=100_000, fx_provider=_FX)
     avail = {canonical_id("AAPL", "USD", "NASDAQ"): False,    # US bar late/holiday
              canonical_id("BARC", "GBP", "SMART"): True}
     now = datetime(2026, 6, 10, 23, 0, tzinfo=timezone.utc)
@@ -271,8 +278,8 @@ def run_rehearsal(db_path: str) -> dict:
     sched2 = DailyUniverseScheduler(
         ShadowEvaluator(Registry(sch_db), SpyProvider({
             canonical_id("AAPL", "USD", "NASDAQ"): _src(),
-            canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials"),
-        }), ON, equity=100_000),
+            canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
+        }), ON, equity=100_000, fx_provider=_FX),
         ON, now_fn=lambda: now,
         bar_available_fn=lambda rec, td: avail[rec["canonical_instrument_id"]])
     r_sched2 = sched2.maybe_run(sch_reg.all_canonical())

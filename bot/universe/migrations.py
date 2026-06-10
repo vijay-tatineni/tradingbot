@@ -1,9 +1,11 @@
 """Additive migration definitions for universe.db.
 
 Ordered, append-only migration list applied via PRAGMA user_version (see db.py).
-Migrations must be additive only. This DB is a RESEARCH/operational-shadow store;
-it is never regime.db or backtest.db, and operational execution state is never
-merged in.
+Each migration is applied atomically inside one explicit BEGIN IMMEDIATE / COMMIT
+transaction (db.migrate): on failure the whole migration rolls back and
+user_version is left unchanged. Migrations must be additive only. This DB is a
+RESEARCH/operational-shadow store; it is never regime.db or backtest.db, and
+operational execution state is never merged in.
 
 To add a schema change: append a new (version, [statements]) tuple — never edit a
 released migration.

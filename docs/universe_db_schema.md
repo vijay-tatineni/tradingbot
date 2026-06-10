@@ -8,7 +8,18 @@
 ## Migration framework
 
 * `bot.universe.db.migrate(db_path)` applies migrations whose target > the DB's current
-  `user_version`, in order, each in a transaction; bumps `user_version` only on success.
+  `user_version`, in order. Each migration is applied **atomically** inside one explicit
+  transaction (P2-1): the connection runs in manual mode (`isolation_level = None`) and
+  each migration is wrapped in `BEGIN IMMEDIATE` → (every schema/index statement) →
+  `PRAGMA user_version = <target>` → `COMMIT`. On any error the transaction is rolled
+  back — leaving **no partial schema** and `user_version` **unchanged** — and the original
+  exception is re-raised. This is genuine all-or-nothing: SQLite DDL *and* `PRAGMA
+  user_version` are transactional and roll back together (verified in
+  `tests/universe/test_migrations.py`). `executescript()` is deliberately **not** used (it
+  forces an implicit COMMIT that would defeat the explicit transaction boundary).
+* **Concurrency:** `BEGIN IMMEDIATE` takes the write lock up front, so a second concurrent
+  migration blocks up to the connection `timeout` and then fails with
+  `sqlite3.OperationalError` (database is locked) without creating an inconsistent schema.
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
 * Current schema version: **1**.

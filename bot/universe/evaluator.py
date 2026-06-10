@@ -13,10 +13,17 @@ It NEVER: submits/amends/cancels orders, calls a broker (IBKR/IG) or data provid
 rewrites any config. Bars + per-instrument features arrive via an INJECTED provider
 callable — there is deliberately no broker dependency in this module.
 
+Eligibility note (P2-2): the USD-denominated price/ADV20 thresholds are evaluated
+against USD-NORMALISED values. Each instrument's LOCAL price/ADV20 is converted via an
+injected, broker-free FX rate (bot.universe.fx); any FX problem fails closed with a
+deterministic reason code (never a local-vs-USD comparison). The FX provider is optional
+and is only consulted for non-USD instruments — USD is assumed 1.0.
+
 Sizing note: hypothetical qty/risk use the frozen breakout constants
-(bot/universe/params, mirroring backtest/breakout_sim). v1 shadow computes risk in a
-single-currency approximation (equity and price treated in the same unit); real FX
-normalisation is deferred. These are hypothetical figures only — never orders.
+(bot/universe/params, mirroring backtest/breakout_sim) and the instrument's LOCAL
+price/ATR — a single-currency approximation for hypothetical RISK SIZING only (real
+FX-normalised sizing is deferred, see docs/dynamic_universe_pre_enable_blockers.md).
+These are hypothetical figures only — never orders.
 """
 import hashlib
 import json
@@ -28,6 +35,7 @@ from datetime import date
 from backtest.breakout_strategy import compute_indicators
 from bot.universe import params
 from bot.universe.eligibility import structural_eligibility
+from bot.universe.fx import normalize_to_usd
 from bot.universe.models import (
     ELIGIBILITY_MODE_SHADOW, HypotheticalOrder, PositionStatus, Reason, State,
 )
@@ -63,13 +71,20 @@ class ShadowEvaluator:
                  flags,
                  equity: float = 100_000.0,
                  evaluator_version: Optional[str] = None,
-                 position_provider=None):
+                 position_provider=None,
+                 fx_provider=None):
         from bot.universe import EVALUATOR_VERSION
         self.registry = registry
         self.bars_provider = bars_provider   # callable(canonical_rec)->dict|None ; NO broker
         self.flags = flags                   # object/dict supporting .get(name)
         self.equity = float(equity)
         self.evaluator_version = evaluator_version or EVALUATOR_VERSION
+        # Optional broker-free, INJECTED FxRateProvider (bot.universe.fx). Used ONLY to
+        # USD-normalise non-USD price/ADV20 for eligibility (P2-2); USD instruments never
+        # touch it. None is safe: USD instruments still normalise, non-USD fail closed
+        # with fx_conversion_unavailable. Queried only inside _evaluate_one (never on the
+        # flag-off no-op path).
+        self.fx_provider = fx_provider
         # Optional broker-free, read-only PositionSnapshotProvider (task §3). When
         # injected it drives POSITION_OPEN/EXIT_ONLY/COOLDOWN organically; when None
         # the evaluator falls back to the legacy prior-state + trend-break derivation.
@@ -119,6 +134,8 @@ class ShadowEvaluator:
     # ── per-instrument evaluation ─────────────────────────────────────
     def _evaluate_one(self, rec: dict, trading_date: str) -> dict:
         cid = rec["canonical_instrument_id"]
+        td_date = (date.fromisoformat(trading_date)
+                   if isinstance(trading_date, str) else trading_date)
         prior = self.registry.get_state(cid)
         prior_state = prior["current_state"] if prior else None
         prior_passes = prior["consecutive_passes"] if prior else 0
@@ -144,20 +161,44 @@ class ShadowEvaluator:
             ind = compute_indicators(bars)
             last = ind.iloc[-1]
             snap["bar_count"] = len(ind)
-            snap["price"] = float(last["close"])
             snap["ohlc_valid"] = _last_bar_valid(last)
             cols = ["sma50", "sma200", "atr14", "adx14", "high20_excl"]
             snap["indicators_available"] = bool(ind.iloc[-1][cols].notna().all())
             n = min(20, len(ind))
-            snap["adv20_usd"] = float((ind["close"] * ind["volume"]).tail(n).mean())
+            price_local = float(last["close"])
+            adv20_local = float((ind["close"] * ind["volume"]).tail(n).mean())
+            # ── USD currency normalisation for ELIGIBILITY thresholds (P2-2) ──
+            # The price/ADV20 thresholds are USD; convert each instrument's LOCAL value
+            # via the injected, broker-free FX rate. Any FX problem fails closed.
+            norm = normalize_to_usd(
+                price_local=price_local, adv20_local=adv20_local,
+                currency=rec.get("currency"),
+                price_unit=src.get("price_unit") or rec.get("price_unit"),
+                trading_date=td_date, fx_provider=self.fx_provider)
+            snap["currency"] = norm.currency or rec.get("currency")
+            snap["price_unit"] = norm.price_unit or (src.get("price_unit") or rec.get("price_unit"))
+            snap["price_local"] = price_local
+            snap["adv20_local"] = adv20_local
+            snap["fx_to_usd"] = norm.fx_to_usd
+            snap["fx_effective_date"] = (norm.fx_effective_date.isoformat()
+                                         if norm.fx_effective_date else None)
+            snap["price"] = norm.price_usd       # USD-normalised → eligibility threshold input
+            snap["price_usd"] = norm.price_usd
+            snap["adv20_usd"] = norm.adv20_usd   # USD-normalised
+            snap["fx_reason"] = norm.reason      # None when ok; a fail-closed code otherwise
             entry_signal = bool(last["entry_signal"])
             trend_break = bool(last["trend_break"])
             atr = None if last["atr14"] != last["atr14"] else float(last["atr14"])
-            price = snap["price"]
+            # Hypothetical SIZING uses the LOCAL price/ATR (single-currency approximation,
+            # explicitly deferred); only ELIGIBILITY is USD-normalised above.
+            price = price_local
             sma50 = None if last["sma50"] != last["sma50"] else float(last["sma50"])
         else:
-            snap.update({"bar_count": 0, "price": None, "ohlc_valid": False,
-                         "indicators_available": False, "adv20_usd": None})
+            snap.update({"bar_count": 0, "price": None, "price_usd": None,
+                         "adv20_usd": None, "price_local": None, "adv20_local": None,
+                         "currency": rec.get("currency"), "price_unit": None,
+                         "fx_to_usd": None, "fx_effective_date": None, "fx_reason": None,
+                         "ohlc_valid": False, "indicators_available": False})
 
         # Shadow eligibility policy: unknown corporate-action data WARNS (it does not
         # block); the paper/live hard-block policy is a separate, un-wired code path.
@@ -175,7 +216,9 @@ class ShadowEvaluator:
 
         feature_snapshot = {
             **{k: snap.get(k) for k in (
-                "bar_count", "price", "adv20_usd", "indicators_available",
+                "bar_count", "price", "price_usd", "price_local", "adv20_usd",
+                "adv20_local", "currency", "price_unit", "fx_to_usd",
+                "fx_effective_date", "fx_reason", "indicators_available",
                 "ohlc_valid", "corp_action_status", "sector", "fresh_bar")},
             "entry_signal": entry_signal, "trend_break": trend_break,
             "atr14": atr, "sma50": sma50,

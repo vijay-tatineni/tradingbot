@@ -17,8 +17,11 @@ CANDIDATE_TTL_SESSIONS = 5
 
 # ── Structural eligibility thresholds ────────────────────────────────
 MIN_HISTORY_BARS = 250          # minimum valid completed daily bars
-MIN_PRICE = 10.0                # $10 or local-currency equivalent
-MIN_ADV20_USD = 20_000_000.0    # minimum 20-day average dollar volume (USD-equiv)
+# USD-denominated thresholds. The evaluator converts each instrument's local price /
+# ADV20 to USD-normalised values (bot.universe.fx) BEFORE comparing them here — a local
+# value is never compared directly against a USD threshold (P2-2).
+MIN_PRICE_USD = 10.0            # minimum USD-normalised last close ($10)
+MIN_ADV20_USD = 20_000_000.0   # minimum USD-normalised 20-day average dollar volume
 
 # ── Eligibility hysteresis / cooldown (completed sessions) ───────────
 ENTRY_HYSTERESIS_PASSES = 2     # consecutive passing sessions to become ENTRY_ELIGIBLE

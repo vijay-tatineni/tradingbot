@@ -83,6 +83,15 @@ class Reason:
     RESEARCH_MAPPING_MISSING = "research_mapping_missing"
     IBKR_MAPPING_MISSING = "ibkr_mapping_missing"
     IN_COOLDOWN = "in_cooldown"
+    # ── currency normalisation (P2-2): all fail-CLOSED, never fall back to local ──
+    FX_CONVERSION_UNAVAILABLE = "fx_conversion_unavailable"   # no provider / no rate
+    FX_RATE_INVALID = "fx_rate_invalid"                       # zero/negative/NaN/inf/future
+    FX_RATE_STALE = "fx_rate_stale"                           # older than accepted window
+    CURRENCY_UNKNOWN = "currency_unknown"
+    PRICE_UNIT_UNKNOWN = "price_unit_unknown"
+    GBX_GBP_UNIT_AMBIGUOUS = "gbx_gbp_unit_ambiguous"         # pence vs pounds undecidable
+    NORMALIZED_PRICE_INVALID = "normalized_price_invalid"
+    NORMALIZED_ADV20_INVALID = "normalized_adv20_invalid"
     SECTOR_UNKNOWN = "sector_unknown"                      # informational; not a hard fail
     POSITION_STATUS_UNKNOWN = "position_status_unknown"    # safe non-entry; never silent
     # contention / routing (hypothetical)
@@ -108,6 +117,17 @@ BLOCKING_REASONS = frozenset({
     Reason.RESEARCH_MAPPING_MISSING,
     Reason.IBKR_MAPPING_MISSING,
     Reason.IN_COOLDOWN,
+    # Currency-normalisation failures fail CLOSED: an instrument whose USD-normalised
+    # price/ADV20 cannot be trusted is never entry-eligible (P2-2). We do NOT fall back
+    # to comparing a local-currency value against a USD threshold.
+    Reason.FX_CONVERSION_UNAVAILABLE,
+    Reason.FX_RATE_INVALID,
+    Reason.FX_RATE_STALE,
+    Reason.CURRENCY_UNKNOWN,
+    Reason.PRICE_UNIT_UNKNOWN,
+    Reason.GBX_GBP_UNIT_AMBIGUOUS,
+    Reason.NORMALIZED_PRICE_INVALID,
+    Reason.NORMALIZED_ADV20_INVALID,
 })
 
 
