@@ -119,3 +119,12 @@ class StubPositionProvider:
         if key in self.by_date:
             return self.by_date[key]
         return self.statuses.get(canonical_instrument_id, self._default)
+
+
+def flat():
+    """A fresh authoritative position provider reporting NO_POSITION for everything.
+
+    Under the P3-8 contract the evaluator yields UNKNOWN (a safe non-entry hold) when NO
+    provider is injected, so tests that intend ordinary flat→eligible behaviour must inject
+    an explicit flat provider. A fresh instance per call keeps `.calls` isolated."""
+    return StubPositionProvider()

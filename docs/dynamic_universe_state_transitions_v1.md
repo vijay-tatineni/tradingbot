@@ -61,10 +61,23 @@ E+4    cooldown block released   → may transition out of COOLDOWN if all else 
 ```
 
 On the exit session the count is set to `COOLDOWN_SESSIONS` (3) and is **not**
-decremented. On each subsequent confirmed-flat session it is decremented (check-then-
-decrement). While a hypothetical position is still open — OR while the position status
-is UNKNOWN (cannot confirm flat) — the count is **held**, never advanced. (v1 counts in
-completed evaluated sessions — no trading-calendar dependency.)
+decremented. On each subsequent confirmed-flat **completed** session it is decremented
+(check-then-decrement). While a hypothetical position is still open — OR while the position
+status is UNKNOWN (cannot confirm flat) — the count is **held**, never advanced. (v1 counts
+in completed evaluated sessions — no trading-calendar dependency.)
+
+**Session-based fields (P3-2, R1).** The count lives in
+`universe_state.cooldown_sessions_remaining` (canonical), with
+`cooldown_started_trading_date` (= E) and `cooldown_last_counted_trading_date`. The
+deprecated `cooldown_until` column is no longer read by runtime logic (it stored a count
+despite its date-implying name); it remains as deprecated compatibility metadata. A session
+counts at most once (`cooldown_last_counted_trading_date` guards a duplicate same-date run)
+and only when a completed bar exists — a **weekend / holiday / missing-bar session never
+counts** (no calendar lookup; absence of a completed bar is the signal). The display-only
+`cooldown_release_estimate` is left NULL: it is never authoritative without an approved
+exchange calendar. An ambiguous legacy row (non-zero `cooldown_until`, NULL session field)
+fails safe to a blocked/manual-review `COOLDOWN` (`cooldown_legacy_ambiguous`); the count is
+never inferred from the legacy value.
 
 Because `in_cooldown` is itself a blocking structural reason, the 2-pass entry
 hysteresis counter resets during cooldown. So at E+4 the instrument leaves COOLDOWN into
@@ -72,22 +85,39 @@ WATCHLIST and must re-accrue two passing sessions (ENTRY_ELIGIBLE at E+5). The c
 *block* is fully released at E+4 — that is the §2 invariant; the re-accrual is the
 ordinary entry hysteresis, applied conservatively.
 
-## Position status seam (task §3)
+## Position status seam (task §3 / P3-8 / P3-9, R1)
 
 POSITION_OPEN / EXIT_ONLY / COOLDOWN are driven by an INJECTED, broker-free
-`PositionSnapshotProvider` returning one of `NO_POSITION`, `POSITION_OPEN`,
-`POSITION_EXITED_TODAY`, `UNKNOWN`. The provider never calls a broker. When no provider
-is injected the evaluator falls back to the legacy prior-state + trend-break derivation.
+`PositionSnapshotProvider` returning a `PositionStatus` **or** a richer `PositionSnapshot`
+(status + durable exit evidence: `position_id`, `opened_/closed_trading_date`,
+`source_version` — never account ids / quantities / prices). The provider never calls a
+broker.
+
+**Authoritative contract (P3-8):** there is NO legacy prior-state fallback. When **no
+provider** is injected — or the provider raises / times out / returns a malformed,
+unrecognised, or stale/absent value — the status is `UNKNOWN` (fail-safe). A stale prior
+state is preserved only as descriptive history (`last_observed_position_status`), never as
+proof of a current position.
 
 ```text
 NO_POSITION            → flat branch (WATCHLIST/ENTRY_ELIGIBLE/COOLDOWN/…)
 POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused)
-POSITION_EXITED_TODAY  → COOLDOWN (exit on E)
+POSITION_EXITED        → durable exit signal → COOLDOWN (exit on E)
+POSITION_EXITED_TODAY  → DEPRECATED transient exit signal (still honoured) → COOLDOWN
 UNKNOWN                → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
                          never forced liquidation, cooldown held (do not assume flat)
+no provider / error    → UNKNOWN (as above) — never a retained stale open
 ```
 
-`UNKNOWN` is fail-safe: a provider error or any unrecognised value is coerced to UNKNOWN.
+**Durable, exactly-once exit (P3-9):** cooldown no longer depends on observing the transient
+`POSITION_EXITED_TODAY`. The evaluator starts cooldown when it sees an explicit durable
+exit signal, OR an authoritative `last_observed = POSITION_OPEN` → current `NO_POSITION`
+transition **with durable evidence** (`closed_trading_date` or `position_id`). A
+no-evidence open→flat, `UNKNOWN → NO_POSITION`, or a provider error does **not** start
+cooldown. A durable `last_processed_position_event_id` de-duplicates a replayed close (no
+restart); a genuinely new later close starts a fresh cooldown. `last_observed_position_status`
+is persisted every run (including `UNKNOWN`, and `NO_POSITION` after an exit) so
+`OPEN→UNKNOWN→NO_POSITION` cannot false-trigger.
 
 ## Structural eligibility (inputs to the transition)
 

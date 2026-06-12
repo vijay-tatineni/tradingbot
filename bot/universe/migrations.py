@@ -133,4 +133,47 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v2: Pre-Enable R1 (P3-2 session-based cooldown, P3-9 durable exit markers,
+        #        append-only history enforcement). Strictly ADDITIVE. The legacy
+        #        universe_state.cooldown_until column is intentionally LEFT IN PLACE as
+        #        deprecated compatibility metadata and is no longer read by runtime logic
+        #        (P3-2). No column is back-filled: an ambiguous legacy cooldown is failed
+        #        safe into a blocked/manual-review state by the evaluator, never inferred.
+        2,
+        [
+            # ── P3-2: explicit session-based cooldown fields ───────────────
+            # Misleading `cooldown_until` (which actually stored a session COUNT) is
+            # superseded by these. `cooldown_release_estimate` is DISPLAY-ONLY and is
+            # never treated as authoritative unless computed from an approved exchange
+            # calendar (v1 has none) — it is left NULL here.
+            "ALTER TABLE universe_state ADD COLUMN cooldown_started_trading_date TEXT",
+            "ALTER TABLE universe_state ADD COLUMN cooldown_sessions_remaining INTEGER",
+            "ALTER TABLE universe_state ADD COLUMN cooldown_last_counted_trading_date TEXT",
+            "ALTER TABLE universe_state ADD COLUMN cooldown_release_estimate TEXT",
+            # ── P3-9: durable exit-event markers (non-sensitive) for exactly-once
+            #         open→flat cooldown start across restarts/reruns ─────────
+            "ALTER TABLE universe_state ADD COLUMN last_observed_position_status TEXT",
+            "ALTER TABLE universe_state ADD COLUMN last_observed_position_id_hash TEXT",
+            "ALTER TABLE universe_state ADD COLUMN last_processed_position_event_id TEXT",
+            "ALTER TABLE universe_state ADD COLUMN last_position_close_trading_date TEXT",
+            # ── P3-3 (defence-in-depth): make append-only history physically
+            #         non-mutable. The store only ever INSERTs; these triggers reject any
+            #         UPDATE/DELETE so a history row can never be silently rewritten. ──
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_universe_history_no_update
+            BEFORE UPDATE ON universe_state_history
+            BEGIN
+                SELECT RAISE(ABORT, 'universe_state_history is append-only');
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_universe_history_no_delete
+            BEFORE DELETE ON universe_state_history
+            BEGIN
+                SELECT RAISE(ABORT, 'universe_state_history is append-only');
+            END
+            """,
+        ],
+    ),
 ]

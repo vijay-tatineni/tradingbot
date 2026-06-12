@@ -22,7 +22,7 @@
   `sqlite3.OperationalError` (database is locked) without creating an inconsistent schema.
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
-* Current schema version: **1**.
+* Current schema version: **2** (v2 = Pre-Enable R1, strictly additive — see below).
 
 ## Tables (v1)
 
@@ -66,16 +66,56 @@ TTI/MANUAL candidates expire when `expires_after_trading_date < trading_date`
 ```text
 canonical_instrument_id PK→canonical, current_state, previous_state, reason_codes,
 consecutive_passes, consecutive_failures, eligible_since, ineligible_since,
-cooldown_until (v1: remaining-session count as text), evaluated_trading_date,
-evaluated_at, feature_snapshot_hash, evaluator_version
+cooldown_until (DEPRECATED — see below), evaluated_trading_date,
+evaluated_at, feature_snapshot_hash, evaluator_version,
+-- ── v2 (R1) additive columns ────────────────────────────────────────────────
+cooldown_started_trading_date        TEXT   -- exit session E (P3-2)
+cooldown_sessions_remaining          INT    -- CANONICAL post-exit session count (P3-2)
+cooldown_last_counted_trading_date   TEXT   -- last session a decrement was applied (idempotent/day)
+cooldown_release_estimate            TEXT   -- DISPLAY-ONLY; never authoritative without an
+                                            --   approved exchange calendar (left NULL in v1)
+last_observed_position_status        TEXT   -- last authoritative provider status (P3-9 detection)
+last_observed_position_id_hash       TEXT   -- non-sensitive hash of the observed position_id
+last_processed_position_event_id     TEXT   -- durable close-event dedup key (exactly-once, P3-9)
+last_position_close_trading_date     TEXT   -- close date of the last processed exit (P3-9)
 ```
+**`cooldown_until` is DEPRECATED (P3-2).** In v1 it stored a remaining-session *count* as
+text despite its date-implying name. Runtime logic no longer reads it as the count — the
+authoritative source is `cooldown_sessions_remaining`. `cooldown_until` is still written as
+deprecated compatibility metadata (the same count as text) and is otherwise inspected ONLY
+to flag an *ambiguous legacy row*: a row that has a non-zero `cooldown_until` but a NULL
+`cooldown_sessions_remaining` (e.g. migrated from v1 and not yet re-evaluated). Such a row
+is **failed safe** — held in a blocked/manual-review `COOLDOWN` with reason
+`cooldown_legacy_ambiguous`; the count is NOT inferred from the legacy value. The v2
+migration is additive and does **not** back-fill the new columns.
 
-### universe_state_history (append-only)
+**Cooldown counting (P3-2, no trading-calendar dependency).** Cooldown is counted in
+COMPLETED evaluated sessions: the exit session E is not counted; the count decrements by at
+most one per completed session (`cooldown_last_counted_trading_date` guards a duplicate
+same-date run), and never decrements on a weekend/holiday/missing-bar session (no completed
+bar → not countable), while a position is open, or while the status is UNKNOWN.
+
+### universe_state_history (append-only — physically enforced)
 ```text
 id PK AUTOINCREMENT, canonical_instrument_id, trading_date, prior_state, new_state,
 reason_codes, feature_snapshot_json, feature_snapshot_hash, evaluator_version, created_at
 UNIQUE(canonical_instrument_id, trading_date, evaluator_version)   -- idempotency key
 ```
+v2 adds `BEFORE UPDATE`/`BEFORE DELETE` triggers (`trg_universe_history_no_update`,
+`trg_universe_history_no_delete`) that `RAISE(ABORT, 'universe_state_history is
+append-only')`, so a committed history row can never be rewritten or deleted (defence in
+depth for P3-3).
+
+## Atomic state + history persistence (P3-3)
+
+`Registry.persist_transition_atomic(state, history)` writes the `universe_state` UPSERT and
+the `universe_state_history` append inside ONE explicit `BEGIN IMMEDIATE` transaction
+(`isolation_level = None`, no `executescript`). The history row is inserted FIRST so its
+UNIQUE idempotency index gates duplicates; the two writes COMMIT together or ROLL BACK
+together. A duplicate `(instrument, trading_date, evaluator_version)` rolls the whole tx
+back as a no-op (neither table changes), so a retried-after-success run never duplicates
+history nor double-advances counters. The evaluator persists every transition exclusively
+through this method (it no longer calls `upsert_state` + `append_history` separately).
 
 ## Idempotency
 

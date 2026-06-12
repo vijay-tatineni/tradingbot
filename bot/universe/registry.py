@@ -221,6 +221,12 @@ class Registry:
             return dict(zip(cols, row)) if row else None
 
     def upsert_state(self, rec: dict) -> None:
+        """Direct current-state upsert. Retained for test setup and back-compat; the
+        evaluator persists transitions via persist_transition_atomic (P3-3), not this.
+        Omitted v2 columns are written NULL — a v1-style preset that sets only the legacy
+        `cooldown_until` therefore yields an AMBIGUOUS row (cooldown_sessions_remaining
+        NULL) by construction (P3-2)."""
+        sr = rec.get("cooldown_sessions_remaining")
         with connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -228,8 +234,12 @@ class Registry:
                     (canonical_instrument_id, current_state, previous_state, reason_codes,
                      consecutive_passes, consecutive_failures, eligible_since,
                      ineligible_since, cooldown_until, evaluated_trading_date,
-                     evaluated_at, feature_snapshot_hash, evaluator_version)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     evaluated_at, feature_snapshot_hash, evaluator_version,
+                     cooldown_started_trading_date, cooldown_sessions_remaining,
+                     cooldown_last_counted_trading_date, cooldown_release_estimate,
+                     last_observed_position_status, last_observed_position_id_hash,
+                     last_processed_position_event_id, last_position_close_trading_date)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(canonical_instrument_id) DO UPDATE SET
                     current_state=excluded.current_state,
                     previous_state=excluded.previous_state,
@@ -242,7 +252,15 @@ class Registry:
                     evaluated_trading_date=excluded.evaluated_trading_date,
                     evaluated_at=excluded.evaluated_at,
                     feature_snapshot_hash=excluded.feature_snapshot_hash,
-                    evaluator_version=excluded.evaluator_version
+                    evaluator_version=excluded.evaluator_version,
+                    cooldown_started_trading_date=excluded.cooldown_started_trading_date,
+                    cooldown_sessions_remaining=excluded.cooldown_sessions_remaining,
+                    cooldown_last_counted_trading_date=excluded.cooldown_last_counted_trading_date,
+                    cooldown_release_estimate=excluded.cooldown_release_estimate,
+                    last_observed_position_status=excluded.last_observed_position_status,
+                    last_observed_position_id_hash=excluded.last_observed_position_id_hash,
+                    last_processed_position_event_id=excluded.last_processed_position_event_id,
+                    last_position_close_trading_date=excluded.last_position_close_trading_date
                 """,
                 (
                     rec["canonical_instrument_id"], rec["current_state"],
@@ -253,6 +271,14 @@ class Registry:
                     rec.get("cooldown_until"), rec.get("evaluated_trading_date"),
                     rec.get("evaluated_at", _utc_now_iso()),
                     rec.get("feature_snapshot_hash"), rec.get("evaluator_version"),
+                    rec.get("cooldown_started_trading_date"),
+                    (int(sr) if sr is not None else None),
+                    rec.get("cooldown_last_counted_trading_date"),
+                    rec.get("cooldown_release_estimate"),
+                    rec.get("last_observed_position_status"),
+                    rec.get("last_observed_position_id_hash"),
+                    rec.get("last_processed_position_event_id"),
+                    rec.get("last_position_close_trading_date"),
                 ),
             )
 
@@ -302,3 +328,149 @@ class Registry:
             return int(conn.execute(
                 "SELECT COUNT(*) FROM universe_state_history WHERE canonical_instrument_id=?",
                 (cid,)).fetchone()[0])
+
+    # ── P3-3: atomic current-state + history persistence ─────────────
+    _STATE_COLUMNS = (
+        "canonical_instrument_id", "current_state", "previous_state", "reason_codes",
+        "consecutive_passes", "consecutive_failures", "eligible_since",
+        "ineligible_since", "cooldown_until", "evaluated_trading_date", "evaluated_at",
+        "feature_snapshot_hash", "evaluator_version",
+        # ── v2 (R1) additive columns ──
+        "cooldown_started_trading_date", "cooldown_sessions_remaining",
+        "cooldown_last_counted_trading_date", "cooldown_release_estimate",
+        "last_observed_position_status", "last_observed_position_id_hash",
+        "last_processed_position_event_id", "last_position_close_trading_date",
+    )
+
+    def persist_transition_atomic(self, state: dict, history: dict,
+                                  _fault_hook=None) -> bool:
+        """Write the current-state UPSERT and the append-only history row for ONE
+        transition inside a SINGLE explicit ``BEGIN IMMEDIATE`` transaction (P3-3).
+
+        Invariant: the two writes COMMIT together or ROLL BACK together — there is no
+        observable state where ``universe_state`` advanced without its history row, or a
+        history row exists without the matching state. The history row is written FIRST so
+        its UNIQUE idempotency index (canonical_instrument_id, trading_date,
+        evaluator_version) is the gate: a duplicate transition rolls the whole tx back and
+        is a no-op (neither table changes), so a retried-after-success run never
+        double-advances counters and never duplicates history.
+
+        Returns True if persisted, False if it was an idempotent no-op (history row for
+        this (instrument, date, version) already existed). Any non-idempotency error rolls
+        back and re-raises.
+
+        ``_fault_hook`` is a test-only seam: a callable invoked with a seam name
+        ("after_history", "after_state", "at_commit") at which it may raise to prove the
+        all-or-nothing rollback. Production callers never pass it.
+
+        Explicit transaction control mirrors db.migrate: ``isolation_level = None`` (no
+        implicit BEGIN/COMMIT) and individual ``conn.execute`` statements — NEVER
+        ``executescript()`` (which would force an implicit COMMIT and defeat the boundary).
+        """
+        def fault(seam):
+            if _fault_hook is not None:
+                _fault_hook(seam)
+
+        hist_params = (
+            history["canonical_instrument_id"], history["trading_date"],
+            history.get("prior_state"), history["new_state"],
+            _dumps(history.get("reason_codes")),
+            _dumps(history.get("feature_snapshot")),
+            history.get("feature_snapshot_hash"), history["evaluator_version"],
+            _utc_now_iso(),
+        )
+        sr = state.get("cooldown_sessions_remaining")
+        state_params = (
+            state["canonical_instrument_id"], state["current_state"],
+            state.get("previous_state"), _dumps(state.get("reason_codes")),
+            int(state.get("consecutive_passes", 0)),
+            int(state.get("consecutive_failures", 0)),
+            state.get("eligible_since"), state.get("ineligible_since"),
+            state.get("cooldown_until"), state.get("evaluated_trading_date"),
+            state.get("evaluated_at", _utc_now_iso()),
+            state.get("feature_snapshot_hash"), state.get("evaluator_version"),
+            state.get("cooldown_started_trading_date"),
+            (int(sr) if sr is not None else None),
+            state.get("cooldown_last_counted_trading_date"),
+            state.get("cooldown_release_estimate"),
+            state.get("last_observed_position_status"),
+            state.get("last_observed_position_id_hash"),
+            state.get("last_processed_position_event_id"),
+            state.get("last_position_close_trading_date"),
+        )
+
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.isolation_level = None      # WE own the transaction boundary
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # 1) history FIRST — UNIQUE idempotency index is the gate.
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO universe_state_history
+                            (canonical_instrument_id, trading_date, prior_state, new_state,
+                             reason_codes, feature_snapshot_json, feature_snapshot_hash,
+                             evaluator_version, created_at)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        hist_params,
+                    )
+                except sqlite3.IntegrityError:
+                    # duplicate (instrument, date, version) → idempotent no-op; roll the
+                    # whole tx back so NEITHER table is touched.
+                    conn.execute("ROLLBACK")
+                    return False
+                fault("after_history")
+                # 2) then the mutable current state.
+                conn.execute(
+                    """
+                    INSERT INTO universe_state
+                        (canonical_instrument_id, current_state, previous_state, reason_codes,
+                         consecutive_passes, consecutive_failures, eligible_since,
+                         ineligible_since, cooldown_until, evaluated_trading_date,
+                         evaluated_at, feature_snapshot_hash, evaluator_version,
+                         cooldown_started_trading_date, cooldown_sessions_remaining,
+                         cooldown_last_counted_trading_date, cooldown_release_estimate,
+                         last_observed_position_status, last_observed_position_id_hash,
+                         last_processed_position_event_id, last_position_close_trading_date)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(canonical_instrument_id) DO UPDATE SET
+                        current_state=excluded.current_state,
+                        previous_state=excluded.previous_state,
+                        reason_codes=excluded.reason_codes,
+                        consecutive_passes=excluded.consecutive_passes,
+                        consecutive_failures=excluded.consecutive_failures,
+                        eligible_since=excluded.eligible_since,
+                        ineligible_since=excluded.ineligible_since,
+                        cooldown_until=excluded.cooldown_until,
+                        evaluated_trading_date=excluded.evaluated_trading_date,
+                        evaluated_at=excluded.evaluated_at,
+                        feature_snapshot_hash=excluded.feature_snapshot_hash,
+                        evaluator_version=excluded.evaluator_version,
+                        cooldown_started_trading_date=excluded.cooldown_started_trading_date,
+                        cooldown_sessions_remaining=excluded.cooldown_sessions_remaining,
+                        cooldown_last_counted_trading_date=excluded.cooldown_last_counted_trading_date,
+                        cooldown_release_estimate=excluded.cooldown_release_estimate,
+                        last_observed_position_status=excluded.last_observed_position_status,
+                        last_observed_position_id_hash=excluded.last_observed_position_id_hash,
+                        last_processed_position_event_id=excluded.last_processed_position_event_id,
+                        last_position_close_trading_date=excluded.last_position_close_trading_date
+                    """,
+                    state_params,
+                )
+                fault("after_state")
+                fault("at_commit")
+                conn.execute("COMMIT")
+                return True
+            except BaseException:
+                # Any non-idempotency failure (including an injected fault): roll BOTH
+                # writes back together and re-raise. State remains the prior state.
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+        finally:
+            conn.close()

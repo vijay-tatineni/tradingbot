@@ -56,21 +56,33 @@ def transition(
 
     ctx keys (all optional, default safe):
         hard_disabled (bool), admin_active (bool, default True),
-        admin_paused (bool), has_open_position (bool),
-        exited_this_session (bool)
+        admin_paused (bool), has_open_position (bool — POSITION_OPEN only),
+        position_unknown (bool),
+        exit_detected (bool — an authoritative, exactly-once open→flat exit was
+            observed THIS session; see evaluator P3-9 derivation. Replaces the old
+            transient `exited_this_session`),
+        cooldown_session_countable (bool, default True — this is a COMPLETED post-exit
+            session not already counted for cooldown; weekends/holidays/missing-bar
+            sessions and duplicate same-date runs pass False so they never decrement,
+            P3-2).
+
+    NOTE: `has_open_position` is now POSITION_OPEN-only. An exit is signalled solely via
+    `exit_detected` (the evaluator no longer trusts a transient status value), so the
+    state machine never needs to subtract a same-session exit from the open flag.
     """
     prior = _as_state(prior_state)
     hard_disabled = bool(ctx.get("hard_disabled", False))
     admin_active = bool(ctx.get("admin_active", True))
     admin_paused = bool(ctx.get("admin_paused", False))
     has_open = bool(ctx.get("has_open_position", False))
-    exited = bool(ctx.get("exited_this_session", False))
+    exit_detected = bool(ctx.get("exit_detected", False))
     position_unknown = bool(ctx.get("position_unknown", False))
+    countable = bool(ctx.get("cooldown_session_countable", True))
 
     reasons = list(structural.reason_codes)
 
-    # A hypothetical trend-break/stop exit closes the position THIS session.
-    effective_open = has_open and not exited
+    # An authoritative exit closes the position THIS session → it is flat now.
+    effective_open = has_open and not exit_detected
 
     # ── hysteresis counters (track structural-eligibility streaks) ────
     if structural.passes:
@@ -80,34 +92,41 @@ def transition(
         passes = 0
         failures = prior_failures + 1
 
-    # ── cooldown countdown (FROZEN semantics — task §2) ───────────────
+    # ── cooldown countdown (FROZEN semantics — task §2 / P3-2) ────────
     # The exit session E does NOT count as a completed post-exit cooldown session.
     # On exit, cooldown is set to COOLDOWN_SESSIONS and is NOT decremented that
     # session, so the instrument is blocked for the next three COMPLETED sessions
     # (E+1, E+2, E+3) and the earliest re-eligibility evaluation is E+4. On a
-    # subsequent flat cooldown session the remaining count is decremented (post
-    # state-decision) using the check-then-decrement rule; while a (hypothetical)
-    # position is still open the count is held (not advanced).
-    if exited:
-        cooldown = params.COOLDOWN_SESSIONS
+    # subsequent COUNTABLE flat session the remaining count is decremented (post
+    # state-decision, check-then-decrement). While a position is open, the status is
+    # UNKNOWN, or the session is not countable (weekend/holiday/missing bar / duplicate
+    # same-date run) the count is HELD.
+    cooldown_started = False
+    cooldown_counted = False
+    if exit_detected:
+        cooldown_out = params.COOLDOWN_SESSIONS
         in_cooldown = True
-        cooldown_out = cooldown                      # exit session is not counted
+        cooldown_started = True                       # exit session is not counted
     else:
         cooldown = int(prior_cooldown_remaining or 0)
         in_cooldown = cooldown > 0
-        # Advance only on a confirmed-flat session: hold while a (hypothetical)
-        # position is open OR while the position status is UNKNOWN (cannot confirm flat).
-        advancing = in_cooldown and not effective_open and not position_unknown
+        advancing = (in_cooldown and not effective_open and not position_unknown
+                     and countable)
         cooldown_out = cooldown - 1 if advancing else cooldown
+        cooldown_counted = advancing
+
+    def _out(state, p, f):
+        return StateOutcome(state, p, f, reasons, cooldown_out,
+                            cooldown_started, cooldown_counted)
 
     # ── 1. HARD_DISABLED dominates everything ─────────────────────────
     if hard_disabled:
         if Reason.HARD_DISABLED not in reasons:
             reasons.append(Reason.HARD_DISABLED)
         # Counters frozen at 0 — a hard-disabled instrument never accrues entry passes.
-        return StateOutcome(State.HARD_DISABLED, 0, 0, reasons, cooldown_out)
+        return _out(State.HARD_DISABLED, 0, 0)
 
-    # ── 1b. UNKNOWN position status: fail safe (task §3) ──────────────
+    # ── 1b. UNKNOWN position status: fail safe (task §3 / P3-8) ───────
     # We could not determine whether a position is open. Do NOT assume flat, do NOT
     # make the instrument entry-eligible, and do NOT force liquidation: hold the
     # safer non-entry EXIT_ONLY state (entries suppressed; deterministic exit
@@ -119,16 +138,16 @@ def transition(
             reasons.append(Reason.POSITION_STATUS_UNKNOWN)
         if admin_paused and Reason.ADMIN_PAUSED not in reasons:
             reasons.append(Reason.ADMIN_PAUSED)
-        return StateOutcome(State.EXIT_ONLY, passes, failures, reasons, cooldown_out)
+        return _out(State.EXIT_ONLY, passes, failures)
 
-    # ── 2/3/4. Open hypothetical position branch ──────────────────────
+    # ── 2/3/4. Open position branch ───────────────────────────────────
     if effective_open:
         paused = admin_paused or not admin_active
         if paused or not structural.passes:
             if paused and Reason.ADMIN_PAUSED not in reasons:
                 reasons.append(Reason.ADMIN_PAUSED)
-            return StateOutcome(State.EXIT_ONLY, passes, failures, reasons, cooldown_out)
-        return StateOutcome(State.POSITION_OPEN, passes, failures, reasons, cooldown_out)
+            return _out(State.EXIT_ONLY, passes, failures)
+        return _out(State.POSITION_OPEN, passes, failures)
 
     # ── No open position (flat) ───────────────────────────────────────
     if admin_paused or not admin_active:
@@ -136,27 +155,27 @@ def transition(
             reasons.append(Reason.NOT_ADMINISTRATIVELY_ACTIVE)
         if admin_paused and Reason.ADMIN_PAUSED not in reasons:
             reasons.append(Reason.ADMIN_PAUSED)
-        return StateOutcome(State.ADMIN_PAUSED, passes, failures, reasons, cooldown_out)
+        return _out(State.ADMIN_PAUSED, passes, failures)
 
     if in_cooldown:
         if Reason.IN_COOLDOWN not in reasons:
             reasons.append(Reason.IN_COOLDOWN)
-        return StateOutcome(State.COOLDOWN, passes, failures, reasons, cooldown_out)
+        return _out(State.COOLDOWN, passes, failures)
 
     if structural.passes:
         if passes >= params.ENTRY_HYSTERESIS_PASSES:
             if Reason.PASSED_HYSTERESIS not in reasons:
                 reasons.append(Reason.PASSED_HYSTERESIS)
-            return StateOutcome(State.ENTRY_ELIGIBLE, passes, failures, reasons, cooldown_out)
+            return _out(State.ENTRY_ELIGIBLE, passes, failures)
         # structurally eligible but still accruing the 2-pass hysteresis
-        return StateOutcome(State.WATCHLIST, passes, failures, reasons, cooldown_out)
+        return _out(State.WATCHLIST, passes, failures)
 
     # structurally failing
     was_eligible = prior in (State.ENTRY_ELIGIBLE,)
     if was_eligible and failures < params.REMOVAL_HYSTERESIS_FAILS:
         # sticky: one transient failure does not remove eligibility
-        return StateOutcome(State.ENTRY_ELIGIBLE, passes, failures, reasons, cooldown_out)
+        return _out(State.ENTRY_ELIGIBLE, passes, failures)
 
     has_data_reason = any(r in _DATA_REASONS for r in reasons)
     new_state = State.DATA_INELIGIBLE if has_data_reason else State.WATCHLIST
-    return StateOutcome(new_state, passes, failures, reasons, cooldown_out)
+    return _out(new_state, passes, failures)

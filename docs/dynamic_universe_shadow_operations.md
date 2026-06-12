@@ -7,8 +7,11 @@
 
 ```python
 from bot.universe.db import migrate
-migrate("/path/to/universe.db")   # idempotent; creates/updates the 6 tables to version 1
+migrate("/path/to/universe.db")   # idempotent; creates/updates the 6 tables to version 2
 ```
+Schema head is **version 2** (Pre-Enable R1, strictly additive: session-based cooldown
+fields, durable exit-event markers, append-only history triggers). Upgrading a v1 DB is
+additive and does not back-fill — see `docs/universe_db_schema.md`.
 
 ## Registry seed (idempotent, read-only on configs)
 
@@ -48,15 +51,21 @@ post-close gating and restart-safe idempotency.
   `rejected` (with `rejected_reason`: slot_cap_reached / sector_cap_reached /
   portfolio_heat_exceeded). **No PF / Sharpe / returns / rankings are computed or logged.**
 
-## Position-status seam (broker-free; task §3)
+## Position-status seam (broker-free; task §3 / P3-8 / P3-9, R1)
 
-The evaluator optionally takes an injected `PositionSnapshotProvider`
-(`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus`). It is
-broker-free by contract (a fixture / non-production snapshot — never a broker call) and
-drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle organically. `UNKNOWN` is
-fail-safe (no flat assumption, no entry, no forced liquidation, cooldown held); a
-provider error is coerced to `UNKNOWN`. With no provider injected the legacy
-prior-state + trend-break derivation is used.
+The evaluator takes an injected `PositionSnapshotProvider`
+(`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus |
+PositionSnapshot`). It is broker-free by contract (a fixture / non-production snapshot —
+never a broker call) and drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle
+organically. **The provider is authoritative (P3-8):** with **no provider injected** — or on
+a provider exception / timeout / malformed / unrecognised / stale value — the status is
+`UNKNOWN` (fail-safe: no flat assumption, no entry, no forced liquidation, cooldown held).
+There is no legacy prior-state fallback; a stale prior is descriptive history only.
+**Exit detection is durable and exactly-once (P3-9):** cooldown starts from an explicit
+durable `POSITION_EXITED` signal or an authoritative `OPEN → NO_POSITION` transition with
+evidence (`closed_trading_date` / `position_id`), de-duplicated by
+`last_processed_position_event_id`; it never starts from `UNKNOWN → NO_POSITION`, a
+no-evidence open→flat, or a provider error.
 
 ```python
 ev = ShadowEvaluator(Registry(db), bars_provider, flags, equity=100_000,
@@ -89,6 +98,10 @@ sched = DailyUniverseScheduler(ev, flags, bar_available_fn=lambda rec, td: bar_e
 * Unknown sector → `sector_unknown` recorded (non-blocking).
 * Idempotency conflict on history insert → skipped (already recorded); other DB errors
   propagate (not silently swallowed).
+* State + history are persisted ATOMICALLY (P3-3, R1) via
+  `Registry.persist_transition_atomic` in one `BEGIN IMMEDIATE` transaction — both commit or
+  both roll back, so a crash never leaves `universe_state` advanced without its history row
+  (no double-advance on the next run). History rows are physically append-only (v2 triggers).
 
 ## Offline rehearsal (task §6)
 
@@ -100,7 +113,10 @@ DATA_INELIGIBLE, HARD_DISABLED, the full POSITION_OPEN ⇄ EXIT_ONLY → COOLDOW
 with E+1..E+3 blocking and E+4 release, slot/sector/heat contention, IBKR-primary +
 IG-routing-blocked, multi-timezone scheduling, same-day idempotency, restart recovery,
 missing-bar skip, corporate-action UNKNOWN warning, and position-status UNKNOWN safe
-behaviour. It reports **operational metrics only** — never returns / PF / Sharpe /
+behaviour. The exit (E) is driven by a **durable `OPEN → NO_POSITION` + `closed_trading_date`
+transition (P3-9)** — not the deprecated transient `POSITION_EXITED_TODAY` — so the rehearsal
+exercises the robust exit path rather than masking the blocker. It reports **operational
+metrics only** — never returns / PF / Sharpe /
 winners / rankings (`format_report`). Determinism and the no-performance-metric guard
 are asserted in `tests/universe/test_rehearsal.py`.
 

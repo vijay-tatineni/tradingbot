@@ -31,11 +31,11 @@ def _src(sector="Tech", bars=True):
     return s
 
 
-def _preset_state(reg, state, passes=2, cooldown="0"):
+def _preset_state(reg, state, passes=2, cooldown=0, **extra):
     reg.upsert_state({"canonical_instrument_id": CID, "current_state": state,
                       "consecutive_passes": passes, "consecutive_failures": 0,
-                      "cooldown_until": cooldown,
-                      "evaluator_version": "dyn_universe_shadow_v1"})
+                      "cooldown_sessions_remaining": int(cooldown),
+                      "evaluator_version": "dyn_universe_shadow_v1", **extra})
 
 
 def _run(reg, prov, pos, date):
@@ -113,16 +113,22 @@ def test_provider_error_is_treated_as_unknown(tmp_path):
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
 
 
-def test_legacy_derivation_without_provider_unchanged(tmp_path):
-    # No provider injected → legacy prior-state derivation still works (back-compat).
+def test_no_provider_is_unknown_safe_not_stale_open(tmp_path):
+    # P3-8: with NO position provider injected, the status is UNKNOWN (fail-safe) — the
+    # evaluator must NOT fall back to the prior state as proof of position knowledge. A
+    # prior ENTRY_ELIGIBLE instrument therefore does NOT silently stay entry-eligible; it
+    # is held in the safe non-entry EXIT_ONLY state and the unknown is recorded loudly.
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.ENTRY_ELIGIBLE.value)
-    ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)  # no provider
     r = ev.maybe_run("2026-06-10")
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == CID][0]
-    # flat by derivation + passing → stays ENTRY_ELIGIBLE
-    assert o["new_state"] == State.ENTRY_ELIGIBLE.value
+    assert o["new_state"] == State.EXIT_ONLY.value            # UNKNOWN-safe hold
+    assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
+    assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]
+    # the stale prior is preserved only as descriptive history, never as current proof
+    assert reg.get_state(CID)["last_observed_position_status"] == "UNKNOWN"
 
 
 def test_cooldown_e1_e2_e3_block_e4_release_via_provider(tmp_path):

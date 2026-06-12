@@ -84,7 +84,7 @@ def test_exit_only_returns_to_position_open_when_eligibility_restored():
 def test_exit_only_exit_goes_to_cooldown():
     # EXIT_ONLY + position exited today → COOLDOWN (does not stay EXIT_ONLY).
     o = t(prior=State.EXIT_ONLY.value, elig=PASS,
-          has_open_position=True, exited_this_session=True)
+          has_open_position=True, exit_detected=True)
     assert o.new_state == State.COOLDOWN and o.cooldown_remaining == params.COOLDOWN_SESSIONS
 
 
@@ -95,7 +95,7 @@ def test_cooldown_exit_session_does_not_count_then_blocks_e1_e2_e3():
     # evaluation is E+4.
     # ── exit on E: cooldown set to 3, NOT decremented this session ──────────
     e = t(prior=State.POSITION_OPEN.value, elig=PASS,
-          has_open_position=True, exited_this_session=True)
+          has_open_position=True, exit_detected=True)
     assert e.new_state == State.COOLDOWN and e.cooldown_remaining == 3
     # ── E+1: still COOLDOWN ─────────────────────────────────────────────────
     e1 = t(prior=State.COOLDOWN.value, passes=1, cd=3, elig=PASS)

@@ -24,17 +24,22 @@ def _tables(db):
     return {r[0] for r in rows}
 
 
+# Current schema head (bumped to 2 by the R1 additive migration: session-based cooldown
+# fields, durable exit markers, append-only history triggers).
+HEAD_VERSION = 2
+
+
 def test_migrate_creates_all_tables(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 1
+    assert migrate(db) == HEAD_VERSION
     assert EXPECTED_TABLES.issubset(_tables(db))
 
 
 def test_migrate_is_idempotent(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 1
-    assert migrate(db) == 1          # rerun: no error, same version
-    assert current_version(db) == 1
+    assert migrate(db) == HEAD_VERSION
+    assert migrate(db) == HEAD_VERSION   # rerun: no error, same version
+    assert current_version(db) == HEAD_VERSION
     # rerunning a third time still leaves exactly the expected tables
     assert EXPECTED_TABLES.issubset(_tables(db))
 
@@ -100,20 +105,20 @@ def test_user_version_not_bumped_when_a_later_statement_fails(tmp_path, monkeypa
     """The version bump happens only AFTER every statement succeeds — a failure on the
     LAST schema statement must still leave user_version at the pre-migration value."""
     db = str(tmp_path / "universe.db")
-    migrate(db)                       # reach version 1 with the real schema
-    assert current_version(db) == 1
-    bad_v2 = [(2, [
-        "CREATE TABLE v2_added (x INTEGER)",
+    migrate(db)                       # reach the current head with the real schema
+    assert current_version(db) == HEAD_VERSION
+    bad_next = [(HEAD_VERSION + 1, [
+        "CREATE TABLE vnext_added (x INTEGER)",
         "THIS IS NOT VALID SQL",       # last statement fails
     ])]
-    # keep the real v1 + an additive failing v2
+    # keep the real migrations + an additive failing next version
     from bot.universe.migrations import MIGRATIONS as REAL
-    monkeypatch.setattr("bot.universe.db.MIGRATIONS", list(REAL) + bad_v2)
+    monkeypatch.setattr("bot.universe.db.MIGRATIONS", list(REAL) + bad_next)
     with pytest.raises(sqlite3.OperationalError):
         migrate(db)
-    assert current_version(db) == 1            # NOT advanced to 2
-    assert "v2_added" not in _objects(db)      # its table rolled back
-    assert EXPECTED_TABLES.issubset(_objects(db))  # v1 schema intact
+    assert current_version(db) == HEAD_VERSION    # NOT advanced
+    assert "vnext_added" not in _objects(db)      # its table rolled back
+    assert EXPECTED_TABLES.issubset(_objects(db))  # real schema intact
 
 
 def test_concurrent_migration_does_not_corrupt_schema(tmp_path):
@@ -134,9 +139,9 @@ def test_concurrent_migration_does_not_corrupt_schema(tmp_path):
     assert not (EXPECTED_TABLES & _objects(db))
     assert current_version(db) == 0
     # Lock released → a clean retry fully and atomically migrates.
-    assert migrate(db) == 1
+    assert migrate(db) == HEAD_VERSION
     assert EXPECTED_TABLES.issubset(_objects(db))
-    assert current_version(db) == 1
+    assert current_version(db) == HEAD_VERSION
 
 
 def test_migrate_uses_no_implicit_commit_executescript(tmp_path):
