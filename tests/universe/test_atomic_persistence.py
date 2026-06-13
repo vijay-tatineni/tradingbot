@@ -12,7 +12,9 @@ import sqlite3
 import pytest
 
 from bot.universe.db import connect, migrate
-from bot.universe.registry import Registry
+from bot.universe.registry import (
+    Registry, StateHistoryConsistencyError, TransitionConflictError,
+)
 
 CID = "US_AAPL"
 VER = "dyn_universe_shadow_v1"
@@ -131,35 +133,122 @@ def test_retry_after_rollback_succeeds(tmp_path):
     assert _counts(db) == (1, 1)
 
 
-# ── idempotency ─────────────────────────────────────────────────────────────--
-def test_replay_is_idempotent_no_duplicate_no_double_advance(tmp_path):
+# ── content-aware idempotency (R1.1 §6) ────────────────────────────────────────
+def test_identical_replay_is_idempotent_no_op(tmp_path):
     reg, db = _reg(tmp_path)
     assert reg.persist_transition_atomic(
         _state(state="COOLDOWN", remaining=2), _history(new_state="COOLDOWN")) is True
-    # a retried-after-success run for the same (cid, date, version): the state dict even
-    # carries a DIFFERENT (double-advanced) count, but the duplicate history key makes the
-    # whole tx a no-op → neither the history nor the state changes.
+    # byte-identical replay of the SAME transition → idempotent no-op (no duplicate row).
     assert reg.persist_transition_atomic(
-        _state(state="COOLDOWN", remaining=1), _history(new_state="COOLDOWN")) is False
-    s, h = _counts(db)
-    assert h == 1                            # no duplicate history
+        _state(state="COOLDOWN", remaining=2), _history(new_state="COOLDOWN")) is False
+    assert _counts(db) == (1, 1)
+
+
+def test_conflicting_cooldown_result_raises_not_silent_no_op(tmp_path):
+    # R1.1: the same key with a DIFFERENT cooldown result is a conflict (the R1 silent
+    # no-op was Finding 3) — fail closed and leave the prior state untouched.
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(state="COOLDOWN", remaining=2), _history(new_state="COOLDOWN"))
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(state="COOLDOWN", remaining=1), _history(new_state="COOLDOWN"))
     with connect(db) as conn:
         remaining = conn.execute(
             "SELECT cooldown_sessions_remaining FROM universe_state WHERE canonical_instrument_id=?",
             (CID,)).fetchone()[0]
-    assert remaining == 2                    # NOT double-advanced to 1
+    assert remaining == 2 and _counts(db) == (1, 1)   # untouched, no double-advance
 
 
-def test_idempotency_conflict_leaves_prior_state_untouched(tmp_path):
-    # pre-existing history row for the key (as if a prior writer committed); a second
-    # persist for the same key must roll back and not perturb the prior state.
+def test_conflicting_new_state_raises(tmp_path):
     reg, db = _reg(tmp_path)
     reg.persist_transition_atomic(_state(state="WATCHLIST"), _history(new_state="WATCHLIST"))
     before = _state_value(db)
-    assert reg.persist_transition_atomic(
-        _state(state="ENTRY_ELIGIBLE"), _history(new_state="ENTRY_ELIGIBLE")) is False
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(state="ENTRY_ELIGIBLE"), _history(new_state="ENTRY_ELIGIBLE"))
     assert _state_value(db) == before        # unchanged (still WATCHLIST)
     assert _counts(db) == (1, 1)
+
+
+def test_conflicting_snapshot_hash_raises(tmp_path):
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(), _history(feature_snapshot_hash="HASH_A"))
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(), _history(feature_snapshot_hash="HASH_B"))
+
+
+def test_conflicting_close_event_raises(tmp_path):
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(last_processed_position_event_id="ev-1"), _history())
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(last_processed_position_event_id="ev-2"), _history())
+
+
+def test_history_without_current_state_raises_consistency(tmp_path):
+    # a history row with NO matching current-state row is a broken pair → consistency error.
+    reg, db = _reg(tmp_path)
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO universe_state_history (canonical_instrument_id, trading_date, "
+            "new_state, evaluator_version, created_at) VALUES (?,?,?,?,?)",
+            (CID, "2026-06-10", "WATCHLIST", VER, "t"))
+    with pytest.raises(StateHistoryConsistencyError):
+        reg.persist_transition_atomic(_state(state="WATCHLIST"), _history(new_state="WATCHLIST"))
+
+
+def test_state_history_divergence_raises_consistency(tmp_path):
+    # history.new_state and the current-state row disagree for the same date → consistency.
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(_state(state="WATCHLIST"), _history(new_state="WATCHLIST"))
+    # corrupt the current-state row to disagree with its history (bypassing append-only).
+    with connect(db) as conn:
+        conn.execute(
+            "UPDATE universe_state SET current_state='ENTRY_ELIGIBLE' WHERE canonical_instrument_id=?",
+            (CID,))
+    with pytest.raises(StateHistoryConsistencyError):
+        reg.persist_transition_atomic(_state(state="WATCHLIST"), _history(new_state="WATCHLIST"))
+
+
+def test_authoritative_and_close_markers_roll_back_together(tmp_path):
+    # R1.1 §10: the authoritative-marker and close-event updates are columns in the single
+    # state upsert, so a fault at any seam rolls them back together with state + history —
+    # there is no partially-updated authoritative evidence or half-processed close event.
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(state="POSITION_OPEN",
+               last_authoritative_position_status="POSITION_OPEN",
+               last_processed_position_event_id="ev-old",
+               last_position_close_trading_date="2026-06-09",
+               position_reconciliation_required=0),
+        _history(date="2026-06-09", new_state="POSITION_OPEN"))
+
+    def hook(seam):
+        if seam == "after_state":          # markers written, COMMIT not yet reached
+            raise RuntimeError("fault after marker update")
+
+    with pytest.raises(RuntimeError):
+        reg.persist_transition_atomic(
+            _state(state="COOLDOWN",
+                   last_authoritative_position_status="NO_POSITION",
+                   last_processed_position_event_id="ev-new",
+                   last_position_close_trading_date="2026-06-10",
+                   position_reconciliation_required=1),
+            _history(date="2026-06-10", new_state="COOLDOWN"), _fault_hook=hook)
+
+    with connect(db) as conn:
+        row = conn.execute(
+            "SELECT current_state, last_authoritative_position_status, "
+            "last_processed_position_event_id, last_position_close_trading_date, "
+            "position_reconciliation_required FROM universe_state "
+            "WHERE canonical_instrument_id=?", (CID,)).fetchone()
+    # every marker remains at the PRIOR committed value — none partially advanced.
+    assert row == ("POSITION_OPEN", "POSITION_OPEN", "ev-old", "2026-06-09", 0)
+    assert _counts(db) == (1, 1)           # the failed transition's history rolled back too
 
 
 # ── concurrency: BEGIN IMMEDIATE serialises writers ────────────────────────────

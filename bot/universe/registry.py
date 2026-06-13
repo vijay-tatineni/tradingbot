@@ -29,6 +29,72 @@ def _loads(text):
     return json.loads(text) if text else None
 
 
+class TransitionConflictError(Exception):
+    """A persist was attempted for an existing idempotency key
+    (canonical_instrument_id, trading_date, evaluator_version) whose stored content
+    DIVERGES from the proposed transition (different new_state / feature hash / cooldown
+    result / lifecycle event / authoritative markers). R1.1 fails closed and reports it
+    rather than silently accepting a conflicting replay as an idempotent no-op."""
+
+
+class StateHistoryConsistencyError(Exception):
+    """A persist found the stored (history, current-state) pair inconsistent: history exists
+    but the current-state row is missing, or the current-state row reflects an
+    incompatible later/earlier transition than the history row for this key. R1.1 fails
+    closed and reports it; it does NOT silently repair or overwrite."""
+
+
+# ── universe_state column registry (single source of truth) ─────────────────────
+# The migration DDL, persist_transition_atomic, and upsert_state all derive their column
+# handling from THIS tuple, so a new column can never be added to the schema yet silently
+# dropped from a write path (the exact failure mode that re-introduced the R1 bug).
+_STATE_COLUMNS = (
+    "canonical_instrument_id", "current_state", "previous_state", "reason_codes",
+    "consecutive_passes", "consecutive_failures", "eligible_since", "ineligible_since",
+    "cooldown_until", "evaluated_trading_date", "evaluated_at", "feature_snapshot_hash",
+    "evaluator_version",
+    # ── v2 (R1) ──
+    "cooldown_started_trading_date", "cooldown_sessions_remaining",
+    "cooldown_last_counted_trading_date", "cooldown_release_estimate",
+    "last_observed_position_status", "last_observed_position_id_hash",
+    "last_processed_position_event_id", "last_position_close_trading_date",
+    # ── v3 (R1.1) authoritative-continuity columns ──
+    "latest_observed_position_status", "latest_observed_at",
+    "last_authoritative_position_status", "last_authoritative_position_id_hash",
+    "last_authoritative_observed_at", "position_reconciliation_required",
+)
+
+
+def _state_value(col, rec):
+    """Normalise one column's value from a state dict for persistence."""
+    if col == "evaluated_at":
+        return rec.get("evaluated_at", _utc_now_iso())
+    if col == "reason_codes":
+        return _dumps(rec.get("reason_codes"))
+    if col in ("consecutive_passes", "consecutive_failures"):
+        return int(rec.get(col, 0))
+    if col == "cooldown_sessions_remaining":
+        v = rec.get(col)
+        return int(v) if v is not None else None
+    if col == "position_reconciliation_required":
+        return 1 if rec.get(col) else 0
+    return rec.get(col)
+
+
+def _state_params(rec):
+    return tuple(_state_value(c, rec) for c in _STATE_COLUMNS)
+
+
+def _state_insert_sql():
+    cols = ", ".join(_STATE_COLUMNS)
+    placeholders = ", ".join("?" for _ in _STATE_COLUMNS)
+    updates = ",\n                        ".join(
+        f"{c}=excluded.{c}" for c in _STATE_COLUMNS if c != "canonical_instrument_id")
+    return (f"INSERT INTO universe_state ({cols}) VALUES ({placeholders})\n"
+            f"                    ON CONFLICT(canonical_instrument_id) DO UPDATE SET\n"
+            f"                        {updates}")
+
+
 class Registry:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -223,64 +289,12 @@ class Registry:
     def upsert_state(self, rec: dict) -> None:
         """Direct current-state upsert. Retained for test setup and back-compat; the
         evaluator persists transitions via persist_transition_atomic (P3-3), not this.
-        Omitted v2 columns are written NULL — a v1-style preset that sets only the legacy
-        `cooldown_until` therefore yields an AMBIGUOUS row (cooldown_sessions_remaining
-        NULL) by construction (P3-2)."""
-        sr = rec.get("cooldown_sessions_remaining")
+        Omitted columns are written NULL/default — a v1-style preset that sets only the
+        legacy `cooldown_until` therefore yields an AMBIGUOUS row (cooldown_sessions_remaining
+        NULL) by construction (P3-2). Column handling is shared with the atomic persist via
+        the single ``_STATE_COLUMNS`` registry (lockstep — no column can be silently dropped)."""
         with connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO universe_state
-                    (canonical_instrument_id, current_state, previous_state, reason_codes,
-                     consecutive_passes, consecutive_failures, eligible_since,
-                     ineligible_since, cooldown_until, evaluated_trading_date,
-                     evaluated_at, feature_snapshot_hash, evaluator_version,
-                     cooldown_started_trading_date, cooldown_sessions_remaining,
-                     cooldown_last_counted_trading_date, cooldown_release_estimate,
-                     last_observed_position_status, last_observed_position_id_hash,
-                     last_processed_position_event_id, last_position_close_trading_date)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(canonical_instrument_id) DO UPDATE SET
-                    current_state=excluded.current_state,
-                    previous_state=excluded.previous_state,
-                    reason_codes=excluded.reason_codes,
-                    consecutive_passes=excluded.consecutive_passes,
-                    consecutive_failures=excluded.consecutive_failures,
-                    eligible_since=excluded.eligible_since,
-                    ineligible_since=excluded.ineligible_since,
-                    cooldown_until=excluded.cooldown_until,
-                    evaluated_trading_date=excluded.evaluated_trading_date,
-                    evaluated_at=excluded.evaluated_at,
-                    feature_snapshot_hash=excluded.feature_snapshot_hash,
-                    evaluator_version=excluded.evaluator_version,
-                    cooldown_started_trading_date=excluded.cooldown_started_trading_date,
-                    cooldown_sessions_remaining=excluded.cooldown_sessions_remaining,
-                    cooldown_last_counted_trading_date=excluded.cooldown_last_counted_trading_date,
-                    cooldown_release_estimate=excluded.cooldown_release_estimate,
-                    last_observed_position_status=excluded.last_observed_position_status,
-                    last_observed_position_id_hash=excluded.last_observed_position_id_hash,
-                    last_processed_position_event_id=excluded.last_processed_position_event_id,
-                    last_position_close_trading_date=excluded.last_position_close_trading_date
-                """,
-                (
-                    rec["canonical_instrument_id"], rec["current_state"],
-                    rec.get("previous_state"), _dumps(rec.get("reason_codes")),
-                    int(rec.get("consecutive_passes", 0)),
-                    int(rec.get("consecutive_failures", 0)),
-                    rec.get("eligible_since"), rec.get("ineligible_since"),
-                    rec.get("cooldown_until"), rec.get("evaluated_trading_date"),
-                    rec.get("evaluated_at", _utc_now_iso()),
-                    rec.get("feature_snapshot_hash"), rec.get("evaluator_version"),
-                    rec.get("cooldown_started_trading_date"),
-                    (int(sr) if sr is not None else None),
-                    rec.get("cooldown_last_counted_trading_date"),
-                    rec.get("cooldown_release_estimate"),
-                    rec.get("last_observed_position_status"),
-                    rec.get("last_observed_position_id_hash"),
-                    rec.get("last_processed_position_event_id"),
-                    rec.get("last_position_close_trading_date"),
-                ),
-            )
+            conn.execute(_state_insert_sql(), _state_params(rec))
 
     def has_history(self, cid: str, trading_date: str, evaluator_version: str) -> bool:
         """Idempotency check: (canonical instrument + trading date + evaluator version)."""
@@ -329,75 +343,54 @@ class Registry:
                 "SELECT COUNT(*) FROM universe_state_history WHERE canonical_instrument_id=?",
                 (cid,)).fetchone()[0])
 
-    # ── P3-3: atomic current-state + history persistence ─────────────
-    _STATE_COLUMNS = (
-        "canonical_instrument_id", "current_state", "previous_state", "reason_codes",
-        "consecutive_passes", "consecutive_failures", "eligible_since",
-        "ineligible_since", "cooldown_until", "evaluated_trading_date", "evaluated_at",
-        "feature_snapshot_hash", "evaluator_version",
-        # ── v2 (R1) additive columns ──
-        "cooldown_started_trading_date", "cooldown_sessions_remaining",
-        "cooldown_last_counted_trading_date", "cooldown_release_estimate",
-        "last_observed_position_status", "last_observed_position_id_hash",
-        "last_processed_position_event_id", "last_position_close_trading_date",
+    # ── P3-3 / R1.1: atomic, content-aware current-state + history persistence ──
+    # History-comparison columns (for content-aware idempotency, R1.1 §6).
+    _HISTORY_COMPARE = ("prior_state", "new_state", "reason_codes_json", "feature_snapshot_hash")
+    # Current-state columns whose divergence (for the SAME key/date) is a real conflict.
+    _STATE_COMPARE = (
+        "current_state", "cooldown_sessions_remaining", "cooldown_started_trading_date",
+        "cooldown_last_counted_trading_date", "last_processed_position_event_id",
+        "last_position_close_trading_date", "last_authoritative_position_status",
+        "last_authoritative_position_id_hash", "position_reconciliation_required",
     )
 
     def persist_transition_atomic(self, state: dict, history: dict,
                                   _fault_hook=None) -> bool:
         """Write the current-state UPSERT and the append-only history row for ONE
-        transition inside a SINGLE explicit ``BEGIN IMMEDIATE`` transaction (P3-3).
+        transition inside a SINGLE explicit ``BEGIN IMMEDIATE`` transaction (P3-3) with
+        CONTENT-AWARE idempotency reconciliation (R1.1 §6).
 
         Invariant: the two writes COMMIT together or ROLL BACK together — there is no
         observable state where ``universe_state`` advanced without its history row, or a
-        history row exists without the matching state. The history row is written FIRST so
-        its UNIQUE idempotency index (canonical_instrument_id, trading_date,
-        evaluator_version) is the gate: a duplicate transition rolls the whole tx back and
-        is a no-op (neither table changes), so a retried-after-success run never
-        double-advances counters and never duplicates history.
+        history row exists without the matching state.
 
-        Returns True if persisted, False if it was an idempotent no-op (history row for
-        this (instrument, date, version) already existed). Any non-idempotency error rolls
-        back and re-raises.
+        On a duplicate idempotency key (canonical_instrument_id, trading_date,
+        evaluator_version) the stored content is compared to the proposed transition
+        INSIDE the transaction (so the read is consistent under the write lock):
 
-        ``_fault_hook`` is a test-only seam: a callable invoked with a seam name
-        ("after_history", "after_state", "at_commit") at which it may raise to prove the
-        all-or-nothing rollback. Production callers never pass it.
+          * identical content (history fields AND current-state lifecycle/cooldown/
+            authoritative markers all agree) → idempotent no-op → returns False;
+          * divergent content (different new_state / feature hash / cooldown result /
+            lifecycle event / authoritative markers) → ``TransitionConflictError``;
+          * stored history without a current-state row, or a current-state row that
+            reflects an incompatible later/earlier transition → ``StateHistoryConsistencyError``.
 
-        Explicit transaction control mirrors db.migrate: ``isolation_level = None`` (no
-        implicit BEGIN/COMMIT) and individual ``conn.execute`` statements — NEVER
-        ``executescript()`` (which would force an implicit COMMIT and defeat the boundary).
+        A conflict/inconsistency is NEVER silently accepted as a no-op and is NEVER
+        silently repaired — it rolls back and fails closed.
+
+        Returns True if persisted (new), False if idempotent no-op. ``_fault_hook`` is a
+        test-only seam (``"after_history"``, ``"after_state"``, ``"at_commit"``).
+        Explicit transaction control mirrors db.migrate (``isolation_level = None``; no
+        ``executescript()``). The current-state column handling is shared with upsert_state
+        via the single ``_STATE_COLUMNS`` registry (lockstep).
         """
         def fault(seam):
             if _fault_hook is not None:
                 _fault_hook(seam)
 
-        hist_params = (
-            history["canonical_instrument_id"], history["trading_date"],
-            history.get("prior_state"), history["new_state"],
-            _dumps(history.get("reason_codes")),
-            _dumps(history.get("feature_snapshot")),
-            history.get("feature_snapshot_hash"), history["evaluator_version"],
-            _utc_now_iso(),
-        )
-        sr = state.get("cooldown_sessions_remaining")
-        state_params = (
-            state["canonical_instrument_id"], state["current_state"],
-            state.get("previous_state"), _dumps(state.get("reason_codes")),
-            int(state.get("consecutive_passes", 0)),
-            int(state.get("consecutive_failures", 0)),
-            state.get("eligible_since"), state.get("ineligible_since"),
-            state.get("cooldown_until"), state.get("evaluated_trading_date"),
-            state.get("evaluated_at", _utc_now_iso()),
-            state.get("feature_snapshot_hash"), state.get("evaluator_version"),
-            state.get("cooldown_started_trading_date"),
-            (int(sr) if sr is not None else None),
-            state.get("cooldown_last_counted_trading_date"),
-            state.get("cooldown_release_estimate"),
-            state.get("last_observed_position_status"),
-            state.get("last_observed_position_id_hash"),
-            state.get("last_processed_position_event_id"),
-            state.get("last_position_close_trading_date"),
-        )
+        cid = history["canonical_instrument_id"]
+        td = history["trading_date"]
+        ver = history["evaluator_version"]
 
         conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.isolation_level = None      # WE own the transaction boundary
@@ -405,68 +398,47 @@ class Registry:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("BEGIN IMMEDIATE")
             try:
-                # 1) history FIRST — UNIQUE idempotency index is the gate.
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO universe_state_history
-                            (canonical_instrument_id, trading_date, prior_state, new_state,
-                             reason_codes, feature_snapshot_json, feature_snapshot_hash,
-                             evaluator_version, created_at)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                        """,
-                        hist_params,
-                    )
-                except sqlite3.IntegrityError:
-                    # duplicate (instrument, date, version) → idempotent no-op; roll the
-                    # whole tx back so NEITHER table is touched.
-                    conn.execute("ROLLBACK")
-                    return False
-                fault("after_history")
-                # 2) then the mutable current state.
+                # 0) content-aware reconciliation if this key already exists.
+                existing_h = conn.execute(
+                    "SELECT prior_state, new_state, reason_codes, feature_snapshot_hash "
+                    "FROM universe_state_history "
+                    "WHERE canonical_instrument_id=? AND trading_date=? AND evaluator_version=?",
+                    (cid, td, ver)).fetchone()
+                if existing_h is not None:
+                    verdict = self._reconcile_duplicate(conn, existing_h, state, history, td)
+                    conn.execute("ROLLBACK")     # nothing to write on a duplicate key
+                    if verdict == "idempotent":
+                        return False
+                    # _reconcile_duplicate raises on conflict/inconsistency; defensive:
+                    raise TransitionConflictError(
+                        f"unreconciled duplicate transition for {cid} {td}")
+
+                # 1) history FIRST — append-only; UNIQUE index is the structural backstop.
                 conn.execute(
                     """
-                    INSERT INTO universe_state
-                        (canonical_instrument_id, current_state, previous_state, reason_codes,
-                         consecutive_passes, consecutive_failures, eligible_since,
-                         ineligible_since, cooldown_until, evaluated_trading_date,
-                         evaluated_at, feature_snapshot_hash, evaluator_version,
-                         cooldown_started_trading_date, cooldown_sessions_remaining,
-                         cooldown_last_counted_trading_date, cooldown_release_estimate,
-                         last_observed_position_status, last_observed_position_id_hash,
-                         last_processed_position_event_id, last_position_close_trading_date)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(canonical_instrument_id) DO UPDATE SET
-                        current_state=excluded.current_state,
-                        previous_state=excluded.previous_state,
-                        reason_codes=excluded.reason_codes,
-                        consecutive_passes=excluded.consecutive_passes,
-                        consecutive_failures=excluded.consecutive_failures,
-                        eligible_since=excluded.eligible_since,
-                        ineligible_since=excluded.ineligible_since,
-                        cooldown_until=excluded.cooldown_until,
-                        evaluated_trading_date=excluded.evaluated_trading_date,
-                        evaluated_at=excluded.evaluated_at,
-                        feature_snapshot_hash=excluded.feature_snapshot_hash,
-                        evaluator_version=excluded.evaluator_version,
-                        cooldown_started_trading_date=excluded.cooldown_started_trading_date,
-                        cooldown_sessions_remaining=excluded.cooldown_sessions_remaining,
-                        cooldown_last_counted_trading_date=excluded.cooldown_last_counted_trading_date,
-                        cooldown_release_estimate=excluded.cooldown_release_estimate,
-                        last_observed_position_status=excluded.last_observed_position_status,
-                        last_observed_position_id_hash=excluded.last_observed_position_id_hash,
-                        last_processed_position_event_id=excluded.last_processed_position_event_id,
-                        last_position_close_trading_date=excluded.last_position_close_trading_date
+                    INSERT INTO universe_state_history
+                        (canonical_instrument_id, trading_date, prior_state, new_state,
+                         reason_codes, feature_snapshot_json, feature_snapshot_hash,
+                         evaluator_version, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
                     """,
-                    state_params,
+                    (cid, td, history.get("prior_state"), history["new_state"],
+                     _dumps(history.get("reason_codes")),
+                     _dumps(history.get("feature_snapshot")),
+                     history.get("feature_snapshot_hash"), ver, _utc_now_iso()),
                 )
+                fault("after_history")
+                # 2) then the mutable current state + ALL lifecycle/authoritative markers
+                #    (single statement → the authoritative-marker / close-event / cooldown
+                #    updates are one atomic seam with the state upsert).
+                conn.execute(_state_insert_sql(), _state_params(state))
                 fault("after_state")
                 fault("at_commit")
                 conn.execute("COMMIT")
                 return True
             except BaseException:
-                # Any non-idempotency failure (including an injected fault): roll BOTH
-                # writes back together and re-raise. State remains the prior state.
+                # Any failure (conflict, inconsistency, injected fault, DB error): roll
+                # BOTH writes back together and re-raise. State remains the prior state.
                 try:
                     conn.execute("ROLLBACK")
                 except Exception:
@@ -474,3 +446,63 @@ class Registry:
                 raise
         finally:
             conn.close()
+
+    def _reconcile_duplicate(self, conn, existing_h, state, history, trading_date) -> str:
+        """Compare a stored transition (existing history row + current-state row) against a
+        proposed one for the SAME idempotency key. Returns "idempotent" if identical; raises
+        TransitionConflictError on divergent content or StateHistoryConsistencyError on a
+        broken history/state pair. Read-only (the caller rolls back)."""
+        cid = history["canonical_instrument_id"]
+        ex_prior, ex_new, ex_reasons, ex_hash = existing_h
+
+        row = conn.execute(
+            "SELECT current_state, evaluated_trading_date, cooldown_sessions_remaining, "
+            "cooldown_started_trading_date, cooldown_last_counted_trading_date, "
+            "last_processed_position_event_id, last_position_close_trading_date, "
+            "last_authoritative_position_status, last_authoritative_position_id_hash, "
+            "position_reconciliation_required "
+            "FROM universe_state WHERE canonical_instrument_id=?", (cid,)).fetchone()
+        if row is None:
+            raise StateHistoryConsistencyError(
+                f"history row exists for {cid} {trading_date} but the current-state row is missing")
+        (s_state, s_eval_date, s_cd_rem, s_cd_start, s_cd_last, s_event, s_close,
+         s_auth_status, s_auth_pid, s_recon) = row
+
+        # The current-state row must reflect THIS transition's date; a different date means
+        # the state reflects an incompatible later/earlier transition than this history row.
+        if s_eval_date != trading_date:
+            raise StateHistoryConsistencyError(
+                f"history exists for {cid} {trading_date} but current state reflects "
+                f"{s_eval_date} (incompatible later/earlier transition)")
+        # State/history must agree on the new state for this date.
+        if s_state != ex_new:
+            raise StateHistoryConsistencyError(
+                f"current_state={s_state!r} disagrees with history.new_state={ex_new!r} "
+                f"for {cid} {trading_date}")
+
+        # Content comparison: history fields ...
+        prop_cd_rem = state.get("cooldown_sessions_remaining")
+        prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
+        history_same = (
+            ex_prior == history.get("prior_state")
+            and ex_new == history["new_state"]
+            and ex_reasons == _dumps(history.get("reason_codes"))
+            and ex_hash == history.get("feature_snapshot_hash"))
+        # ... and current-state lifecycle / cooldown / authoritative markers.
+        state_same = (
+            s_state == state["current_state"]
+            and s_cd_rem == prop_cd_rem
+            and s_cd_start == state.get("cooldown_started_trading_date")
+            and s_cd_last == state.get("cooldown_last_counted_trading_date")
+            and s_event == state.get("last_processed_position_event_id")
+            and s_close == state.get("last_position_close_trading_date")
+            and s_auth_status == state.get("last_authoritative_position_status")
+            and s_auth_pid == state.get("last_authoritative_position_id_hash")
+            and int(s_recon or 0) == (1 if state.get("position_reconciliation_required") else 0))
+
+        if history_same and state_same:
+            return "idempotent"
+        raise TransitionConflictError(
+            f"duplicate idempotency key with DIVERGENT content for {cid} {trading_date}: "
+            f"the same (instrument, date, evaluator_version) was already recorded with a "
+            f"different transition/lifecycle result")

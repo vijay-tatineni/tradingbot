@@ -18,6 +18,13 @@ COOLDOWN         post-exit cooldown (3 completed sessions)
 ADMIN_PAUSED     operator off/paused, flat (blocks entries; not an open position)
 ```
 
+`position_reconciliation_required` (R1.1) is a durable BLOCK surfaced as `EXIT_ONLY` with
+reason `position_reconciliation_required` (not a separate state): the last authoritative
+status was `POSITION_OPEN` and the position is now reported flat without durable closure
+evidence (or only via a non-authoritative observation). It blocks new entry, never forces
+liquidation, holds cooldown, and persists until an authoritative `POSITION_OPEN` or an
+evidence-bearing close clears it.
+
 ## Dominance / rules (explicit precedence)
 
 ```text
@@ -85,39 +92,48 @@ WATCHLIST and must re-accrue two passing sessions (ENTRY_ELIGIBLE at E+5). The c
 *block* is fully released at E+4 — that is the §2 invariant; the re-accrual is the
 ordinary entry hysteresis, applied conservatively.
 
-## Position status seam (task §3 / P3-8 / P3-9, R1)
+## Position status seam (task §3 / P3-8 / P3-9, R1.1)
 
 POSITION_OPEN / EXIT_ONLY / COOLDOWN are driven by an INJECTED, broker-free
 `PositionSnapshotProvider` returning a `PositionStatus` **or** a richer `PositionSnapshot`
 (status + durable exit evidence: `position_id`, `opened_/closed_trading_date`,
-`source_version` — never account ids / quantities / prices). The provider never calls a
-broker.
+`close_event_id`, `explicitly_closed`, `observed_at`, `source_version` — never account ids /
+quantities / prices). The provider never calls a broker.
 
-**Authoritative contract (P3-8):** there is NO legacy prior-state fallback. When **no
-provider** is injected — or the provider raises / times out / returns a malformed,
-unrecognised, or stale/absent value — the status is `UNKNOWN` (fail-safe). A stale prior
-state is preserved only as descriptive history (`last_observed_position_status`), never as
-proof of a current position.
+**Authoritative vs latest (P3-8, R1.1).** Only `POSITION_OPEN` / `NO_POSITION` /
+`POSITION_EXITED` (+ honoured-deprecated `POSITION_EXITED_TODAY`) from a FRESH, in-order,
+non-future snapshot are *authoritative*. `UNKNOWN`, a provider exception/timeout, a malformed
+/ unrecognised value, a stale (> `MAX_POSITION_SNAPSHOT_STALENESS_DAYS`) or out-of-order
+observation, and a missing provider are *non-authoritative* → resolved as `UNKNOWN`
+(fail-safe). The evaluator persists the **latest** observation (`latest_observed_*`, which a
+non-authoritative observation MAY overwrite) separately from the **last authoritative**
+evidence (`last_authoritative_*`, which a non-authoritative observation NEVER erases). There
+is no legacy prior-state fallback.
 
 ```text
-NO_POSITION            → flat branch (WATCHLIST/ENTRY_ELIGIBLE/COOLDOWN/…)
-POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused)
+POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused);
+                         clears any reconciliation block; refreshes authoritative evidence
+NO_POSITION (auth.)    → if last authoritative was OPEN and durable closure evidence present
+                         → COOLDOWN (exit on E); if OPEN without evidence → reconciliation;
+                         else ordinary flat branch (WATCHLIST/ENTRY_ELIGIBLE/…)
 POSITION_EXITED        → durable exit signal → COOLDOWN (exit on E)
 POSITION_EXITED_TODAY  → DEPRECATED transient exit signal (still honoured) → COOLDOWN
-UNKNOWN                → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
-                         never forced liquidation, cooldown held (do not assume flat)
-no provider / error    → UNKNOWN (as above) — never a retained stale open
+UNKNOWN / non-auth.    → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
+                         never forced liquidation, cooldown held; authoritative evidence kept
+reconciliation block   → EXIT_ONLY, reason position_reconciliation_required (durable)
 ```
 
-**Durable, exactly-once exit (P3-9):** cooldown no longer depends on observing the transient
-`POSITION_EXITED_TODAY`. The evaluator starts cooldown when it sees an explicit durable
-exit signal, OR an authoritative `last_observed = POSITION_OPEN` → current `NO_POSITION`
-transition **with durable evidence** (`closed_trading_date` or `position_id`). A
-no-evidence open→flat, `UNKNOWN → NO_POSITION`, or a provider error does **not** start
-cooldown. A durable `last_processed_position_event_id` de-duplicates a replayed close (no
-restart); a genuinely new later close starts a fresh cooldown. `last_observed_position_status`
-is persisted every run (including `UNKNOWN`, and `NO_POSITION` after an exit) so
-`OPEN→UNKNOWN→NO_POSITION` cannot false-trigger.
+**Durable, exactly-once exit (P3-9, R1.1).** Cooldown does NOT depend on the transient
+`POSITION_EXITED_TODAY`. It starts when the evaluator sees an explicit durable exit signal,
+OR an authoritative `last_authoritative_position_status == POSITION_OPEN` → current
+`NO_POSITION` transition **with EXPLICIT closure evidence** (`closed_trading_date` /
+`close_event_id` / `explicitly_closed`; a bare `position_id` is **not** evidence). A
+no-evidence open→flat sets `position_reconciliation_required` (no cooldown, no flat
+assumption). `UNKNOWN → NO_POSITION` and provider errors never start cooldown. Because the
+authoritative anchor survives a `UNKNOWN` outage, an exit during the outage
+(`OPEN → UNKNOWN → NO_POSITION+evidence`) IS detected — exactly once, de-duplicated by
+`last_processed_position_event_id` (with a stale-close guard so an older close never restarts
+a newer lifecycle); a genuinely new later close starts a fresh cooldown.
 
 ## Structural eligibility (inputs to the transition)
 

@@ -24,9 +24,9 @@ def _tables(db):
     return {r[0] for r in rows}
 
 
-# Current schema head (bumped to 2 by the R1 additive migration: session-based cooldown
-# fields, durable exit markers, append-only history triggers).
-HEAD_VERSION = 2
+# Current schema head: v2 (R1: session-based cooldown, durable exit markers, append-only
+# history triggers) + v3 (R1.1: authoritative-continuity fields + reconciliation block).
+HEAD_VERSION = 3
 
 
 def test_migrate_creates_all_tables(tmp_path):

@@ -52,9 +52,9 @@ def test_v1_to_v2_adds_fields_and_preserves_rows(tmp_path, monkeypatch):
         conn.execute(
             "INSERT INTO universe_state (canonical_instrument_id, current_state, "
             "cooldown_until) VALUES (?,?,?)", (CID, "COOLDOWN", "3"))
-    # restore full migrations → upgrade to v2.
+    # restore full migrations → upgrade to head.
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
-    assert migrate(db) == 2
+    assert migrate(db) == 3
     assert V2_COLUMNS.issubset(_state_columns(db))   # all v2 columns present
     with connect(db) as conn:
         row = dict(zip([d[0] for d in conn.execute(
@@ -65,26 +65,49 @@ def test_v1_to_v2_adds_fields_and_preserves_rows(tmp_path, monkeypatch):
     assert row["cooldown_sessions_remaining"] is None  # NOT back-filled / inferred
 
 
-def test_v2_migration_rerun_is_idempotent(tmp_path):
+def test_migration_rerun_is_idempotent(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 2
-    assert migrate(db) == 2                           # rerun: no-op, no error
-    assert current_version(db) == 2
+    assert migrate(db) == 3
+    assert migrate(db) == 3                           # rerun: no-op, no error
+    assert current_version(db) == 3
 
 
-def test_v2_migration_rolls_back_atomically_on_failure(tmp_path, monkeypatch):
+def test_migration_rolls_back_atomically_on_failure(tmp_path, monkeypatch):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 2                            # reach current head first
-    # craft a failing additive v3 to prove a later migration rolls back cleanly.
-    bad = list(MIGRATIONS) + [(3, [
+    assert migrate(db) == 3                            # reach current head first
+    # craft a failing additive v4 to prove a later migration rolls back cleanly.
+    bad = list(MIGRATIONS) + [(4, [
         "ALTER TABLE universe_state ADD COLUMN probe_col TEXT",
         "THIS IS NOT VALID SQL",
     ])]
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", bad)
     with pytest.raises(sqlite3.OperationalError):
         migrate(db)
-    assert current_version(db) == 2                   # not advanced
+    assert current_version(db) == 3                   # not advanced
     assert "probe_col" not in _state_columns(db)      # the partial column rolled back
+
+
+def test_v3_backfills_reconciliation_for_unknown_only_rows(tmp_path, monkeypatch):
+    """A pre-existing v2 row whose only position memory is an UNKNOWN observation (no
+    reconstructable authoritative state) is conservatively blocked for reconciliation on
+    upgrade to v3, rather than guessed flat."""
+    db = str(tmp_path / "universe.db")
+    monkeypatch.setattr("bot.universe.db.MIGRATIONS", [m for m in MIGRATIONS if m[0] <= 2])
+    assert migrate(db) == 2
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO canonical_instruments (canonical_instrument_id, display_symbol, "
+            "created_at, updated_at) VALUES (?,?,?,?)", (CID, "AAPL", "t", "t"))
+        conn.execute(
+            "INSERT INTO universe_state (canonical_instrument_id, current_state, "
+            "last_observed_position_status) VALUES (?,?,?)", (CID, "EXIT_ONLY", "UNKNOWN"))
+    monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
+    assert migrate(db) == 3
+    with connect(db) as conn:
+        recon = conn.execute(
+            "SELECT position_reconciliation_required FROM universe_state "
+            "WHERE canonical_instrument_id=?", (CID,)).fetchone()[0]
+    assert recon == 1                                # blocked for reconciliation, not guessed
 
 
 # ── P3-2: legacy `cooldown_until` is not the source of truth ───────────────────

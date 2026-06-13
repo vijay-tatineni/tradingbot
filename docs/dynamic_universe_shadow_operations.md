@@ -57,15 +57,21 @@ The evaluator takes an injected `PositionSnapshotProvider`
 (`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus |
 PositionSnapshot`). It is broker-free by contract (a fixture / non-production snapshot —
 never a broker call) and drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle
-organically. **The provider is authoritative (P3-8):** with **no provider injected** — or on
-a provider exception / timeout / malformed / unrecognised / stale value — the status is
-`UNKNOWN` (fail-safe: no flat assumption, no entry, no forced liquidation, cooldown held).
-There is no legacy prior-state fallback; a stale prior is descriptive history only.
-**Exit detection is durable and exactly-once (P3-9):** cooldown starts from an explicit
-durable `POSITION_EXITED` signal or an authoritative `OPEN → NO_POSITION` transition with
-evidence (`closed_trading_date` / `position_id`), de-duplicated by
-`last_processed_position_event_id`; it never starts from `UNKNOWN → NO_POSITION`, a
-no-evidence open→flat, or a provider error.
+organically. **The provider is authoritative (P3-8, R1.1):** with **no provider injected** —
+or on a provider exception / timeout / malformed / unrecognised / stale / future / out-of-order
+value — the observation is non-authoritative → `UNKNOWN` (fail-safe: no flat assumption, no
+entry, no forced liquidation, cooldown held). The evaluator persists the LATEST observation
+(`latest_observed_*`) separately from the LAST AUTHORITATIVE evidence (`last_authoritative_*`),
+which a non-authoritative observation NEVER erases — so an exit during an outage survives.
+**Exit detection is durable and exactly-once (P3-9, R1.1):** cooldown starts from an explicit
+durable `POSITION_EXITED` signal, or an authoritative `last_authoritative=POSITION_OPEN →
+NO_POSITION` transition with EXPLICIT closure evidence (`closed_trading_date` /
+`close_event_id` / `explicitly_closed`; a bare `position_id` is NOT evidence), de-duplicated by
+`last_processed_position_event_id` (with a stale-close guard). An authoritative open→flat
+WITHOUT evidence sets a durable `position_reconciliation_required` block (blocks entry, no
+liquidation, holds cooldown; cleared only by an authoritative `POSITION_OPEN` or an
+evidence-bearing close). Cooldown never starts from `UNKNOWN → NO_POSITION`, a no-evidence
+open→flat, or a provider error.
 
 ```python
 ev = ShadowEvaluator(Registry(db), bars_provider, flags, equity=100_000,

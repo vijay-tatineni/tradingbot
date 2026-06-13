@@ -22,7 +22,8 @@
   `sqlite3.OperationalError` (database is locked) without creating an inconsistent schema.
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
-* Current schema version: **2** (v2 = Pre-Enable R1, strictly additive — see below).
+* Current schema version: **3** (v2 = Pre-Enable R1; v3 = Pre-Enable R1.1 authoritative
+  position continuity — both strictly additive; see below).
 
 ## Tables (v1)
 
@@ -74,11 +75,31 @@ cooldown_sessions_remaining          INT    -- CANONICAL post-exit session count
 cooldown_last_counted_trading_date   TEXT   -- last session a decrement was applied (idempotent/day)
 cooldown_release_estimate            TEXT   -- DISPLAY-ONLY; never authoritative without an
                                             --   approved exchange calendar (left NULL in v1)
-last_observed_position_status        TEXT   -- last authoritative provider status (P3-9 detection)
-last_observed_position_id_hash       TEXT   -- non-sensitive hash of the observed position_id
+last_observed_position_status        TEXT   -- DEPRECATED v2 mirror (= latest_observed; not read)
+last_observed_position_id_hash       TEXT   -- DEPRECATED v2 mirror
 last_processed_position_event_id     TEXT   -- durable close-event dedup key (exactly-once, P3-9)
 last_position_close_trading_date     TEXT   -- close date of the last processed exit (P3-9)
+-- ── v3 (R1.1) authoritative position continuity ──────────────────────────────
+latest_observed_position_status      TEXT   -- the latest raw observation (UNKNOWN MAY overwrite)
+latest_observed_at                   TEXT   -- observed date of the latest observation
+last_authoritative_position_status   TEXT   -- last AUTHORITATIVE status; NEVER erased by UNKNOWN
+last_authoritative_position_id_hash  TEXT   -- non-sensitive hash of the authoritative position_id
+last_authoritative_observed_at       TEXT   -- observed date of the last authoritative status
+position_reconciliation_required     INT    -- durable block: authoritative open then flat w/o
+                                            --   evidence; blocks entry, no liquidation (R1.1)
 ```
+**Authoritative continuity (R1.1, P3-8/P3-9).** `latest_observed_*` records the most recent
+observation (a non-authoritative `UNKNOWN`/stale/future/missing observation MAY overwrite it).
+`last_authoritative_*` records the last status from a fresh, in-order, real-status snapshot
+(`POSITION_OPEN`/`NO_POSITION`/`POSITION_EXITED`) and is **never** erased by a non-authoritative
+observation — so an exit during a provider outage is still detected (exactly once) when an
+evidence-bearing close arrives. An authoritative `OPEN→flat` WITHOUT explicit closure evidence
+(`closed_trading_date`/`close_event_id`/`explicitly_closed`; a bare `position_id` is NOT
+evidence) sets `position_reconciliation_required=1` — a durable block (state `EXIT_ONLY`,
+reason `position_reconciliation_required`) that blocks new entry, never liquidates, holds
+cooldown, and clears only on an authoritative `POSITION_OPEN` or an evidence-bearing close. The
+v3 migration back-fills `position_reconciliation_required=1` for any pre-existing v2 row whose
+only position memory is an `UNKNOWN` observation (block, do not guess).
 **`cooldown_until` is DEPRECATED (P3-2).** In v1 it stored a remaining-session *count* as
 text despite its date-implying name. Runtime logic no longer reads it as the count — the
 authoritative source is `cooldown_sessions_remaining`. `cooldown_until` is still written as
@@ -110,12 +131,21 @@ depth for P3-3).
 
 `Registry.persist_transition_atomic(state, history)` writes the `universe_state` UPSERT and
 the `universe_state_history` append inside ONE explicit `BEGIN IMMEDIATE` transaction
-(`isolation_level = None`, no `executescript`). The history row is inserted FIRST so its
-UNIQUE idempotency index gates duplicates; the two writes COMMIT together or ROLL BACK
-together. A duplicate `(instrument, trading_date, evaluator_version)` rolls the whole tx
-back as a no-op (neither table changes), so a retried-after-success run never duplicates
-history nor double-advances counters. The evaluator persists every transition exclusively
-through this method (it no longer calls `upsert_state` + `append_history` separately).
+(`isolation_level = None`, no `executescript`); the two writes COMMIT together or ROLL BACK
+together. The evaluator persists every transition exclusively through this method (it no
+longer calls `upsert_state` + `append_history` separately). The `universe_state` write is
+built from a single `_STATE_COLUMNS` registry shared with `upsert_state` (lockstep — no
+column can be silently dropped from one write path).
+
+**Content-aware idempotency (R1.1).** On a duplicate idempotency key the stored content is
+compared to the proposed transition INSIDE the transaction:
+* identical (history fields AND current-state cooldown/lifecycle/authoritative markers all
+  agree) → idempotent no-op (returns `False`); the tx rolls back, neither table changes;
+* DIVERGENT (different `new_state` / `feature_snapshot_hash` / cooldown result / close event /
+  authoritative markers) → `TransitionConflictError` — never silently accepted as a no-op;
+* history row without a current-state row, or a current-state row reflecting an incompatible
+  later/earlier transition → `StateHistoryConsistencyError`.
+A conflict/inconsistency fails closed (rollback + raise); it is never silently repaired.
 
 ## Idempotency
 

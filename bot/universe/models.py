@@ -52,6 +52,16 @@ EXIT_SIGNAL_STATUSES = frozenset({
     PositionStatus.POSITION_EXITED, PositionStatus.POSITION_EXITED_TODAY,
 })
 
+# Statuses that can be AUTHORITATIVE when supplied by a valid, fresh provider snapshot
+# (R1.1). Everything else (UNKNOWN, exception, timeout, malformed, stale, missing provider)
+# is non-authoritative and must NEVER overwrite prior authoritative position evidence.
+# POSITION_EXITED_TODAY is the deprecated transient exit alias — honoured when present (it
+# maps to POSITION_EXITED with closed=trading_date), but never depended upon.
+AUTHORITATIVE_STATUSES = frozenset({
+    PositionStatus.POSITION_OPEN, PositionStatus.NO_POSITION,
+    PositionStatus.POSITION_EXITED, PositionStatus.POSITION_EXITED_TODAY,
+})
+
 
 @dataclass(frozen=True)
 class PositionSnapshot:
@@ -64,15 +74,28 @@ class PositionSnapshot:
     that produces it must never call a broker.
 
     A bare PositionStatus is also accepted by the evaluator (wrapped into a snapshot with
-    no durable evidence) for back-compat; the durable exactly-once exit guarantee requires
-    closed_trading_date and/or position_id.
+    no durable evidence, observed_at defaulting to the evaluation trading date) for
+    back-compat.
+
+    Closure evidence (R1.1): a durable open→flat exit is only recognised when the snapshot
+    carries EXPLICIT closure evidence — ``closed_trading_date``, ``close_event_id``, or
+    ``explicitly_closed=True``. A bare ``position_id`` is NOT proof of closure.
     """
     status: "PositionStatus"
     observed_at: Optional[datetime] = None
     position_id: Optional[str] = None
     opened_trading_date: Optional[date] = None
     closed_trading_date: Optional[date] = None
+    close_event_id: Optional[str] = None        # durable id of the close event (P3-9 dedup)
+    explicitly_closed: bool = False             # provider asserts the prior open is closed
     source_version: Optional[str] = None
+
+    def has_closure_evidence(self) -> bool:
+        """True iff the snapshot carries EXPLICIT durable closure evidence (R1.1). A bare
+        position_id alone is deliberately NOT sufficient."""
+        return bool(self.closed_trading_date is not None
+                    or self.close_event_id is not None
+                    or self.explicitly_closed)
 
 
 @runtime_checkable
@@ -135,6 +158,12 @@ class Reason:
     # `cooldown_sessions_remaining`; the count is NOT inferred (P3-2). The instrument is
     # held BLOCKED pending manual review rather than guessing a remaining session count.
     COOLDOWN_LEGACY_AMBIGUOUS = "cooldown_legacy_ambiguous"
+    # R1.1: the last authoritative status was POSITION_OPEN and the position is now reported
+    # flat WITHOUT durable closure evidence (or only via a non-authoritative observation).
+    # We cannot safely assume flat or manufacture an exit — a durable, persistent blocked
+    # condition that requires authoritative reconciliation. Blocks new entry; never forces
+    # liquidation; cleared only by an authoritative POSITION_OPEN or an evidence-bearing close.
+    POSITION_RECONCILIATION_REQUIRED = "position_reconciliation_required"
     # contention / routing (hypothetical)
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"

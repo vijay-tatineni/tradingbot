@@ -77,6 +77,7 @@ def transition(
     has_open = bool(ctx.get("has_open_position", False))
     exit_detected = bool(ctx.get("exit_detected", False))
     position_unknown = bool(ctx.get("position_unknown", False))
+    reconciliation_required = bool(ctx.get("reconciliation_required", False))
     countable = bool(ctx.get("cooldown_session_countable", True))
 
     reasons = list(structural.reason_codes)
@@ -110,8 +111,9 @@ def transition(
     else:
         cooldown = int(prior_cooldown_remaining or 0)
         in_cooldown = cooldown > 0
+        # A reconciliation block holds the cooldown clock too (we cannot confirm flat).
         advancing = (in_cooldown and not effective_open and not position_unknown
-                     and countable)
+                     and not reconciliation_required and countable)
         cooldown_out = cooldown - 1 if advancing else cooldown
         cooldown_counted = advancing
 
@@ -125,6 +127,21 @@ def transition(
             reasons.append(Reason.HARD_DISABLED)
         # Counters frozen at 0 — a hard-disabled instrument never accrues entry passes.
         return _out(State.HARD_DISABLED, 0, 0)
+
+    # ── 1a. position_reconciliation_required: durable blocked condition (R1.1) ──
+    # The last AUTHORITATIVE status was POSITION_OPEN and the position is now reported flat
+    # without durable closure evidence (or only via a non-authoritative observation). We
+    # CANNOT assume flat or manufacture an exit. Hold the safe non-entry EXIT_ONLY state:
+    # blocks new entries, never forces liquidation, holds cooldown. It persists across
+    # evaluations and is cleared by the evaluator only on authoritative reconciliation
+    # (a confirmed POSITION_OPEN, or an evidence-bearing close). Dominates UNKNOWN (it is a
+    # stronger, durable claim than a one-cycle unknown), but never HARD_DISABLED.
+    if reconciliation_required:
+        if Reason.POSITION_RECONCILIATION_REQUIRED not in reasons:
+            reasons.append(Reason.POSITION_RECONCILIATION_REQUIRED)
+        if admin_paused and Reason.ADMIN_PAUSED not in reasons:
+            reasons.append(Reason.ADMIN_PAUSED)
+        return _out(State.EXIT_ONLY, passes, failures)
 
     # ── 1b. UNKNOWN position status: fail safe (task §3 / P3-8) ───────
     # We could not determine whether a position is open. Do NOT assume flat, do NOT

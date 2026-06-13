@@ -70,21 +70,26 @@
 | ID | Class | One-line | Status |
 |----|-------|----------|--------|
 | P3-1 | advisory (doc only) | three docs outside declared naming scope | acknowledged |
-| P3-2 | mandatory | `cooldown_until` stores a session count, not a date | ✅ **RESOLVED (R1)** |
-| P3-3 | **mandatory** | state + history writes not atomic together | ✅ **RESOLVED (R1)** |
+| P3-2 | mandatory | `cooldown_until` stores a session count, not a date | IMPLEMENTED (R1) — awaiting independent review |
+| P3-3 | **mandatory** | state + history writes not atomic together | IMPLEMENTED (R1 atomic + R1.1 conflict detection) — awaiting independent review |
 | P3-4 | mandatory | candidate-source table not consumed in selection | OPEN (R2) |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
 | P3-6 | mandatory | canonical-ID collision risk | OPEN (R2) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | OPEN (R2) |
-| P3-8 | **mandatory** | provider removal can preserve stale open-position state | ✅ **RESOLVED (R1)** |
-| P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | ✅ **RESOLVED (R1)** |
+| P3-8 | **mandatory** | provider removal can preserve stale open-position state | IMPLEMENTED (R1.1) — awaiting independent review |
+| P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | IMPLEMENTED (R1.1) — awaiting independent review |
 | BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | OPEN (R2) |
 
 > "mandatory" = must be resolved + independently reviewed before the flag is enabled
-> outside isolated tests. **P3-2, P3-3, P3-8, P3-9 were resolved in Phase R1** (branch
-> `feature/dynamic-universe-preenable-r1`); see `docs/dynamic_universe_pre_enable_r1_completion.md`.
-> The foundation remains default-off and un-wired. The remaining mandatory items
-> (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) are deferred to Phase R2.
+> outside isolated tests. **No item is marked RESOLVED on this branch.** The R1 attempt
+> at P3-8/P3-9 was found DEFECTIVE in independent review (an `UNKNOWN` observation erased
+> the last authoritative open state, so an exit during a provider outage bypassed cooldown
+> and re-enabled entry). **Phase R1.1** (branch `feature/dynamic-universe-preenable-r1-fix1`)
+> re-implements P3-8/P3-9 with authoritative position continuity and adds the content-aware
+> idempotency conflict detection for P3-3. These are **IMPLEMENTED and tested — awaiting
+> independent review**, not resolved. See `docs/dynamic_universe_pre_enable_r1_completion.md`.
+> The foundation remains default-off and un-wired. P3-4, P3-5, P3-6, P3-7, BLOCKER-S are
+> deferred to Phase R2.
 
 ### P3-1 — Documentation scope deviation (advisory; no code change)
 - **Risk:** none (inert documentation).
@@ -122,7 +127,7 @@
   completed session; weekends/holidays/missing-bar sessions, open positions, and UNKNOWN
   status never decrement.
 - **Tests:** `tests/universe/test_cooldown_sessions.py`, `tests/universe/test_r1_migration.py`.
-- **Owner/Status:** universe owner — ✅ **RESOLVED (R1)**.
+- **Owner/Status:** universe owner — **IMPLEMENTED (R1) — awaiting independent review**.
 
 ### P3-3 — Current-state and history writes are not atomic together (**mandatory**)
 - **Risk:** a crash between `upsert_state` and `append_history` leaves `universe_state`
@@ -144,10 +149,17 @@
   roll back together; a duplicate key rolls the whole tx back as a no-op (no double-advance).
   The evaluator persists every transition exclusively through this method. Defence in depth:
   v2 adds append-only `BEFORE UPDATE/DELETE` triggers on `universe_state_history`.
-- **Tests:** `tests/universe/test_atomic_persistence.py` (fault injection at each seam,
-  rollback leaves both tables unchanged, idempotent replay, concurrent-writer serialisation,
-  exactly-one history row, append-only triggers).
-- **Owner/Status:** universe owner — ✅ **RESOLVED (R1)**.
+- **R1.1 addition:** content-aware idempotency conflict detection. A duplicate idempotency
+  key with DIVERGENT content (different new_state / feature hash / cooldown result /
+  lifecycle event / authoritative markers) now raises `TransitionConflictError` instead of
+  the R1 silent no-op (review Finding 3); a broken history/state pair raises
+  `StateHistoryConsistencyError`. Identical replays remain idempotent no-ops.
+- **Tests:** `tests/universe/test_atomic_persistence.py` (fault injection at each seam incl.
+  authoritative/close markers, rollback leaves both tables unchanged, identical-replay
+  idempotency, conflicting new_state/hash/cooldown/close-event → conflict, history/state
+  inconsistency → consistency error, concurrent-writer serialisation, append-only triggers).
+- **Owner/Status:** universe owner — atomic transaction **IMPLEMENTED (R1)**; content-aware
+  conflict detection **IMPLEMENTED (R1.1)** — awaiting independent review.
 
 ### P3-4 — Candidate-source table not used in candidate selection (mandatory)
 - **Risk:** the AUTO/TTI/MANUAL candidate concept is decoupled from selection; enabling
@@ -227,16 +239,23 @@
   `Reason.POSITION_STATUS_UNKNOWN`.)
 - **Required test:** provider present → `POSITION_OPEN`; provider removed on a later run →
   state resolves to unknown-safe (blocks entry), never a retained stale open.
-- **Resolution (R1):** the legacy no-provider prior-state derivation is removed. Position
-  status is resolved exclusively from an injected `PositionSnapshotProvider`; a missing
-  provider, exception, timeout, malformed/unrecognised value, or stale/absent observation
-  all resolve to `UNKNOWN` (fail-safe) — which blocks new entry (`EXIT_ONLY` hold), never
-  forces liquidation, never assumes flat, and never decrements cooldown. A stale prior state
-  is preserved only as descriptive history (`last_observed_position_status`), never as proof
-  of a current position.
+- **Resolution attempt (R1) — partially correct:** the legacy no-provider prior-state
+  derivation was removed and a missing/error/stale provider resolves to `UNKNOWN`
+  (fail-safe). BUT R1 stored only one `last_observed_position_status` that `UNKNOWN`
+  overwrote — so the "stale prior preserved as evidence" guarantee was not actually met
+  across an outage. See R1.1 below.
+- **R1 DEFECT → R1.1 correction:** the R1 implementation persisted a single
+  `last_observed_position_status` that an `UNKNOWN` observation OVERWROTE — erasing the
+  authoritative open state. R1.1 separates the LATEST observation (which UNKNOWN may
+  overwrite) from the LAST AUTHORITATIVE evidence (`last_authoritative_position_status` /
+  `_id_hash` / `_observed_at`), which non-authoritative observations never erase. An
+  authoritative OPEN→flat WITHOUT durable closure evidence now sets a persistent
+  `position_reconciliation_required` block (blocks entry, no liquidation, never assumes flat).
 - **Tests:** `tests/universe/test_position_authority.py`,
-  `tests/universe/test_position_lifecycle.py::test_no_provider_is_unknown_safe_not_stale_open`.
-- **Owner/Status:** universe owner — ✅ **RESOLVED (R1)**.
+  `tests/universe/test_position_continuity.py` (OPEN→UNKNOWN→OPEN / →flat-with-evidence /
+  →flat-without-evidence; reconciliation persists across the UNKNOWN gap; cleared by
+  authoritative open or evidence-close).
+- **Owner/Status:** universe owner — **IMPLEMENTED (R1.1) — awaiting independent review**.
 
 ### P3-9 — Cooldown depends on observing `POSITION_EXITED_TODAY` (**mandatory**)
 - **Risk:** if the provider transitions `POSITION_OPEN → NO_POSITION` directly (never
@@ -252,20 +271,24 @@
   trusting a transient status value.
 - **Required test:** `OPEN → NO_POSITION` with **no** `EXITED_TODAY` still starts cooldown
   exactly once; idempotent across reruns.
-- **Resolution (R1):** the state machine no longer trusts a transient status value. The
-  evaluator derives an exit from an authoritative `last_observed = POSITION_OPEN` → current
-  `NO_POSITION` transition WITH durable evidence (`closed_trading_date` or `position_id`), or
-  an explicit durable `POSITION_EXITED` signal, and de-duplicates via a durable
-  `last_processed_position_event_id` so a replayed close never restarts cooldown. Cooldown is
-  NOT started from `UNKNOWN → NO_POSITION`, a no-evidence `OPEN → NO_POSITION`, a stale open
-  without a provider, or a provider error. `last_observed_position_status` is persisted every
-  run (including `UNKNOWN`, and `NO_POSITION` after an exit) so `OPEN→UNKNOWN→NO_POSITION`
-  cannot false-trigger. The offline rehearsal now drives a durable `OPEN→NO_POSITION` +
-  `closed_trading_date` exit (it no longer masks this blocker with `POSITION_EXITED_TODAY`).
-- **Tests:** `tests/universe/test_exit_detection.py` (durable open→flat starts cooldown once;
-  missed transient still detected; UNKNOWN→flat / no-evidence open→flat do NOT start cooldown;
-  replay does not restart; new separate close starts a fresh cooldown).
-- **Owner/Status:** universe owner — ✅ **RESOLVED (R1)**.
+- **Resolution attempt (R1) — SUPERSEDED, found defective:** R1 stopped trusting the
+  transient status but keyed exit detection off a single `last_observed_position_status` and
+  accepted a bare `position_id` as evidence. Both were wrong: a same-run `UNKNOWN` overwrote
+  `last_observed`, so an exit during an outage (`OPEN→UNKNOWN→NO_POSITION`) was missed
+  (cooldown bypassed). The rehearsal was updated to a durable `OPEN→NO_POSITION` exit, but the
+  underlying continuity bug remained. See R1.1 below.
+- **R1 DEFECT → R1.1 correction:** in R1, an exit that occurred DURING an `UNKNOWN` outage
+  (OPEN→UNKNOWN→NO_POSITION) was missed — cooldown was bypassed and the instrument became
+  ENTRY_ELIGIBLE — because UNKNOWN had erased the authoritative open anchor. R1.1 keys exit
+  detection off the durable `last_authoritative_position_status==POSITION_OPEN` (which
+  survives the outage), requires EXPLICIT closure evidence (`closed_trading_date` /
+  `close_event_id` / `explicitly_closed`; a bare `position_id` is insufficient), and
+  de-duplicates via `last_processed_position_event_id` with a stale-close guard.
+- **Tests:** `tests/universe/test_exit_detection.py` + `tests/universe/test_position_continuity.py`
+  (OPEN→UNKNOWN→flat-with-evidence starts cooldown once; without evidence → reconciliation,
+  no cooldown; replayed close does not reset; new separate close starts a fresh cooldown;
+  older/future snapshots are non-authoritative; deprecated EXITED_TODAY still honoured once).
+- **Owner/Status:** universe owner — **IMPLEMENTED (R1.1) — awaiting independent review**.
 
 ### BLOCKER-S — Hypothetical sizing not FX-normalized (mandatory; from P2-2)
 - **Risk:** hypothetical qty/risk use local price/ATR; cross-currency risk figures are not
@@ -284,15 +307,16 @@
 ## Enablement gate (summary)
 
 Before `enable_dynamic_universe_shadow` is set true **anywhere outside isolated tests**:
-1. All **mandatory** items above are implemented and tested. **Phase R1 resolved P3-2, P3-3,
-   P3-8, P3-9** (state/history atomicity, authoritative position contract, durable
-   exactly-once exit, session-based cooldown). **Still OPEN for Phase R2:** P3-4
-   (candidate-source wiring), P3-5 (inherited/open-book portfolio heat), P3-6 (canonical
-   identity), P3-7 (IBKR verification status), BLOCKER-S (FX-normalized sizing).
-2. The position-status seam and state/history atomicity are independently reviewed (R1);
-   candidate-source wiring and canonical identity remain to be reviewed (R2).
+1. All **mandatory** items above are implemented, tested, AND independently reviewed.
+   **Phase R1 (P3-2, P3-3 atomic) + Phase R1.1 (P3-8, P3-9, P3-3 conflict detection) are
+   IMPLEMENTED and tested but NOT yet independently reviewed** — they are not "resolved".
+   **Still OPEN for Phase R2:** P3-4 (candidate-source wiring), P3-5 (inherited/open-book
+   portfolio heat), P3-6 (canonical identity), P3-7 (IBKR verification status), BLOCKER-S
+   (FX-normalized sizing).
+2. The R1.1 position-continuity correction (and the R1 atomic/cooldown work) require
+   independent review; candidate-source wiring and canonical identity remain for R2.
 3. A separate runtime-wiring change (into `main.py`/scheduler) is proposed and reviewed on
    its own — it is explicitly **out of scope** here.
 
-Neither the R1 work nor this register changes the posture: the foundation remains
-default-off and un-wired. Resolving these blockers does **not** authorize enablement.
+Neither the R1/R1.1 work nor this register changes the posture: the foundation remains
+default-off and un-wired. Implementing these blockers does **not** authorize enablement.

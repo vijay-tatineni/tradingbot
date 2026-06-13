@@ -176,4 +176,34 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v3: Pre-Enable R1.1 (authoritative position continuity). Strictly ADDITIVE.
+        #        Separates the LATEST observed status (which UNKNOWN may overwrite) from the
+        #        LAST AUTHORITATIVE position evidence (which a non-authoritative observation
+        #        must NEVER erase) — the root cause of the R1 cooldown-bypass across an
+        #        outage. Adds a durable position_reconciliation_required block.
+        3,
+        [
+            # latest observation (may be overwritten by a non-authoritative UNKNOWN):
+            "ALTER TABLE universe_state ADD COLUMN latest_observed_position_status TEXT",
+            "ALTER TABLE universe_state ADD COLUMN latest_observed_at TEXT",
+            # last AUTHORITATIVE evidence (survives provider outages; never erased by UNKNOWN):
+            "ALTER TABLE universe_state ADD COLUMN last_authoritative_position_status TEXT",
+            "ALTER TABLE universe_state ADD COLUMN last_authoritative_position_id_hash TEXT",
+            "ALTER TABLE universe_state ADD COLUMN last_authoritative_observed_at TEXT",
+            # durable blocked condition requiring authoritative reconciliation:
+            "ALTER TABLE universe_state ADD COLUMN position_reconciliation_required INTEGER NOT NULL DEFAULT 0",
+            # Conservative back-fill (additive UPDATE on universe_state — does NOT touch the
+            # append-only history table). A pre-existing v2 row whose only position memory is
+            # an UNKNOWN observation has NO reconstructable authoritative state → block it for
+            # reconciliation rather than guess. New columns above are NULL at this point, so
+            # the predicate selects exactly those ambiguous rows.
+            """
+            UPDATE universe_state
+               SET position_reconciliation_required = 1
+             WHERE last_observed_position_status = 'UNKNOWN'
+               AND last_authoritative_position_status IS NULL
+            """,
+        ],
+    ),
 ]
