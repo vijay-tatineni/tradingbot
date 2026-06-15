@@ -214,6 +214,101 @@ def test_state_history_divergence_raises_consistency(tmp_path):
         reg.persist_transition_atomic(_state(state="WATCHLIST"), _history(new_state="WATCHLIST"))
 
 
+# ── R1.2 (P2-A): historical replay after the current state legitimately advanced ──
+def test_exact_replay_after_state_advanced_is_idempotent_no_op(tmp_path):
+    # Day D persists; D+1 and D+2 advance the current-state row; then the EXACT Day-D
+    # transition is replayed → idempotent no-op (NOT a consistency error). The current-state
+    # row is allowed to represent a legitimately later trading date.
+    reg, db = _reg(tmp_path)
+    assert reg.persist_transition_atomic(
+        _state(state="WATCHLIST", evaluated_trading_date="2026-06-10"),
+        _history(date="2026-06-10", new_state="WATCHLIST")) is True
+    assert reg.persist_transition_atomic(
+        _state(state="WATCHLIST", evaluated_trading_date="2026-06-11"),
+        _history(date="2026-06-11", new_state="WATCHLIST")) is True
+    assert reg.persist_transition_atomic(
+        _state(state="ENTRY_ELIGIBLE", evaluated_trading_date="2026-06-12"),
+        _history(date="2026-06-12", new_state="ENTRY_ELIGIBLE")) is True
+    # exact Day-D replay → no-op even though current state advanced to 2026-06-12.
+    assert reg.persist_transition_atomic(
+        _state(state="WATCHLIST", evaluated_trading_date="2026-06-10"),
+        _history(date="2026-06-10", new_state="WATCHLIST")) is False
+    assert _counts(db) == (1, 3)                          # nothing duplicated
+    with connect(db) as conn:
+        row = conn.execute("SELECT current_state, evaluated_trading_date FROM universe_state "
+                           "WHERE canonical_instrument_id=?", (CID,)).fetchone()
+    assert row == ("ENTRY_ELIGIBLE", "2026-06-12")        # advanced state untouched
+
+
+def test_divergent_historical_replay_after_advance_is_conflict(tmp_path):
+    # Same key, current state advanced, but the replayed Day-D history content DIVERGES from
+    # what was recorded → TransitionConflictError (history is immutable/authoritative).
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(state="WATCHLIST", evaluated_trading_date="2026-06-10"),
+        _history(date="2026-06-10", new_state="WATCHLIST"))
+    reg.persist_transition_atomic(
+        _state(state="ENTRY_ELIGIBLE", evaluated_trading_date="2026-06-12"),
+        _history(date="2026-06-12", new_state="ENTRY_ELIGIBLE"))
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(state="ENTRY_ELIGIBLE", evaluated_trading_date="2026-06-10"),
+            _history(date="2026-06-10", new_state="ENTRY_ELIGIBLE"))   # different new_state for D
+    assert _counts(db) == (1, 2)
+
+
+def test_current_state_older_than_history_raises_consistency(tmp_path):
+    # A history row exists for a date the current state has NOT reached (current older than
+    # history) → impossible ordering → StateHistoryConsistencyError.
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(state="WATCHLIST", evaluated_trading_date="2026-06-10"),
+        _history(date="2026-06-10", new_state="WATCHLIST"))
+    # append a history row for a LATER date directly (append-only) without advancing state.
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO universe_state_history (canonical_instrument_id, trading_date, "
+            "new_state, evaluator_version, created_at) VALUES (?,?,?,?,?)",
+            (CID, "2026-06-12", "WATCHLIST", VER, "t"))
+    # current state is still at 2026-06-10 (older than the 2026-06-12 history row).
+    with pytest.raises(StateHistoryConsistencyError):
+        reg.persist_transition_atomic(
+            _state(state="WATCHLIST", evaluated_trading_date="2026-06-12"),
+            _history(date="2026-06-12", new_state="WATCHLIST"))
+
+
+def test_position_reconciliation_transition_rolls_back_together(tmp_path):
+    # R1.2 (§5): a fault while persisting a POSITION_RECONCILIATION transition rolls back the
+    # state, history AND the reconciliation marker together — no partially-applied block.
+    reg, db = _reg(tmp_path)
+    reg.persist_transition_atomic(
+        _state(state="POSITION_OPEN", evaluated_trading_date="2026-06-09",
+               last_authoritative_position_status="POSITION_OPEN",
+               position_reconciliation_required=0),
+        _history(date="2026-06-09", new_state="POSITION_OPEN"))
+
+    def hook(seam):
+        if seam == "after_state":           # markers written, COMMIT not yet reached
+            raise RuntimeError("fault during reconciliation transition")
+
+    with pytest.raises(RuntimeError):
+        reg.persist_transition_atomic(
+            _state(state="POSITION_RECONCILIATION", evaluated_trading_date="2026-06-10",
+                   last_authoritative_position_status="POSITION_OPEN",
+                   position_reconciliation_required=1),
+            _history(date="2026-06-10", new_state="POSITION_RECONCILIATION"),
+            _fault_hook=hook)
+
+    with connect(db) as conn:
+        row = conn.execute(
+            "SELECT current_state, evaluated_trading_date, position_reconciliation_required, "
+            "last_authoritative_position_status FROM universe_state "
+            "WHERE canonical_instrument_id=?", (CID,)).fetchone()
+    # rolled back to the prior committed row — the reconciliation block never landed.
+    assert row == ("POSITION_OPEN", "2026-06-09", 0, "POSITION_OPEN")
+    assert _counts(db) == (1, 1)            # the failed transition's history rolled back too
+
+
 def test_authoritative_and_close_markers_roll_back_together(tmp_path):
     # R1.1 §10: the authoritative-marker and close-event updates are columns in the single
     # state upsert, so a fault at any seam rolls them back together with state + history —

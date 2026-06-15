@@ -4,23 +4,31 @@ Implements the operator-frozen state model and dominance rules. No I/O, no broke
 no DB. The evaluator persists the returned StateOutcome.
 
 States: HARD_DISABLED, DATA_INELIGIBLE, WATCHLIST, ENTRY_ELIGIBLE, POSITION_OPEN,
-EXIT_ONLY, COOLDOWN, ADMIN_PAUSED.
+EXIT_ONLY, POSITION_RECONCILIATION, COOLDOWN, ADMIN_PAUSED.
 
 Dominance / rules (explicit precedence):
   1. HARD_DISABLED overrides EVERY automatic state.
+  1a. POSITION_RECONCILIATION (R1.2 / P2-C): position ownership/status is UNRESOLVED —
+     an authoritative open→flat without durable closure evidence, or any non-authoritative
+     (UNKNOWN/stale/future/missing) observation. Blocks all new entries, does NOT assume a
+     position exists or is flat, never forces liquidation, never decrements cooldown.
+     Cleared only by an authoritative POSITION_OPEN or an evidence-bearing close. Dominates
+     ordinary flat/open handling below; HARD_DISABLED still dominates it.
   2. ADMIN_PAUSED (operator off / paused) blocks new entries but NEVER removes
      exit management: a hypothetical open position becomes EXIT_ONLY, not paused.
   3. An open (hypothetical) position that loses eligibility becomes EXIT_ONLY —
      ordinary eligibility failure NEVER forces liquidation.
-  4. EXIT_ONLY: no entry, no reversal, no pyramiding; deterministic exit
-     management continues on the hypothetical position.
+  4. EXIT_ONLY: a position AUTHORITATIVELY EXISTS (current authoritative snapshot is
+     POSITION_OPEN) but no entry, reversal, or pyramiding is permitted; deterministic exit
+     management continues on the hypothetical position. EXIT_ONLY NEVER represents position
+     *uncertainty* — that is POSITION_RECONCILIATION (rule 1a).
   5. Entry requires ENTRY_HYSTERESIS_PASSES consecutive structurally-passing
      sessions; ordinary removal requires REMOVAL_HYSTERESIS_FAILS consecutive
      failing sessions (sticky in between). Post-exit COOLDOWN lasts
      COOLDOWN_SESSIONS completed sessions.
 
-POSITION_OPEN / EXIT_ONLY refer to a HYPOTHETICAL shadow position, never a live
-broker position.
+POSITION_OPEN / EXIT_ONLY / POSITION_RECONCILIATION refer to a HYPOTHETICAL shadow
+position, never a live broker position.
 """
 from typing import Optional
 
@@ -128,34 +136,38 @@ def transition(
         # Counters frozen at 0 — a hard-disabled instrument never accrues entry passes.
         return _out(State.HARD_DISABLED, 0, 0)
 
-    # ── 1a. position_reconciliation_required: durable blocked condition (R1.1) ──
+    # ── 1a. position_reconciliation_required: durable blocked condition (R1.1/R1.2) ──
     # The last AUTHORITATIVE status was POSITION_OPEN and the position is now reported flat
     # without durable closure evidence (or only via a non-authoritative observation). We
-    # CANNOT assume flat or manufacture an exit. Hold the safe non-entry EXIT_ONLY state:
-    # blocks new entries, never forces liquidation, holds cooldown. It persists across
-    # evaluations and is cleared by the evaluator only on authoritative reconciliation
-    # (a confirmed POSITION_OPEN, or an evidence-bearing close). Dominates UNKNOWN (it is a
-    # stronger, durable claim than a one-cycle unknown), but never HARD_DISABLED.
+    # CANNOT assume flat or manufacture an exit. R1.2 (P2-C): hold the dedicated
+    # POSITION_RECONCILIATION state — NOT EXIT_ONLY, which would falsely imply a position
+    # definitely exists. Blocks new entries, never forces liquidation, holds cooldown. It
+    # persists across evaluations and is cleared by the evaluator only on authoritative
+    # reconciliation (a confirmed POSITION_OPEN, or an evidence-bearing close). Dominates
+    # UNKNOWN (a stronger, durable claim than a one-cycle unknown), but never HARD_DISABLED.
     if reconciliation_required:
         if Reason.POSITION_RECONCILIATION_REQUIRED not in reasons:
             reasons.append(Reason.POSITION_RECONCILIATION_REQUIRED)
         if admin_paused and Reason.ADMIN_PAUSED not in reasons:
             reasons.append(Reason.ADMIN_PAUSED)
-        return _out(State.EXIT_ONLY, passes, failures)
+        return _out(State.POSITION_RECONCILIATION, passes, failures)
 
-    # ── 1b. UNKNOWN position status: fail safe (task §3 / P3-8) ───────
-    # We could not determine whether a position is open. Do NOT assume flat, do NOT
-    # make the instrument entry-eligible, and do NOT force liquidation: hold the
-    # safer non-entry EXIT_ONLY state (entries suppressed; deterministic exit
-    # management continues on any hypothetical position). The reason is always
-    # recorded so an unknown is a loud non-entry, never a silent pass. The cooldown
-    # advance guard above excludes position_unknown, so an unknown never advances it.
+    # ── 1b. UNKNOWN / non-authoritative position status: fail safe (task §3 / P3-8) ──
+    # We could not determine whether a position is open (UNKNOWN, error, stale, future, or
+    # missing provider). Do NOT assume flat, do NOT make the instrument entry-eligible, and
+    # do NOT force liquidation. R1.2 (P2-C): this is position *uncertainty*, not a confirmed
+    # open, so it maps to POSITION_RECONCILIATION (NOT EXIT_ONLY — which requires an
+    # authoritative open). The reason is always recorded so an unknown is a loud non-entry,
+    # never a silent pass. The cooldown advance guard above excludes position_unknown, so an
+    # unknown never advances cooldown. NOTE: position_unknown drives the STATE only — it does
+    # NOT set the durable reconciliation_required FLAG (a transient unknown must not stick);
+    # the evaluator persists the flag solely from an authoritative unsupported open→flat.
     if position_unknown:
         if Reason.POSITION_STATUS_UNKNOWN not in reasons:
             reasons.append(Reason.POSITION_STATUS_UNKNOWN)
         if admin_paused and Reason.ADMIN_PAUSED not in reasons:
             reasons.append(Reason.ADMIN_PAUSED)
-        return _out(State.EXIT_ONLY, passes, failures)
+        return _out(State.POSITION_RECONCILIATION, passes, failures)
 
     # ── 2/3/4. Open position branch ───────────────────────────────────
     if effective_open:

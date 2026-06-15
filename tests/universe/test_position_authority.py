@@ -59,7 +59,9 @@ class _Garbage:
 
 
 def _assert_unknown_safe(o, r, st):
-    assert o["new_state"] == State.EXIT_ONLY.value                 # safe non-entry hold
+    # R1.2 (P2-C): UNKNOWN is position uncertainty → POSITION_RECONCILIATION (not EXIT_ONLY,
+    # which requires an authoritative open). Still a safe non-entry hold.
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value   # safe non-entry hold
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]  # blocks entry
     assert st["last_observed_position_status"] == "UNKNOWN"
@@ -100,11 +102,12 @@ def test_stale_or_absent_observation_is_unknown(tmp_path):
 
 
 def test_unknown_never_forces_liquidation(tmp_path):
-    # An open position that becomes UNKNOWN is HELD (EXIT_ONLY), never liquidated/flattened.
+    # An open position that becomes UNKNOWN is HELD (R1.2: POSITION_RECONCILIATION — the
+    # current snapshot is no longer an authoritative open), never liquidated/flattened.
     reg = Registry(_seed(tmp_path))
     _preset(reg, State.POSITION_OPEN.value)
     r, o, st = _run(reg, StubPositionProvider({CID: PositionStatus.UNKNOWN}))
-    assert o["new_state"] == State.EXIT_ONLY.value                 # held, not liquidated
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value   # held, not liquidated
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
 
 
@@ -114,7 +117,7 @@ def test_unknown_never_assumes_flat_and_holds_cooldown(tmp_path):
     reg = Registry(_seed(tmp_path))
     _preset(reg, State.COOLDOWN.value, cooldown_sessions_remaining=2)
     r, o, st = _run(reg, StubPositionProvider({CID: PositionStatus.UNKNOWN}))
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value   # R1.2 (P2-C)
     assert st["cooldown_sessions_remaining"] == 2                  # not decremented (not flat)
 
 
@@ -126,6 +129,6 @@ def test_stale_prior_open_is_not_treated_as_authoritative(tmp_path):
     ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)  # provider removed
     r = ev.maybe_run("2026-06-10", only_ids={CID})
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == CID][0]
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value   # R1.2 (P2-C): UNKNOWN-safe
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     assert reg.get_state(CID)["last_observed_position_status"] == "UNKNOWN"

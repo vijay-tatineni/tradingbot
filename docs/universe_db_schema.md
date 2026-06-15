@@ -23,7 +23,8 @@
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
 * Current schema version: **3** (v2 = Pre-Enable R1; v3 = Pre-Enable R1.1 authoritative
-  position continuity — both strictly additive; see below).
+  position continuity, back-fill corrected in place by R1.2 / P2-B — both strictly additive;
+  see below). No schema v4 is added: v3 is unreleased / never run in production.
 
 ## Tables (v1)
 
@@ -95,11 +96,21 @@ observation (a non-authoritative `UNKNOWN`/stale/future/missing observation MAY 
 observation — so an exit during a provider outage is still detected (exactly once) when an
 evidence-bearing close arrives. An authoritative `OPEN→flat` WITHOUT explicit closure evidence
 (`closed_trading_date`/`close_event_id`/`explicitly_closed`; a bare `position_id` is NOT
-evidence) sets `position_reconciliation_required=1` — a durable block (state `EXIT_ONLY`,
-reason `position_reconciliation_required`) that blocks new entry, never liquidates, holds
-cooldown, and clears only on an authoritative `POSITION_OPEN` or an evidence-bearing close. The
-v3 migration back-fills `position_reconciliation_required=1` for any pre-existing v2 row whose
-only position memory is an `UNKNOWN` observation (block, do not guess).
+evidence) sets `position_reconciliation_required=1` — a durable block (state
+`POSITION_RECONCILIATION` since R1.2, reason `position_reconciliation_required`) that blocks
+new entry, never liquidates, holds cooldown, and clears only on an authoritative
+`POSITION_OPEN` or an evidence-bearing close.
+
+**v3 back-fill — R1.2 (P2-B) correction (v3 edited in place; unreleased / never run in
+production).** On the v2→v3 upgrade the back-fill derives the authoritative anchor from the
+pre-existing v2 `last_observed_position_status`, using `evaluated_trading_date` as observation
+provenance: a row OPEN at the boundary keeps `last_authoritative_position_status='POSITION_OPEN'`
+(+ provenance; blocked if no provenance date) so a later evidence-bearing close is detected as
+an exit rather than a no-cooldown flat; a clean `NO_POSITION`/durable-exit row becomes a
+non-blocked `NO_POSITION` anchor; and `UNKNOWN` / missing / malformed legacy status →
+`position_reconciliation_required=1` (block, never infer flat). If R1 ran without a position
+provider every row is `UNKNOWN`, so the whole universe is conservatively blocked on upgrade
+until each instrument's next authoritative snapshot — the intended fail-safe.
 **`cooldown_until` is DEPRECATED (P3-2).** In v1 it stored a remaining-session *count* as
 text despite its date-implying name. Runtime logic no longer reads it as the count — the
 authoritative source is `cooldown_sessions_remaining`. `cooldown_until` is still written as

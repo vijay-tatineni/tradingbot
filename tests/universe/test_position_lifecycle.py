@@ -93,7 +93,7 @@ def test_unknown_position_blocks_entry_and_is_recorded(tmp_path):
     _preset_state(reg, State.ENTRY_ELIGIBLE.value)
     pos = StubPositionProvider({CID: PositionStatus.UNKNOWN})
     r, o = _run(reg, SpyProvider({CID: _src()}), pos, "2026-06-10")
-    assert o["new_state"] == State.EXIT_ONLY.value           # safe non-entry hold
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): safe non-entry hold
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     # never offered as a new-entry candidate despite a strong breakout signal
     assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]
@@ -109,7 +109,7 @@ def test_provider_error_is_treated_as_unknown(tmp_path):
             raise RuntimeError("provider down")
 
     r, o = _run(reg, SpyProvider({CID: _src()}), Boom(), "2026-06-10")
-    assert o["new_state"] == State.EXIT_ONLY.value           # fail safe, not entry-eligible
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): fail safe
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
 
 
@@ -117,14 +117,15 @@ def test_no_provider_is_unknown_safe_not_stale_open(tmp_path):
     # P3-8: with NO position provider injected, the status is UNKNOWN (fail-safe) — the
     # evaluator must NOT fall back to the prior state as proof of position knowledge. A
     # prior ENTRY_ELIGIBLE instrument therefore does NOT silently stay entry-eligible; it
-    # is held in the safe non-entry EXIT_ONLY state and the unknown is recorded loudly.
+    # is held in the safe non-entry POSITION_RECONCILIATION state (R1.2 / P2-C) and the
+    # unknown is recorded loudly.
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.ENTRY_ELIGIBLE.value)
     ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)  # no provider
     r = ev.maybe_run("2026-06-10")
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == CID][0]
-    assert o["new_state"] == State.EXIT_ONLY.value            # UNKNOWN-safe hold
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # UNKNOWN-safe hold
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]
     # the stale prior is preserved only as descriptive history, never as current proof

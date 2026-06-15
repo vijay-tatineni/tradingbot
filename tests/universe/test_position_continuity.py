@@ -52,7 +52,7 @@ def test_open_unknown_open_no_exit_authoritative_preserved(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     o, st, _ = _run(reg, PositionStatus.UNKNOWN, "2026-06-13")
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value         # R1.2 (P2-C): uncertainty
     assert st["latest_observed_position_status"] == "UNKNOWN"
     assert st["last_authoritative_position_status"] == "POSITION_OPEN"   # preserved through outage
     o, st, _ = _run(reg, PositionStatus.POSITION_OPEN, "2026-06-14")
@@ -78,7 +78,7 @@ def test_open_unknown_flat_without_evidence_requires_reconciliation(tmp_path):
     _open(reg, "2026-06-12")
     _run(reg, PositionStatus.UNKNOWN, "2026-06-13")
     o, st, r = _run(reg, PositionStatus.NO_POSITION, "2026-06-14")     # bare flat, no evidence
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value       # R1.2 (P2-C)
     assert Reason.POSITION_RECONCILIATION_REQUIRED in o["reason_codes"]
     assert st["position_reconciliation_required"] == 1
     assert (st["cooldown_sessions_remaining"] or 0) == 0               # no manufactured cooldown
@@ -103,7 +103,7 @@ def test_bare_position_id_is_not_closure_evidence(tmp_path):
     _open(reg, "2026-06-12")
     o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
                                           position_id="p1"), "2026-06-13")  # id only, no closure
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value       # R1.2 (P2-C)
     assert Reason.POSITION_RECONCILIATION_REQUIRED in o["reason_codes"]
     assert (st["cooldown_sessions_remaining"] or 0) == 0
 
@@ -145,7 +145,7 @@ def test_future_dated_snapshot_is_non_authoritative(tmp_path):
                                           observed_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
                                           closed_trading_date=date(2026, 6, 13)), "2026-06-13")
     # future-dated → treated as UNKNOWN/fail-safe; authoritative OPEN preserved, no exit.
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value      # R1.2 (P2-C): non-authoritative
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     assert st["last_authoritative_position_status"] == "POSITION_OPEN"
     assert (st["cooldown_sessions_remaining"] or 0) == 0
@@ -172,7 +172,7 @@ def test_reconciliation_persists_across_unknown_gap(tmp_path):
     assert st["position_reconciliation_required"] == 1
     for d in ("2026-06-14", "2026-06-15"):                          # outage gap
         o, st, _ = _run(reg, PositionStatus.UNKNOWN, d)
-        assert o["new_state"] == State.EXIT_ONLY.value
+        assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): remains blocked
         assert st["position_reconciliation_required"] == 1          # still blocked
 
 
@@ -203,3 +203,34 @@ def test_exited_today_backcompat_still_starts_cooldown_once(tmp_path):
     o, st, _ = _run(reg, PositionStatus.POSITION_EXITED_TODAY, "2026-06-13")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["cooldown_sessions_remaining"] == 3
+
+
+# ── R1.2 (P2-C): the dedicated POSITION_RECONCILIATION state ────────────────────
+def test_open_unknown_unsupported_flat_yields_position_reconciliation(tmp_path):
+    # OPEN → UNKNOWN → unsupported NO_POSITION resolves to the dedicated reconciliation
+    # state at every uncertain step (never EXIT_ONLY, which would imply a position exists),
+    # blocks entry, and never manufactures a cooldown.
+    reg = Registry(_seed(tmp_path))
+    _open(reg, "2026-06-12")
+    o, _, _ = _run(reg, PositionStatus.UNKNOWN, "2026-06-13")
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value
+    o, st, r = _run(reg, PositionStatus.NO_POSITION, "2026-06-14")          # unsupported flat
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value
+    assert st["position_reconciliation_required"] == 1
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]  # entry blocked
+
+
+def test_stale_no_position_remains_position_reconciliation(tmp_path):
+    # Once reconciliation is required, a STALE NO_POSITION snapshot (observed > 3 trading days
+    # before the evaluation date) is non-authoritative and must NOT clear the block.
+    reg = Registry(_seed(tmp_path))
+    _open(reg, "2026-06-12")
+    o, st, _ = _run(reg, PositionStatus.NO_POSITION, "2026-06-13")          # reconciliation set
+    assert st["position_reconciliation_required"] == 1
+    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                          observed_at=date(2026, 6, 13),
+                                          closed_trading_date=date(2026, 6, 13)), "2026-06-20")
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value            # stale → still blocked
+    assert st["position_reconciliation_required"] == 1
+    assert st["last_authoritative_position_status"] == "POSITION_OPEN"      # anchor retained

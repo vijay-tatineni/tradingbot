@@ -8,13 +8,14 @@ ambiguous legacy row (count present in the legacy column but absent from the ses
 fails safe into a blocked/manual-review COOLDOWN, never an inferred count.
 """
 import sqlite3
+from datetime import date
 
 import pytest
 
 from bot.universe.db import connect, current_version, migrate
 from bot.universe.evaluator import ShadowEvaluator
 from bot.universe.migrations import MIGRATIONS
-from bot.universe.models import Reason, State
+from bot.universe.models import PositionSnapshot, PositionStatus, Reason, State
 from bot.universe.registry import Registry
 from bot.universe.seed import canonical_id, seed_registry
 from tests.universe._fixtures import (
@@ -108,6 +109,119 @@ def test_v3_backfills_reconciliation_for_unknown_only_rows(tmp_path, monkeypatch
             "SELECT position_reconciliation_required FROM universe_state "
             "WHERE canonical_instrument_id=?", (CID,)).fetchone()[0]
     assert recon == 1                                # blocked for reconciliation, not guessed
+
+
+# ── R1.2 (P2-B): v3 back-fill preserves/derives the authoritative anchor ───────
+def _v2_then_v3(tmp_path, monkeypatch, rows):
+    """Build a v2 DB, insert universe_state rows, then upgrade to v3. Each row dict:
+    {cid, current_state, last_observed, pid_hash?, eval_date?}."""
+    db = str(tmp_path / "universe.db")
+    monkeypatch.setattr("bot.universe.db.MIGRATIONS", [m for m in MIGRATIONS if m[0] <= 2])
+    assert migrate(db) == 2
+    with connect(db) as conn:
+        for r in rows:
+            conn.execute(
+                "INSERT INTO canonical_instruments (canonical_instrument_id, display_symbol, "
+                "created_at, updated_at) VALUES (?,?,?,?)", (r["cid"], r["cid"], "t", "t"))
+            conn.execute(
+                "INSERT INTO universe_state (canonical_instrument_id, current_state, "
+                "last_observed_position_status, last_observed_position_id_hash, "
+                "evaluated_trading_date) VALUES (?,?,?,?,?)",
+                (r["cid"], r["current_state"], r.get("last_observed"),
+                 r.get("pid_hash"), r.get("eval_date")))
+    monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
+    assert migrate(db) == 3
+    return db
+
+
+_AUTH_COLS = ("last_authoritative_position_status", "last_authoritative_position_id_hash",
+              "last_authoritative_observed_at", "position_reconciliation_required")
+
+
+def _auth(db, cid):
+    with connect(db) as conn:
+        row = conn.execute(
+            f"SELECT {', '.join(_AUTH_COLS)} FROM universe_state "
+            "WHERE canonical_instrument_id=?", (cid,)).fetchone()
+    return dict(zip(_AUTH_COLS, row))
+
+
+def test_v3_open_at_boundary_retains_authoritative_anchor(tmp_path, monkeypatch):
+    # P2-B core: a v2 row OPEN at the migration boundary keeps its authoritative-open anchor
+    # (+ provenance), so a later evidence-bearing close is NOT mistaken for an ordinary flat.
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "OPEN_OK", "current_state": "POSITION_OPEN",
+         "last_observed": "POSITION_OPEN", "pid_hash": "hh", "eval_date": "2026-06-10"}])
+    a = _auth(db, "OPEN_OK")
+    assert a["last_authoritative_position_status"] == "POSITION_OPEN"
+    assert a["last_authoritative_position_id_hash"] == "hh"
+    assert a["last_authoritative_observed_at"] == "2026-06-10"
+    assert a["position_reconciliation_required"] == 0
+
+
+def test_v3_open_without_provenance_is_reconciliation_blocked(tmp_path, monkeypatch):
+    # OPEN but no usable observation date → cannot establish provenance → block (anchor kept).
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "OPEN_NOPROV", "current_state": "POSITION_OPEN",
+         "last_observed": "POSITION_OPEN", "eval_date": None}])
+    a = _auth(db, "OPEN_NOPROV")
+    assert a["last_authoritative_position_status"] == "POSITION_OPEN"
+    assert a["position_reconciliation_required"] == 1
+
+
+def test_v3_clean_flat_and_exited_rows_are_non_blocked(tmp_path, monkeypatch):
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "FLAT", "current_state": "WATCHLIST",
+         "last_observed": "NO_POSITION", "eval_date": "2026-06-10"},
+        {"cid": "EXITED", "current_state": "COOLDOWN",
+         "last_observed": "POSITION_EXITED", "eval_date": "2026-06-10"}])
+    for cid in ("FLAT", "EXITED"):
+        a = _auth(db, cid)
+        assert a["last_authoritative_position_status"] == "NO_POSITION"
+        assert a["position_reconciliation_required"] == 0
+
+
+def test_v3_uncertain_rows_blocked_never_inferred_flat(tmp_path, monkeypatch):
+    # UNKNOWN / missing / malformed legacy status → authoritative state not reconstructable →
+    # reconciliation-blocked, NEVER silently inferred flat.
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "UNK", "current_state": "EXIT_ONLY",
+         "last_observed": "UNKNOWN", "eval_date": "2026-06-10"},
+        {"cid": "MISSING", "current_state": "COOLDOWN",
+         "last_observed": None, "eval_date": "2026-06-10"},
+        {"cid": "MALFORMED", "current_state": "WATCHLIST",
+         "last_observed": "WHO_KNOWS", "eval_date": "2026-06-10"}])
+    for cid in ("UNK", "MISSING", "MALFORMED"):
+        a = _auth(db, cid)
+        assert a["position_reconciliation_required"] == 1
+        assert a["last_authoritative_position_status"] is None
+
+
+def test_v3_migrated_open_anchor_makes_later_close_start_cooldown(tmp_path, monkeypatch):
+    # P2-B end-to-end: because the migrated anchor is POSITION_OPEN, a subsequent
+    # evidence-bearing close is detected as an EXIT (→ cooldown), not an ordinary flat.
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": CID, "current_state": "POSITION_OPEN", "last_observed": "POSITION_OPEN",
+         "pid_hash": "hh", "eval_date": "2026-06-10"}])
+    reg = Registry(db)
+    ev = ShadowEvaluator(reg, bars_provider=lambda r: None, flags={})
+    cont = ev._position_continuity(
+        reg.get_state(CID),
+        PositionSnapshot(status=PositionStatus.NO_POSITION,
+                         closed_trading_date=date(2026, 6, 12)), date(2026, 6, 12))
+    assert cont["exit_detected"] is True               # migrated anchor → close = exit
+    assert cont["reconciliation_required"] is False
+
+
+def test_v3_backfill_rerun_is_idempotent(tmp_path, monkeypatch):
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "OPEN_OK", "current_state": "POSITION_OPEN",
+         "last_observed": "POSITION_OPEN", "pid_hash": "hh", "eval_date": "2026-06-10"},
+        {"cid": "UNK", "current_state": "EXIT_ONLY",
+         "last_observed": "UNKNOWN", "eval_date": "2026-06-10"}])
+    before = (_auth(db, "OPEN_OK"), _auth(db, "UNK"))
+    assert migrate(db) == 3                              # rerun: no-op
+    assert (_auth(db, "OPEN_OK"), _auth(db, "UNK")) == before
 
 
 # ── P3-2: legacy `cooldown_until` is not the source of truth ───────────────────

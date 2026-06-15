@@ -120,16 +120,18 @@ def test_cooldown_e4_release_requires_eligibility():
 
 def test_cooldown_does_not_advance_while_unknown_position():
     # An UNKNOWN position status must not advance the cooldown clock (we cannot
-    # confirm the instrument is flat) — it is held, not decremented.
+    # confirm the instrument is flat) — it is held, not decremented. R1.2 (P2-C): UNKNOWN
+    # is position uncertainty → POSITION_RECONCILIATION, not EXIT_ONLY.
     o = t(prior=State.COOLDOWN.value, cd=2, elig=PASS, position_unknown=True)
-    assert o.new_state == State.EXIT_ONLY and o.cooldown_remaining == 2
+    assert o.new_state == State.POSITION_RECONCILIATION and o.cooldown_remaining == 2
 
 
 def test_unknown_position_status_blocks_entry_safely():
-    # UNKNOWN never becomes entry-eligible and never forces liquidation; it holds the
-    # safer non-entry EXIT_ONLY state and records the reason (never a silent pass).
+    # UNKNOWN never becomes entry-eligible and never forces liquidation; it holds the safe
+    # non-entry POSITION_RECONCILIATION state (R1.2 / P2-C — uncertainty is NOT EXIT_ONLY,
+    # which requires an authoritative open) and records the reason (never a silent pass).
     o = t(prior=State.WATCHLIST.value, passes=5, elig=PASS, position_unknown=True)
-    assert o.new_state == State.EXIT_ONLY
+    assert o.new_state == State.POSITION_RECONCILIATION
     assert Reason.POSITION_STATUS_UNKNOWN in o.reason_codes
 
 
@@ -137,3 +139,33 @@ def test_hard_disabled_dominates_unknown_position():
     o = t(prior=State.POSITION_OPEN.value, elig=PASS,
           hard_disabled=True, position_unknown=True)
     assert o.new_state == State.HARD_DISABLED
+
+
+# ── R1.2 (P2-C): POSITION_RECONCILIATION vs EXIT_ONLY split ─────────────────────
+def test_uncertainty_maps_to_position_reconciliation_not_exit_only():
+    # Both forms of position uncertainty resolve to POSITION_RECONCILIATION (never EXIT_ONLY).
+    for ctx in ({"position_unknown": True}, {"reconciliation_required": True}):
+        o = t(prior=State.WATCHLIST.value, passes=5, elig=PASS, **ctx)
+        assert o.new_state == State.POSITION_RECONCILIATION
+        assert o.new_state != State.EXIT_ONLY
+
+
+def test_exit_only_requires_authoritative_open_position():
+    # EXIT_ONLY is produced ONLY when a position authoritatively exists (has_open_position)
+    # and entry is blocked (admin-paused or structurally failing) — never from uncertainty.
+    paused = t(prior=State.POSITION_OPEN.value, elig=PASS,
+               has_open_position=True, admin_paused=True)
+    assert paused.new_state == State.EXIT_ONLY
+    failing = t(prior=State.POSITION_OPEN.value, elig=FAIL_DATA, has_open_position=True)
+    assert failing.new_state == State.EXIT_ONLY
+    # without an authoritative open, the same blocked inputs never yield EXIT_ONLY.
+    assert t(prior=State.WATCHLIST.value, elig=PASS,
+             position_unknown=True).new_state != State.EXIT_ONLY
+
+
+def test_position_reconciliation_blocks_entry_and_holds_cooldown():
+    # A reconciliation block never becomes entry-eligible and never advances cooldown.
+    o = t(prior=State.COOLDOWN.value, cd=2, passes=5, elig=PASS, reconciliation_required=True)
+    assert o.new_state == State.POSITION_RECONCILIATION
+    assert o.cooldown_remaining == 2                       # held, not decremented
+    assert Reason.POSITION_RECONCILIATION_REQUIRED in o.reason_codes

@@ -560,8 +560,13 @@ class ShadowEvaluator:
     # ── hypothetical slot / sector / heat contention ──────────────────
     def _apply_contention(self, outcomes: list) -> dict:
         live = [o for o in outcomes if "skipped" not in o]
+        # POSITION_RECONCILIATION conservatively counts as occupying a slot/sector: the
+        # position MAY exist (ownership unresolved), so reserving its slot avoids
+        # over-allocating new hypothetical entries. This preserves the pre-R1.2 behaviour
+        # where the (overloaded) EXIT_ONLY uncertainty case reserved a slot (P2-C).
         open_now = [o for o in live if o["new_state"] in
-                    (State.POSITION_OPEN.value, State.EXIT_ONLY.value)]
+                    (State.POSITION_OPEN.value, State.EXIT_ONLY.value,
+                     State.POSITION_RECONCILIATION.value)]
         candidates = [o for o in live
                       if o["new_state"] == State.ENTRY_ELIGIBLE.value and o["entry_signal"]]
         candidates.sort(key=params.candidate_sort_key)

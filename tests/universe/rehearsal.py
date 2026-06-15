@@ -69,6 +69,7 @@ def run_rehearsal(db_path: str) -> dict:
         "admin_pause_suppressions": 0,
         "position_open_transitions": 0,
         "exit_only_transitions": 0,
+        "position_reconciliation_transitions": 0,
         "cooldown_transitions": 0,
         "slot_rejections": 0,
         "sector_cap_rejections": 0,
@@ -99,6 +100,8 @@ def run_rehearsal(db_path: str) -> dict:
                 counts["position_open_transitions"] += 1
             elif st == State.EXIT_ONLY.value:
                 counts["exit_only_transitions"] += 1
+            elif st == State.POSITION_RECONCILIATION.value:
+                counts["position_reconciliation_transitions"] += 1
             elif st == State.COOLDOWN.value:
                 counts["cooldown_transitions"] += 1
             elif st == State.DATA_INELIGIBLE.value:

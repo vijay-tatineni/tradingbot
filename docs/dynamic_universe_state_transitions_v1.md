@@ -13,17 +13,23 @@ DATA_INELIGIBLE  structurally failing (history/price/ADV/indicators/mapping/corp
 WATCHLIST        structurally eligible, still accruing the 2-pass entry hysteresis
 ENTRY_ELIGIBLE   structurally eligible AND ≥2 consecutive passing sessions
 POSITION_OPEN    hypothetical position open and still fully eligible
-EXIT_ONLY        hypothetical position open but entries suppressed (exits continue)
+EXIT_ONLY        position AUTHORITATIVELY open but entries suppressed (exits continue)
+POSITION_RECONCILIATION  position ownership UNRESOLVED — blocks entry, asserts nothing (R1.2)
 COOLDOWN         post-exit cooldown (3 completed sessions)
 ADMIN_PAUSED     operator off/paused, flat (blocks entries; not an open position)
 ```
 
-`position_reconciliation_required` (R1.1) is a durable BLOCK surfaced as `EXIT_ONLY` with
-reason `position_reconciliation_required` (not a separate state): the last authoritative
-status was `POSITION_OPEN` and the position is now reported flat without durable closure
-evidence (or only via a non-authoritative observation). It blocks new entry, never forces
-liquidation, holds cooldown, and persists until an authoritative `POSITION_OPEN` or an
-evidence-bearing close clears it.
+`POSITION_RECONCILIATION` (R1.2 / P2-C) is a dedicated state for position *uncertainty*.
+It replaces the R1.1 overloading of `EXIT_ONLY` for this case. It is entered when either:
+the last authoritative status was `POSITION_OPEN` and the position is now reported flat
+without durable closure evidence (the durable `position_reconciliation_required` flag, reason
+`position_reconciliation_required`); OR the current observation is non-authoritative —
+`UNKNOWN` / error / stale / future / missing provider (reason `position_status_unknown`). It
+blocks all new entry, NEVER asserts a position exists or is flat, never forces liquidation,
+never decrements cooldown, and (for the durable flag) persists until an authoritative
+`POSITION_OPEN` or an evidence-bearing close clears it. `EXIT_ONLY` is now reserved strictly
+for a position that AUTHORITATIVELY exists (current authoritative snapshot is `POSITION_OPEN`)
+with entries suppressed — it never represents uncertainty.
 
 ## Dominance / rules (explicit precedence)
 
@@ -118,10 +124,18 @@ NO_POSITION (auth.)    → if last authoritative was OPEN and durable closure ev
                          else ordinary flat branch (WATCHLIST/ENTRY_ELIGIBLE/…)
 POSITION_EXITED        → durable exit signal → COOLDOWN (exit on E)
 POSITION_EXITED_TODAY  → DEPRECATED transient exit signal (still honoured) → COOLDOWN
-UNKNOWN / non-auth.    → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
-                         never forced liquidation, cooldown held; authoritative evidence kept
-reconciliation block   → EXIT_ONLY, reason position_reconciliation_required (durable)
+UNKNOWN / non-auth.    → POSITION_RECONCILIATION (R1.2), reason position_status_unknown;
+                         never entry-eligible, never forced liquidation, cooldown held;
+                         authoritative evidence kept
+reconciliation block   → POSITION_RECONCILIATION (R1.2), reason
+                         position_reconciliation_required (durable)
 ```
+
+> **R1.2 (P2-C) change:** position *uncertainty* — both the `UNKNOWN`/non-authoritative case
+> and the durable `position_reconciliation_required` block — now resolves to the dedicated
+> `POSITION_RECONCILIATION` state, not `EXIT_ONLY`. `EXIT_ONLY` is reserved for a position
+> that authoritatively exists. Consumers must NOT read `EXIT_ONLY` as "a position may not
+> exist"; uncertainty is `POSITION_RECONCILIATION`.
 
 **Durable, exactly-once exit (P3-9, R1.1).** Cooldown does NOT depend on the transient
 `POSITION_EXITED_TODAY`. It starts when the evaluator sees an explicit durable exit signal,

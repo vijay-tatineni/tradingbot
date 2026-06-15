@@ -98,7 +98,7 @@ def test_open_to_unknown_does_not_start_cooldown(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg)
     o, st = _run_day(reg, PositionStatus.UNKNOWN, "2026-06-15")
-    assert o["new_state"] == State.EXIT_ONLY.value                # UNKNOWN safe hold
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): UNKNOWN safe hold
     assert (st["cooldown_sessions_remaining"] or 0) == 0
     assert st["last_processed_position_event_id"] is None
     # OPEN→UNKNOWN: the stored observed status is UNKNOWN (so a later NO_POSITION is NOT a

@@ -5,6 +5,12 @@ shadow position tracked by the evaluator's own ledger — they NEVER read or man
 live positions.db. "Exit management continues" in EXIT_ONLY means the hypothetical
 ATR-trail / trend-break calculation keeps running on the synthetic position; no
 broker call is made.
+
+EXIT_ONLY (R1.2 / P2-C) is reserved for the case where a position AUTHORITATIVELY
+EXISTS (the current authoritative snapshot is POSITION_OPEN) but no new entry / reversal
+/ pyramiding is permitted while deterministic exit management continues. Position
+*uncertainty* — an unsupported open→flat, or any non-authoritative observation — is the
+separate POSITION_RECONCILIATION state, which never asserts a position exists.
 """
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -19,6 +25,12 @@ class State(str, Enum):
     ENTRY_ELIGIBLE = "ENTRY_ELIGIBLE"
     POSITION_OPEN = "POSITION_OPEN"
     EXIT_ONLY = "EXIT_ONLY"
+    # R1.2 (P2-C): position ownership/status is UNRESOLVED — an authoritative open→flat
+    # without durable closure evidence, or a non-authoritative (UNKNOWN/stale/future/missing)
+    # observation. Distinct from EXIT_ONLY: it does NOT assert that a position exists. Blocks
+    # all new entries, never forces liquidation, never decrements cooldown; cleared only by an
+    # authoritative POSITION_OPEN or an evidence-bearing close. See state_machine.transition.
+    POSITION_RECONCILIATION = "POSITION_RECONCILIATION"
     COOLDOWN = "COOLDOWN"
     ADMIN_PAUSED = "ADMIN_PAUSED"
 

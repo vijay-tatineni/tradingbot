@@ -34,10 +34,12 @@ def test_rehearsal_runs_are_isolated_no_shared_fx_state(tmp_path):
 def test_rehearsal_exercises_full_lifecycle(tmp_path):
     c = run_rehearsal(str(tmp_path / "universe.db"))
     st = c["state_transitions"]
-    # every lifecycle state was reached organically
+    # every lifecycle state was reached organically (R1.2: incl. POSITION_RECONCILIATION)
     for state in ("WATCHLIST", "ENTRY_ELIGIBLE", "POSITION_OPEN", "EXIT_ONLY",
-                  "COOLDOWN", "DATA_INELIGIBLE", "ADMIN_PAUSED", "HARD_DISABLED"):
+                  "POSITION_RECONCILIATION", "COOLDOWN", "DATA_INELIGIBLE",
+                  "ADMIN_PAUSED", "HARD_DISABLED"):
         assert st.get(state, 0) > 0, f"state {state} never reached"
+    assert c["position_reconciliation_transitions"] >= 1
     # candidate sources all present
     assert set(c["candidates_by_source"]) == {"AUTO", "TTI", "MANUAL"}
     assert c["candidate_expirations"] == 2                 # TTI + MANUAL past TTL

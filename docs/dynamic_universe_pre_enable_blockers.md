@@ -91,6 +91,34 @@
 > The foundation remains default-off and un-wired. P3-4, P3-5, P3-6, P3-7, BLOCKER-S are
 > deferred to Phase R2.
 
+### R1.2 — pre-enable corrections from the independent R1.1 review
+
+The independent review of R1/R1.1 **approved the disabled merge** but raised three **P2
+pre-enable** findings. **Phase R1.2** (branch `feature/dynamic-universe-preenable-r1-fix2`)
+corrects all three. They are **IMPLEMENTED and tested — awaiting independent review**, not
+resolved. P3-3/P3-8/P3-9 stay `IMPLEMENTED — awaiting independent review` (P3-3 specifically
+could not be cleared until P2-A was fixed).
+
+| ID | One-line | Status |
+|----|----------|--------|
+| P2-A | historical replay rejected after current state legitimately advanced (`persist_transition_atomic`) | IMPLEMENTED (R1.2) — awaiting independent review |
+| P2-B | v3 migration lost the authoritative open anchor for a position open at the migration boundary | IMPLEMENTED (R1.2) — awaiting independent review |
+| P2-C | `EXIT_ONLY` overloaded for position uncertainty (could imply a position definitely exists) | IMPLEMENTED (R1.2) — awaiting independent review |
+
+- **P2-A:** `_reconcile_duplicate` now treats a current-state row that has legitimately
+  advanced past the replayed history date as a valid idempotent no-op (exact replay) or a
+  conflict (divergent history content), reserving `StateHistoryConsistencyError` for a
+  missing / behind / incoherent current state.
+- **P2-B:** the v3 back-fill (corrected IN PLACE — v3 is unreleased / never run in
+  production) derives the authoritative anchor from the v2 `last_observed_position_status`
+  (using `evaluated_trading_date` as provenance); UNKNOWN / missing / malformed → blocked,
+  never inferred flat.
+- **P2-C:** a dedicated `POSITION_RECONCILIATION` state now represents position uncertainty;
+  `EXIT_ONLY` is reserved for an authoritatively-open position.
+
+See `docs/dynamic_universe_pre_enable_r1_2_completion.md`. The foundation remains
+default-off and un-wired; nothing is enabled, wired, migrated, or deployed.
+
 ### P3-1 — Documentation scope deviation (advisory; no code change)
 - **Risk:** none (inert documentation).
 - **Current behavior:** `docs/ig_service_pause_runbook.md`,

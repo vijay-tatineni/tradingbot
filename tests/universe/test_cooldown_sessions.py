@@ -94,7 +94,7 @@ def test_unknown_status_holds_count(tmp_path):
     _start_cooldown(reg)
     _run(reg, PositionStatus.NO_POSITION, "2026-06-13")            # → 2
     o, st = _run(reg, PositionStatus.UNKNOWN, "2026-06-14")        # UNKNOWN holds
-    assert o["new_state"] == State.EXIT_ONLY.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value   # R1.2 (P2-C): uncertainty
     assert st["cooldown_sessions_remaining"] == 2                  # NOT decremented
     assert st["cooldown_last_counted_trading_date"] == "2026-06-13"
 

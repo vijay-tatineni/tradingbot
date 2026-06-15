@@ -68,9 +68,12 @@ durable `POSITION_EXITED` signal, or an authoritative `last_authoritative=POSITI
 NO_POSITION` transition with EXPLICIT closure evidence (`closed_trading_date` /
 `close_event_id` / `explicitly_closed`; a bare `position_id` is NOT evidence), de-duplicated by
 `last_processed_position_event_id` (with a stale-close guard). An authoritative open→flat
-WITHOUT evidence sets a durable `position_reconciliation_required` block (blocks entry, no
-liquidation, holds cooldown; cleared only by an authoritative `POSITION_OPEN` or an
-evidence-bearing close). Cooldown never starts from `UNKNOWN → NO_POSITION`, a no-evidence
+WITHOUT evidence sets a durable `position_reconciliation_required` block, surfaced since R1.2
+as the dedicated `POSITION_RECONCILIATION` state (blocks entry, no liquidation, holds cooldown;
+cleared only by an authoritative `POSITION_OPEN` or an evidence-bearing close). A
+non-authoritative observation (`UNKNOWN`/stale/future/missing provider) also resolves to
+`POSITION_RECONCILIATION` (R1.2 / P2-C) — `EXIT_ONLY` now means a position AUTHORITATIVELY
+exists, never uncertainty. Cooldown never starts from `UNKNOWN → NO_POSITION`, a no-evidence
 open→flat, or a provider error.
 
 ```python
@@ -99,7 +102,8 @@ sched = DailyUniverseScheduler(ev, flags, bar_available_fn=lambda rec, td: bar_e
   fail-closed) records `corp_action_data_unavailable` and FAILS eligibility. A detected
   `anomaly` blocks in both. Never a silent pass. See state-transitions doc §"Corporate-
   action policy".
-* Position status UNKNOWN → `position_status_unknown`, safe non-entry EXIT_ONLY hold.
+* Position status UNKNOWN → `position_status_unknown`, safe non-entry `POSITION_RECONCILIATION`
+  hold (R1.2 / P2-C — no longer `EXIT_ONLY`, which now means an authoritative open exists).
 * Completed bar not yet available (holiday/late) → scheduler skip + retry (no history).
 * Unknown sector → `sector_unknown` recorded (non-blocking).
 * Idempotency conflict on history insert → skipped (already recorded); other DB errors
@@ -116,7 +120,8 @@ offline end-to-end rehearsal on synthetic fixtures (no broker, no data provider,
 DB, no production config writes). It exercises seed, idempotent migration rerun,
 AUTO/TTI/MANUAL candidates + 5-session TTL, entry/removal hysteresis, ADMIN_PAUSED,
 DATA_INELIGIBLE, HARD_DISABLED, the full POSITION_OPEN ⇄ EXIT_ONLY → COOLDOWN lifecycle
-with E+1..E+3 blocking and E+4 release, slot/sector/heat contention, IBKR-primary +
+with E+1..E+3 blocking and E+4 release, the POSITION_RECONCILIATION uncertainty hold (R1.2),
+slot/sector/heat contention, IBKR-primary +
 IG-routing-blocked, multi-timezone scheduling, same-day idempotency, restart recovery,
 missing-bar skip, corporate-action UNKNOWN warning, and position-status UNKNOWN safe
 behaviour. The exit (E) is driven by a **durable `OPEN → NO_POSITION` + `closed_trading_date`

@@ -1,5 +1,12 @@
 # Dynamic Universe — Pre-Enable Remediation, Phase R1 / R1.1 Completion
 
+> **Follow-up:** the independent review of R1/R1.1 approved the disabled merge but raised
+> three **P2 pre-enable** findings (P2-A historical replay, P2-B migration anchor loss, P2-C
+> `EXIT_ONLY` overload). These are corrected in **Phase R1.2** on branch
+> `feature/dynamic-universe-preenable-r1-fix2` — see
+> `docs/dynamic_universe_pre_enable_r1_2_completion.md`. P3-3/P3-8/P3-9 remain
+> `IMPLEMENTED — awaiting independent review` (P3-3 could not be cleared until P2-A was fixed).
+>
 > **Branch:** `feature/dynamic-universe-preenable-r1` (R1), continued on
 > `feature/dynamic-universe-preenable-r1-fix1` (R1.1), from `breakout-strategy @
 > 46b8f2571f32cf1deec71688cad230445bd25bdd`.

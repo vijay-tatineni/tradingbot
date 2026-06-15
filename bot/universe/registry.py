@@ -366,17 +366,30 @@ class Registry:
 
         On a duplicate idempotency key (canonical_instrument_id, trading_date,
         evaluator_version) the stored content is compared to the proposed transition
-        INSIDE the transaction (so the read is consistent under the write lock):
+        INSIDE the transaction (so the read is consistent under the write lock). The
+        append-only history row is the authoritative record of that key's transition; the
+        decision is driven by it and by the ordering of the current-state row's evaluated
+        date relative to this history date (R1.2 / P2-A):
 
-          * identical content (history fields AND current-state lifecycle/cooldown/
-            authoritative markers all agree) → idempotent no-op → returns False;
-          * divergent content (different new_state / feature hash / cooldown result /
-            lifecycle event / authoritative markers) → ``TransitionConflictError``;
-          * stored history without a current-state row, or a current-state row that
-            reflects an incompatible later/earlier transition → ``StateHistoryConsistencyError``.
+          * current state's evaluated date EQUALS this history date (state still reflects
+            this transition): full comparison of history fields AND current-state lifecycle/
+            cooldown/authoritative markers → identical ⇒ idempotent no-op (False);
+            divergent ⇒ ``TransitionConflictError``;
+          * current state's evaluated date is LATER than this history date (the universe
+            legitimately advanced on D+1, D+2, …): compare ONLY the immutable history
+            content → identical ⇒ idempotent no-op (a valid historical replay is NOT
+            rejected just because the current state moved on); divergent ⇒
+            ``TransitionConflictError``. The current-state row is NOT required to still equal
+            this history row's new_state;
+          * current state's evaluated date is EARLIER than this history date, or the
+            current-state row is missing, or (same date) the stored current_state disagrees
+            with the stored history new_state → ``StateHistoryConsistencyError``.
 
         A conflict/inconsistency is NEVER silently accepted as a no-op and is NEVER
-        silently repaired — it rolls back and fails closed.
+        silently repaired — it rolls back and fails closed. Bounded limitation: cooldown
+        bookkeeping is not folded into the history feature-hash, so a cooldown-ONLY
+        divergence on an ALREADY-ADVANCED replay (identical state label and hash) is not
+        re-flagged in the advanced regime; the same-date regime compares it in full.
 
         Returns True if persisted (new), False if idempotent no-op. ``_fault_hook`` is a
         test-only seam (``"after_history"``, ``"after_state"``, ``"at_commit"``).
@@ -451,7 +464,13 @@ class Registry:
         """Compare a stored transition (existing history row + current-state row) against a
         proposed one for the SAME idempotency key. Returns "idempotent" if identical; raises
         TransitionConflictError on divergent content or StateHistoryConsistencyError on a
-        broken history/state pair. Read-only (the caller rolls back)."""
+        broken/impossible history/state pair. Read-only (the caller rolls back).
+
+        The append-only history row is the authoritative record of this key's transition.
+        Which comparison applies is decided by the ordering of the current-state row's
+        evaluated date relative to this history date (R1.2 / P2-A): a current state that has
+        legitimately ADVANCED past this date is NOT corruption and is NOT required to still
+        equal this history row's new_state."""
         cid = history["canonical_instrument_id"]
         ex_prior, ex_new, ex_reasons, ex_hash = existing_h
 
@@ -468,27 +487,48 @@ class Registry:
         (s_state, s_eval_date, s_cd_rem, s_cd_start, s_cd_last, s_event, s_close,
          s_auth_status, s_auth_pid, s_recon) = row
 
-        # The current-state row must reflect THIS transition's date; a different date means
-        # the state reflects an incompatible later/earlier transition than this history row.
-        if s_eval_date != trading_date:
-            raise StateHistoryConsistencyError(
-                f"history exists for {cid} {trading_date} but current state reflects "
-                f"{s_eval_date} (incompatible later/earlier transition)")
-        # State/history must agree on the new state for this date.
-        if s_state != ex_new:
-            raise StateHistoryConsistencyError(
-                f"current_state={s_state!r} disagrees with history.new_state={ex_new!r} "
-                f"for {cid} {trading_date}")
-
-        # Content comparison: history fields ...
-        prop_cd_rem = state.get("cooldown_sessions_remaining")
-        prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
+        # The immutable history row is authoritative for this key. A divergent PROPOSED
+        # history content is a conflict regardless of how far the current state has advanced.
         history_same = (
             ex_prior == history.get("prior_state")
             and ex_new == history["new_state"]
             and ex_reasons == _dumps(history.get("reason_codes"))
             and ex_hash == history.get("feature_snapshot_hash"))
-        # ... and current-state lifecycle / cooldown / authoritative markers.
+
+        if s_eval_date is None:
+            raise StateHistoryConsistencyError(
+                f"history exists for {cid} {trading_date} but current state has no evaluated date")
+        # ISO date strings compare lexicographically == chronologically.
+        if str(s_eval_date) < str(trading_date):
+            # Current state is BEHIND a history row it supposedly produced — impossible
+            # ordering (history only exists for dates the state has reached). Corruption.
+            raise StateHistoryConsistencyError(
+                f"history exists for {cid} {trading_date} but current state is older "
+                f"({s_eval_date}) — impossible ordering")
+
+        if str(s_eval_date) > str(trading_date):
+            # The universe legitimately ADVANCED past this date (later evaluations ran). This
+            # is NOT corruption (P2-A). Decide purely on the immutable history content: an
+            # exact historical replay is an idempotent no-op; a divergent one is a conflict.
+            # The current-state row is NOT required to still equal this history's new_state.
+            if history_same:
+                return "idempotent"
+            raise TransitionConflictError(
+                f"duplicate idempotency key with DIVERGENT history content for {cid} "
+                f"{trading_date} (current state has since advanced to {s_eval_date})")
+
+        # s_eval_date == trading_date: the current state still reflects THIS transition. The
+        # stored current_state must agree with the stored history new_state, else the two
+        # stored rows are inconsistent (corruption).
+        if s_state != ex_new:
+            raise StateHistoryConsistencyError(
+                f"current_state={s_state!r} disagrees with history.new_state={ex_new!r} "
+                f"for {cid} {trading_date}")
+
+        # Full same-date comparison: history fields AND current-state lifecycle / cooldown /
+        # authoritative markers must all agree for an idempotent no-op.
+        prop_cd_rem = state.get("cooldown_sessions_remaining")
+        prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
         state_same = (
             s_state == state["current_state"]
             and s_cd_rem == prop_cd_rem
