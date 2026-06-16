@@ -272,4 +272,21 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v4: Pre-Enable R2A-0 (P3-R1-A reused explicit close-event id). Strictly ADDITIVE.
+        #        Persists the DISCRIMINATOR-QUALIFIED close-event key alongside the raw
+        #        last_processed_position_event_id. A provider close_event_id MUST be globally
+        #        unique per close lifecycle; binding it to its lifecycle discriminator
+        #        (canonical instrument id + hashed position id + opened trading date) lets the
+        #        evaluator detect the SAME explicit id reused under a DIFFERENT lifecycle —
+        #        a provider-contract violation routed to POSITION_RECONCILIATION (entry blocked,
+        #        no cooldown manufactured), never a masked second close. No back-fill: a NULL
+        #        legacy key simply means "no prior qualified close key" and is treated safely
+        #        (the violation check requires a non-NULL prior key to compare). This is a
+        #        forward-only v4 — the reviewed v1–v3 chain is NOT edited.
+        4,
+        [
+            "ALTER TABLE universe_state ADD COLUMN last_close_event_key TEXT",
+        ],
+    ),
 ]

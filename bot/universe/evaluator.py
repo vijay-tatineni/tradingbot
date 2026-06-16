@@ -348,6 +348,8 @@ class ShadowEvaluator:
             # durable exactly-once close markers (P3-9):
             "last_processed_position_event_id": cont["last_processed_position_event_id"],
             "last_position_close_trading_date": cont["last_position_close_trading_date"],
+            # P3-R1-A discriminator-qualified close-event key (reuse-violation detection):
+            "last_close_event_key": cont["last_close_event_key"],
             # deprecated v2 mirror (kept = latest observed; not read by runtime logic):
             "last_observed_position_status": cont["latest_observed_position_status"],
             "last_observed_position_id_hash": cont["last_authoritative_position_id_hash"],
@@ -497,6 +499,19 @@ class ShadowEvaluator:
         return _synth_close_event_id(cid, pid_hash, opened, closed), False
 
     @staticmethod
+    def _close_event_key(cid, pid_hash, opened, event_id) -> str:
+        """Discriminator-qualified close-event key (P3-R1-A / R2A-0). Binds the (explicit or
+        synthetic) close-event id to its lifecycle discriminator — canonical instrument id,
+        hashed position id, and opened trading date. A provider ``close_event_id`` MUST be
+        globally unique per close lifecycle; reusing the SAME explicit id under a DIFFERENT
+        discriminator changes this key, which ``_position_continuity`` treats as a
+        provider-contract violation (→ POSITION_RECONCILIATION) rather than an idempotent
+        replay. (For a synthetic id the discriminator is already baked into the id, so the key
+        only adds protection for the provider-controlled explicit-id path.)"""
+        opened_iso = _date_iso(opened) if opened is not None else "?"
+        return f"{cid}|{pid_hash or '?'}|{opened_iso}|{event_id}"
+
+    @staticmethod
     def _stale_close(closed, prior_close) -> bool:
         """True if `closed` predates the already-processed close date (older event after a
         newer one) — such a close must be ignored, never restart a newer lifecycle."""
@@ -524,6 +539,7 @@ class ShadowEvaluator:
         p_auth_at = prior.get("last_authoritative_observed_at")
         p_event = prior.get("last_processed_position_event_id")
         p_close = prior.get("last_position_close_trading_date")
+        p_close_key = prior.get("last_close_event_key")   # P3-R1-A discriminator-qualified key
         recon = bool(prior.get("position_reconciliation_required"))
 
         observed_date, malformed = self._observed_date(pos_snap, td_date)
@@ -536,6 +552,7 @@ class ShadowEvaluator:
         # carry authoritative evidence forward by default; touch ONLY when authoritative.
         new_auth_status, new_auth_pid, new_auth_at = p_auth_status, p_auth_pid, p_auth_at
         new_event, new_close = p_event, p_close
+        new_close_key = p_close_key
         exit_detected = False
 
         if authoritative:
@@ -569,14 +586,36 @@ class ShadowEvaluator:
                         # the authoritative anchor at POSITION_OPEN.
                         recon = True
                     else:
-                        if not self._stale_close(closed, p_close) and ev != p_event:
+                        # P3-R1-A: qualify the close-event id with its lifecycle discriminator.
+                        # An EXPLICIT provider close_event_id is contractually unique per close
+                        # lifecycle; the SAME explicit id observed under a DIFFERENT discriminator
+                        # (canonical id + hashed position id + opened trading date) is a provider-
+                        # contract violation, NOT a replay — route to reconciliation (entry
+                        # blocked, no cooldown manufactured, authoritative anchor kept at OPEN),
+                        # never mask the genuine second close. A synthetic id already bakes the
+                        # discriminator in, so its qualified key only changes when the id does.
+                        explicit = pos_snap.close_event_id is not None
+                        qkey = self._close_event_key(cid, pid_hash or p_auth_pid,
+                                                     pos_snap.opened_trading_date, ev)
+                        if (explicit and ev == p_event and p_close_key is not None
+                                and qkey != p_close_key):
+                            recon = True                         # provider-contract violation
+                        elif not self._stale_close(closed, p_close) and ev != p_event:
                             exit_detected = True
                             new_event = ev
+                            new_close_key = qkey
                             new_close = closed.isoformat() if isinstance(closed, date) else str(closed)
-                        recon = False                            # close reconciled
-                        new_auth_status = PositionStatus.NO_POSITION.value
-                        new_auth_pid = pid_hash or p_auth_pid
-                        new_auth_at = obs_iso
+                            recon = False                        # close reconciled
+                            new_auth_status = PositionStatus.NO_POSITION.value
+                            new_auth_pid = pid_hash or p_auth_pid
+                            new_auth_at = obs_iso
+                        else:
+                            # idempotent replay (same id + same discriminator): the close is
+                            # already processed — reconcile the flat anchor, never restart cooldown.
+                            recon = False
+                            new_auth_status = PositionStatus.NO_POSITION.value
+                            new_auth_pid = pid_hash or p_auth_pid
+                            new_auth_at = obs_iso
                 else:
                     # OPEN→flat WITHOUT durable evidence → reconciliation required. Keep the
                     # authoritative anchor at POSITION_OPEN (do NOT trust the unverified flat).
@@ -600,6 +639,7 @@ class ShadowEvaluator:
             "last_authoritative_observed_at": new_auth_at,
             "last_processed_position_event_id": new_event,
             "last_position_close_trading_date": new_close,
+            "last_close_event_key": new_close_key,
         }
 
     # ── hypothetical slot / sector / heat contention ──────────────────

@@ -109,7 +109,11 @@ class PositionSnapshot:
     position_id: Optional[str] = None
     opened_trading_date: Optional[date] = None
     closed_trading_date: Optional[date] = None
-    close_event_id: Optional[str] = None        # durable id of the close event (P3-9 dedup)
+    # durable id of the close event (P3-9 dedup). PROVIDER CONTRACT (P3-R1-A): MUST be globally
+    # unique per close lifecycle — reuse under a different lifecycle discriminator (canonical id
+    # + hashed position id + opened_trading_date) is a contract violation → POSITION_RECONCILIATION,
+    # never an idempotent replay that could mask a genuine second close.
+    close_event_id: Optional[str] = None
     explicitly_closed: bool = False             # provider asserts the prior open is closed
     source_version: Optional[str] = None
 
