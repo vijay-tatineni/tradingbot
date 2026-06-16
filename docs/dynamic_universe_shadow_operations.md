@@ -65,9 +65,15 @@ entry, no forced liquidation, cooldown held). The evaluator persists the LATEST 
 which a non-authoritative observation NEVER erases — so an exit during an outage survives.
 **Exit detection is durable and exactly-once (P3-9, R1.1):** cooldown starts from an explicit
 durable `POSITION_EXITED` signal, or an authoritative `last_authoritative=POSITION_OPEN →
-NO_POSITION` transition with EXPLICIT closure evidence (`closed_trading_date` /
-`close_event_id` / `explicitly_closed`; a bare `position_id` is NOT evidence), de-duplicated by
-`last_processed_position_event_id` (with a stale-close guard). An authoritative open→flat
+NO_POSITION` transition with EXPLICIT closure evidence, de-duplicated by
+`last_processed_position_event_id` (with a stale-close guard). **Close identity is
+lifecycle-safe (R1.3 / Finding 1):** to START cooldown the close must carry a collision-safe
+identity — an explicit `close_event_id` (preferred), OR `opened_trading_date` +
+`closed_trading_date` (the synthetic id is keyed on the lifecycle window so a reused
+`position_id` cannot mask a second exit). A close lacking both (e.g. `closed_trading_date`
+alone, `explicitly_closed` alone, or a bare exit signal) is AMBIGUOUS → it routes to
+`POSITION_RECONCILIATION`, never a cooldown bypass. **Providers SHOULD supply `close_event_id`
+(or both lifecycle dates) for every cooldown-starting close.** An authoritative open→flat
 WITHOUT evidence sets a durable `position_reconciliation_required` block, surfaced since R1.2
 as the dedicated `POSITION_RECONCILIATION` state (blocks entry, no liquidation, holds cooldown;
 cleared only by an authoritative `POSITION_OPEN` or an evidence-bearing close). A

@@ -206,6 +206,7 @@ def run_rehearsal(db_path: str) -> dict:
         ("2026-06-14", PositionStatus.POSITION_OPEN, _src()),                 # restore → POSITION_OPEN
         ("2026-06-15", PositionSnapshot(status=PositionStatus.NO_POSITION,    # exit → COOLDOWN (E)
                                         position_id="aapl-pos-1",
+                                        opened_trading_date=date(2026, 6, 12),  # R1.3 discriminator
                                         closed_trading_date=date(2026, 6, 15)), _src()),
         ("2026-06-16", PositionStatus.NO_POSITION, _src()),                   # E+1 COOLDOWN
         ("2026-06-17", PositionStatus.NO_POSITION, _src()),                   # E+2 COOLDOWN

@@ -199,6 +199,18 @@ MIGRATIONS = [
             # durable blocked condition requiring authoritative reconciliation:
             "ALTER TABLE universe_state ADD COLUMN position_reconciliation_required INTEGER NOT NULL DEFAULT 0",
 
+            # ── R1.3 (P2-D / Finding 2) complete immutable transition record ──
+            # A canonical, deterministic serialization (+ its hash) of ALL material transition
+            # outputs — INCLUDING the cooldown bookkeeping that the feature_snapshot_hash omits.
+            # This makes the content-aware idempotency check able to detect a divergent replay
+            # (e.g. different cooldown_sessions_remaining) even when the current-state row has
+            # legitimately advanced past the replayed trading date. Added to the append-only
+            # history table; ALTER ADD COLUMN is DDL (not a row UPDATE/DELETE) so the v2
+            # append-only triggers do not fire. v3 is corrected IN PLACE (unreleased / never run
+            # in production), so no schema v4 is introduced.
+            "ALTER TABLE universe_state_history ADD COLUMN transition_snapshot_json TEXT",
+            "ALTER TABLE universe_state_history ADD COLUMN transition_snapshot_hash TEXT",
+
             # ── R1.2 (P2-B) conservative authoritative-continuity back-fill ──
             # All statements run inside the single v3 BEGIN IMMEDIATE transaction (db.migrate),
             # so the back-fill is atomic with the schema change and never touches the

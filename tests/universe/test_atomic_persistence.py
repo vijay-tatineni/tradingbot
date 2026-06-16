@@ -404,3 +404,63 @@ def test_history_rows_cannot_be_updated_or_deleted(tmp_path):
         rows = conn.execute(
             "SELECT new_state FROM universe_state_history").fetchall()
     assert [r[0] for r in rows] == ["ENTRY_ELIGIBLE"]
+
+
+# ── R1.3 (Finding 2): advanced replay compares the COMPLETE immutable transition ──
+# (incl. cooldown bookkeeping the feature hash omits), even after the state advanced.
+@pytest.mark.parametrize("field,baseline,variant", [
+    ("cooldown_sessions_remaining", 3, 1),
+    ("cooldown_started_trading_date", "2026-06-10", "2026-06-09"),
+    ("cooldown_last_counted_trading_date", "2026-06-10", "2026-06-09"),
+    ("last_processed_position_event_id", "ev-A", "ev-B"),
+    ("last_position_close_trading_date", "2026-06-10", "2026-06-09"),
+    ("position_reconciliation_required", 0, 1),
+    ("last_authoritative_position_status", "NO_POSITION", "POSITION_OPEN"),
+])
+def test_advanced_replay_detects_divergent_transition_content(tmp_path, field, baseline, variant):
+    reg, db = _reg(tmp_path)
+    # Day D persisted with a baseline transition.
+    reg.persist_transition_atomic(
+        _state(state="COOLDOWN", evaluated_trading_date="2026-06-10", **{field: baseline}),
+        _history(date="2026-06-10", new_state="COOLDOWN"))
+    # D+1, D+2 legitimately advance the current-state row.
+    reg.persist_transition_atomic(_state(state="WATCHLIST", evaluated_trading_date="2026-06-11"),
+                                  _history(date="2026-06-11", new_state="WATCHLIST"))
+    reg.persist_transition_atomic(_state(state="ENTRY_ELIGIBLE", evaluated_trading_date="2026-06-12"),
+                                  _history(date="2026-06-12", new_state="ENTRY_ELIGIBLE"))
+    # Replay Day D with ONE divergent field → conflict, even though state advanced to D+2.
+    with pytest.raises(TransitionConflictError):
+        reg.persist_transition_atomic(
+            _state(state="COOLDOWN", evaluated_trading_date="2026-06-10", **{field: variant}),
+            _history(date="2026-06-10", new_state="COOLDOWN"))
+
+
+def test_advanced_exact_replay_remains_idempotent_no_op(tmp_path):
+    reg, db = _reg(tmp_path)
+    base = dict(state="COOLDOWN", evaluated_trading_date="2026-06-10",
+                cooldown_sessions_remaining=3, cooldown_started_trading_date="2026-06-10",
+                last_processed_position_event_id="ev-A", position_reconciliation_required=0)
+    reg.persist_transition_atomic(_state(**base), _history(date="2026-06-10", new_state="COOLDOWN"))
+    reg.persist_transition_atomic(_state(state="WATCHLIST", evaluated_trading_date="2026-06-12"),
+                                  _history(date="2026-06-12", new_state="WATCHLIST"))
+    # byte-identical Day-D transition replayed after advancement → idempotent no-op.
+    assert reg.persist_transition_atomic(
+        _state(**base), _history(date="2026-06-10", new_state="COOLDOWN")) is False
+    assert _counts(db) == (1, 2)
+
+
+def test_transition_snapshot_hash_is_deterministic_and_date_stable():
+    from datetime import date
+    from bot.universe.registry import _transition_json_and_hash
+    h = {"prior_state": "WATCHLIST", "new_state": "COOLDOWN",
+         "reason_codes": ["b", "a"], "feature_snapshot_hash": "fh"}
+    s = {"cooldown_sessions_remaining": 3, "cooldown_started_trading_date": "2026-06-10",
+         "position_reconciliation_required": 0, "last_processed_position_event_id": "ev"}
+    # repeated runs → identical hash
+    assert _transition_json_and_hash(s, h) == _transition_json_and_hash(s, h)
+    # a date object and its ISO string hash identically (stable date serialization)
+    s_date = dict(s, cooldown_started_trading_date=date(2026, 6, 10))
+    assert _transition_json_and_hash(s_date, h)[1] == _transition_json_and_hash(s, h)[1]
+    # reason-code ordering is canonicalized (sorted) → order-independent
+    h_reordered = dict(h, reason_codes=["a", "b"])
+    assert _transition_json_and_hash(s, h)[1] == _transition_json_and_hash(s, h_reordered)[1]

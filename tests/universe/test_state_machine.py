@@ -169,3 +169,14 @@ def test_position_reconciliation_blocks_entry_and_holds_cooldown():
     assert o.new_state == State.POSITION_RECONCILIATION
     assert o.cooldown_remaining == 2                       # held, not decremented
     assert Reason.POSITION_RECONCILIATION_REQUIRED in o.reason_codes
+
+
+def test_active_cooldown_with_reconciliation_required_does_not_decrement():
+    # R1.3 (§3 targeted safety): an instrument mid-cooldown that also acquires a
+    # reconciliation block holds the cooldown count — POSITION_RECONCILIATION never
+    # decrements an active cooldown (the advance guard excludes reconciliation_required).
+    o = t(prior=State.COOLDOWN.value, cd=2, elig=PASS,
+          reconciliation_required=True, cooldown_session_countable=True)
+    assert o.new_state == State.POSITION_RECONCILIATION
+    assert o.cooldown_remaining == 2            # held, not decremented to 1
+    assert Reason.POSITION_RECONCILIATION_REQUIRED in o.reason_codes

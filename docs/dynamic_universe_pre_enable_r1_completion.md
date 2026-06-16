@@ -2,10 +2,14 @@
 
 > **Follow-up:** the independent review of R1/R1.1 approved the disabled merge but raised
 > three **P2 pre-enable** findings (P2-A historical replay, P2-B migration anchor loss, P2-C
-> `EXIT_ONLY` overload). These are corrected in **Phase R1.2** on branch
-> `feature/dynamic-universe-preenable-r1-fix2` — see
-> `docs/dynamic_universe_pre_enable_r1_2_completion.md`. P3-3/P3-8/P3-9 remain
-> `IMPLEMENTED — awaiting independent review` (P3-3 could not be cleared until P2-A was fixed).
+> `EXIT_ONLY` overload), corrected in **Phase R1.2**
+> (`docs/dynamic_universe_pre_enable_r1_2_completion.md`). The independent review of R1.2 then
+> raised two further findings — close-event identity collisions (Finding 1) and incomplete
+> advanced-replay content comparison (Finding 2) — corrected in **Phase R1.3** on branch
+> `feature/dynamic-universe-preenable-r1-fix3`
+> (`docs/dynamic_universe_pre_enable_r1_3_completion.md`). P3-3/P3-8/P3-9 remain
+> `IMPLEMENTED — awaiting independent review` (P3-3 could not be cleared until Finding 2 was
+> fixed).
 >
 > **Branch:** `feature/dynamic-universe-preenable-r1` (R1), continued on
 > `feature/dynamic-universe-preenable-r1-fix1` (R1.1), from `breakout-strategy @

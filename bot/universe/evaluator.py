@@ -61,14 +61,23 @@ def _pid_hash(position_id) -> Optional[str]:
     return hashlib.sha256(str(position_id).encode()).hexdigest()[:16]
 
 
-def _event_id(pid_hash, closed_trading_date) -> str:
-    """Durable, idempotent identifier for a single position-close event (P3-9). Keyed on
-    the (hashed) position identity and the close trading date, so a replayed observation of
-    the SAME close yields the SAME id and never restarts cooldown; a genuinely later close
-    (new date / new position) yields a new id and a fresh cooldown."""
-    return hashlib.sha256(
-        f"{pid_hash or '?'}|{_date_iso(closed_trading_date)}".encode()
-    ).hexdigest()[:24]
+def _synth_close_event_id(canonical_instrument_id, pid_hash, opened, closed) -> str:
+    """Lifecycle-safe synthetic close-event identity (R1.3 / Finding 1).
+
+    Keyed on the canonical instrument, the (hashed) position identity, AND the lifecycle
+    WINDOW (opened + closed trading dates) — so two DISTINCT lifecycles that reuse the same
+    position_id and even close on the same trading date still get DISTINCT ids (their open
+    dates differ). A replay of the SAME close yields the SAME id (no cooldown reset). The
+    ``close:v2`` version prefix lets the scheme evolve. Never embeds a raw account id or any
+    unredacted sensitive identifier (the position id is pre-hashed).
+
+    NOTE: ``opened`` is the required lifecycle discriminator; the caller must NOT invoke this
+    without it (a missing open date is treated as an ambiguous close → reconciliation, never a
+    collision-prone fallback). The old ``(pid_hash, closed)``-only identity is removed.
+    """
+    canonical = (f"close:v2:{canonical_instrument_id}|{pid_hash or '?'}"
+                 f"|{_date_iso(opened)}|{_date_iso(closed)}")
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
 
 def _date_iso(d) -> str:
@@ -248,7 +257,7 @@ class ShadowEvaluator:
         #       and NEVER erases the LAST AUTHORITATIVE evidence, so an exit that happens
         #       during an outage is still detected, exactly once, when an authoritative
         #       evidence-bearing close arrives.
-        cont = self._position_continuity(prior, pos_snap, td_date)
+        cont = self._position_continuity(cid, prior, pos_snap, td_date)
 
         # ── 6. cooldown transition inputs (P3-2 counting rules) ───────
         # A session counts at most once and only when a completed bar exists (weekends/
@@ -467,6 +476,27 @@ class ShadowEvaluator:
         return True
 
     @staticmethod
+    def _close_event_identity(cid, pos_snap: PositionSnapshot, pid_hash, closed):
+        """Resolve the close-event identity for a close (R1.3 / Finding 1). Returns
+        ``(event_id, ambiguous)``:
+
+          * explicit ``close_event_id`` → ``(str(id), False)`` — strongest, provider owns it;
+          * else ``opened_trading_date`` present → lifecycle-safe synthetic id, ``(id, False)``;
+          * else → ``(None, True)`` — no explicit id AND no lifecycle discriminator, so a
+            collision-safe identity cannot be formed (the close is ambiguous).
+
+        A bare ``position_id`` + ``closed_trading_date`` is deliberately NOT enough: a provider
+        may reuse a position_id across distinct lifecycles closing on the same date.
+        """
+        explicit = pos_snap.close_event_id
+        if explicit is not None:
+            return str(explicit), False
+        opened = pos_snap.opened_trading_date
+        if opened is None:
+            return None, True
+        return _synth_close_event_id(cid, pid_hash, opened, closed), False
+
+    @staticmethod
     def _stale_close(closed, prior_close) -> bool:
         """True if `closed` predates the already-processed close date (older event after a
         newer one) — such a close must be ignored, never restart a newer lifecycle."""
@@ -478,7 +508,7 @@ class ShadowEvaluator:
         except (ValueError, TypeError):
             return False
 
-    def _position_continuity(self, prior, pos_snap: PositionSnapshot, td_date) -> dict:
+    def _position_continuity(self, cid, prior, pos_snap: PositionSnapshot, td_date) -> dict:
         """Resolve the authoritative position lifecycle for one evaluation (R1.1, P3-8/P3-9).
 
         Separates the LATEST observation (which a non-authoritative UNKNOWN may overwrite)
@@ -523,15 +553,30 @@ class ShadowEvaluator:
                 # transition needs EXPLICIT evidence (bare position_id is insufficient).
                 if is_exit_signal or pos_snap.has_closure_evidence():
                     closed = pos_snap.closed_trading_date or td_date
-                    ev = pos_snap.close_event_id or _event_id(pid_hash or p_auth_pid, closed)
-                    if not self._stale_close(closed, p_close) and ev != p_event:
-                        exit_detected = True
-                        new_event = ev
-                        new_close = closed.isoformat() if isinstance(closed, date) else str(closed)
-                    recon = False                                # close reconciled
-                    new_auth_status = PositionStatus.NO_POSITION.value
-                    new_auth_pid = pid_hash or p_auth_pid
-                    new_auth_at = obs_iso
+                    # Close-event identity (R1.3 / Finding 1), strongest first:
+                    #   1. explicit provider close_event_id (preferred, owns uniqueness);
+                    #   2. lifecycle-safe synthetic id REQUIRING opened_trading_date as the
+                    #      lifecycle discriminator (so a reused position_id + same close date
+                    #      across DISTINCT lifecycles still yields distinct ids);
+                    #   3. otherwise AMBIGUOUS — cannot distinguish the close safely.
+                    ev, ambiguous = self._close_event_identity(cid, pos_snap,
+                                                               pid_hash or p_auth_pid, closed)
+                    if ambiguous:
+                        # No explicit id AND no opened_trading_date → we cannot form a
+                        # collision-safe identity. Do NOT mark the close processed, do NOT
+                        # start cooldown, do NOT permit entry — require authoritative
+                        # reconciliation (never the old collision-prone cooldown bypass). Keep
+                        # the authoritative anchor at POSITION_OPEN.
+                        recon = True
+                    else:
+                        if not self._stale_close(closed, p_close) and ev != p_event:
+                            exit_detected = True
+                            new_event = ev
+                            new_close = closed.isoformat() if isinstance(closed, date) else str(closed)
+                        recon = False                            # close reconciled
+                        new_auth_status = PositionStatus.NO_POSITION.value
+                        new_auth_pid = pid_hash or p_auth_pid
+                        new_auth_at = obs_iso
                 else:
                     # OPEN→flat WITHOUT durable evidence → reconciliation required. Keep the
                     # authoritative anchor at POSITION_OPEN (do NOT trust the unverified flat).

@@ -205,9 +205,12 @@ def test_v3_migrated_open_anchor_makes_later_close_start_cooldown(tmp_path, monk
          "pid_hash": "hh", "eval_date": "2026-06-10"}])
     reg = Registry(db)
     ev = ShadowEvaluator(reg, bars_provider=lambda r: None, flags={})
+    # R1.3 (Finding 1): signature now takes the canonical id; the close carries a
+    # collision-safe identity (opened+closed dates).
     cont = ev._position_continuity(
-        reg.get_state(CID),
+        CID, reg.get_state(CID),
         PositionSnapshot(status=PositionStatus.NO_POSITION,
+                         opened_trading_date=date(2026, 6, 9),
                          closed_trading_date=date(2026, 6, 12)), date(2026, 6, 12))
     assert cont["exit_detected"] is True               # migrated anchor → close = exit
     assert cont["reconciliation_required"] is False
@@ -285,3 +288,39 @@ def test_runtime_modules_do_not_read_cooldown_until_as_count(tmp_path):
     # the count is read from the session field; cooldown_until appears only in the
     # ambiguity branch (never assigned to the returned count).
     assert "cooldown_sessions_remaining" in src
+
+
+# ── R1.3 (Finding 3): close the remaining migration coverage gaps ───────────────
+V3_COLUMNS = {
+    "latest_observed_position_status", "latest_observed_at",
+    "last_authoritative_position_status", "last_authoritative_position_id_hash",
+    "last_authoritative_observed_at", "position_reconciliation_required",
+}
+
+
+def test_v3_adds_all_authoritative_and_reconciliation_columns(tmp_path):
+    db = str(tmp_path / "universe.db")
+    assert migrate(db) == 3
+    # every v3 column present — INCLUDING latest_observed_at (previously unasserted).
+    assert V3_COLUMNS.issubset(_state_columns(db))
+
+
+def test_v3_adds_transition_snapshot_history_columns(tmp_path):
+    # R1.3 (Finding 2): the append-only history table gains the complete-transition columns.
+    db = str(tmp_path / "universe.db")
+    assert migrate(db) == 3
+    with connect(db) as conn:
+        cols = {c[1] for c in conn.execute(
+            "PRAGMA table_info(universe_state_history)").fetchall()}
+    assert {"transition_snapshot_json", "transition_snapshot_hash"}.issubset(cols)
+
+
+def test_v3_position_exited_today_row_migrates_to_flat_anchor(tmp_path, monkeypatch):
+    # A v2 row whose last_observed status is the (durable) POSITION_EXITED_TODAY migrates to a
+    # clean NO_POSITION authoritative anchor, non-blocked (the close is already resolved).
+    db = _v2_then_v3(tmp_path, monkeypatch, [
+        {"cid": "ET", "current_state": "COOLDOWN",
+         "last_observed": "POSITION_EXITED_TODAY", "eval_date": "2026-06-10"}])
+    a = _auth(db, "ET")
+    assert a["last_authoritative_position_status"] == "NO_POSITION"
+    assert a["position_reconciliation_required"] == 0

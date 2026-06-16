@@ -6,9 +6,10 @@ package still imports no broker adapter and calls no broker method (asserted in
 tests/universe/test_no_live_integration.py and by the recorded provider calls here).
 """
 import sqlite3
+from datetime import date
 
 from bot.universe.evaluator import ShadowEvaluator
-from bot.universe.models import PositionStatus, Reason, State
+from bot.universe.models import PositionSnapshot, PositionStatus, Reason, State
 from bot.universe.registry import Registry
 from bot.universe.seed import canonical_id, seed_registry
 from tests.universe._fixtures import (
@@ -79,7 +80,10 @@ def test_position_exit_to_cooldown(tmp_path):
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
-    pos = StubPositionProvider({CID: PositionStatus.POSITION_EXITED_TODAY})
+    # R1.3 (Finding 1): the exit carries a collision-safe identity (opened+closed dates).
+    pos = StubPositionProvider({CID: PositionSnapshot(
+        status=PositionStatus.POSITION_EXITED_TODAY,
+        opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, o = _run(reg, SpyProvider({CID: _src()}), pos, "2026-06-10")
     assert o["new_state"] == State.COOLDOWN.value
     # persisted cooldown_remaining is 3 (exit session does not count — task §2)
@@ -144,8 +148,11 @@ def test_cooldown_e1_e2_e3_block_e4_release_via_provider(tmp_path):
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
     src = SpyProvider({CID: _src()})
-    # E: exit today → COOLDOWN (remaining 3; exit session does not count)
-    pos_exit = StubPositionProvider({CID: PositionStatus.POSITION_EXITED_TODAY})
+    # E: exit today → COOLDOWN (remaining 3; exit session does not count). R1.3 (Finding 1):
+    # the exit carries a collision-safe identity (opened+closed dates).
+    pos_exit = StubPositionProvider({CID: PositionSnapshot(
+        status=PositionStatus.POSITION_EXITED_TODAY,
+        opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, oE = _run(reg, src, pos_exit, "2026-06-10")
     assert oE["new_state"] == State.COOLDOWN.value
     # E+1..E+3: flat, still COOLDOWN (blocked)

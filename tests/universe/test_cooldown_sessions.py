@@ -44,8 +44,11 @@ def _run(reg, snap, day, bars=True):
 
 def _start_cooldown(reg, open_day="2026-06-11", exit_day="2026-06-12"):
     _run(reg, PositionStatus.POSITION_OPEN, open_day)
+    # R1.3 (Finding 1): a cooldown-starting close needs a collision-safe identity —
+    # opened_trading_date is the lifecycle discriminator (or an explicit close_event_id).
     o, st = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
                                        position_id="p1",
+                                       opened_trading_date=date.fromisoformat(open_day),
                                        closed_trading_date=date.fromisoformat(exit_day)),
                  exit_day)
     assert o["new_state"] == State.COOLDOWN.value and st["cooldown_sessions_remaining"] == 3

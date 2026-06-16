@@ -5,6 +5,7 @@ Mirrors the existing sqlite store idiom (bot/regime/*_store.py): a db_path strin
 ``CREATE`` handled by migrations, simple context-managed connections. No broker, no
 data provider, no live-DB access.
 """
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -15,6 +16,69 @@ from bot.universe.db import connect, migrate
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_or_none(v):
+    """Stable ISO serialization for a date/datetime/str (None → None). Ensures a date passed
+    on the write path and an ISO string passed on a replay hash identically."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+
+# Material transition-output fields drawn from the current-state record (R1.3 / Finding 2).
+# The history record contributes prior_state / new_state / reason_codes / feature_snapshot_hash.
+# Wall-clock fields (e.g. evaluated_at) are deliberately EXCLUDED so the snapshot is
+# deterministic for a given logical transition.
+_TRANSITION_STATE_FIELDS = (
+    "cooldown_started_trading_date", "cooldown_sessions_remaining",
+    "cooldown_last_counted_trading_date", "last_processed_position_event_id",
+    "last_position_close_trading_date", "latest_observed_position_status",
+    "latest_observed_at", "last_authoritative_position_status",
+    "last_authoritative_position_id_hash", "last_authoritative_observed_at",
+    "position_reconciliation_required",
+)
+_TRANSITION_DATE_FIELDS = frozenset({
+    "cooldown_started_trading_date", "cooldown_last_counted_trading_date",
+    "last_position_close_trading_date", "latest_observed_at",
+    "last_authoritative_observed_at",
+})
+
+
+def _transition_snapshot(state: dict, history: dict) -> dict:
+    """Canonical dict of ALL material transition outputs (R1.3 / Finding 2). Built from a
+    FIXED field list (never ``**state``) with stable normalization — dates → ISO strings,
+    reason_codes sorted, cooldown/recon coerced to int, wall-clock fields excluded — so the
+    SAME logical transition always produces the SAME dict (and hash). The one builder feeds
+    both the write path and the reconcile recompute, so they cannot drift."""
+    reasons = history.get("reason_codes")
+    snap = {
+        "prior_state": history.get("prior_state"),
+        "new_state": history.get("new_state"),
+        "reason_codes": sorted(reasons) if isinstance(reasons, (list, tuple)) else reasons,
+        "feature_snapshot_hash": history.get("feature_snapshot_hash"),
+    }
+    for k in _TRANSITION_STATE_FIELDS:
+        v = state.get(k)
+        if k == "cooldown_sessions_remaining":
+            snap[k] = int(v) if v is not None else None
+        elif k == "position_reconciliation_required":
+            snap[k] = 1 if v else 0
+        elif k in _TRANSITION_DATE_FIELDS:
+            snap[k] = _iso_or_none(v)
+        else:
+            snap[k] = v
+    return snap
+
+
+def _transition_json_and_hash(state: dict, history: dict):
+    """Return (canonical_json, sha256_hash) for the transition. Deterministic: sorted keys,
+    no incidental whitespace; the same logical transition always hashes identically."""
+    payload = json.dumps(_transition_snapshot(state, history),
+                         sort_keys=True, separators=(",", ":"), default=str)
+    return payload, hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _dumps(value) -> Optional[str]:
@@ -343,16 +407,10 @@ class Registry:
                 "SELECT COUNT(*) FROM universe_state_history WHERE canonical_instrument_id=?",
                 (cid,)).fetchone()[0])
 
-    # ── P3-3 / R1.1: atomic, content-aware current-state + history persistence ──
-    # History-comparison columns (for content-aware idempotency, R1.1 §6).
-    _HISTORY_COMPARE = ("prior_state", "new_state", "reason_codes_json", "feature_snapshot_hash")
-    # Current-state columns whose divergence (for the SAME key/date) is a real conflict.
-    _STATE_COMPARE = (
-        "current_state", "cooldown_sessions_remaining", "cooldown_started_trading_date",
-        "cooldown_last_counted_trading_date", "last_processed_position_event_id",
-        "last_position_close_trading_date", "last_authoritative_position_status",
-        "last_authoritative_position_id_hash", "position_reconciliation_required",
-    )
+    # ── P3-3 / R1.1 / R1.3: atomic, content-aware current-state + history persistence ──
+    # Content-aware idempotency now compares the complete `transition_snapshot_hash`
+    # (R1.3 / Finding 2), built by `_transition_snapshot`; the older per-field compare tuples
+    # were removed as dead code.
 
     def persist_transition_atomic(self, state: dict, history: dict,
                                   _fault_hook=None) -> bool:
@@ -413,7 +471,8 @@ class Registry:
             try:
                 # 0) content-aware reconciliation if this key already exists.
                 existing_h = conn.execute(
-                    "SELECT prior_state, new_state, reason_codes, feature_snapshot_hash "
+                    "SELECT prior_state, new_state, reason_codes, feature_snapshot_hash, "
+                    "transition_snapshot_hash "
                     "FROM universe_state_history "
                     "WHERE canonical_instrument_id=? AND trading_date=? AND evaluator_version=?",
                     (cid, td, ver)).fetchone()
@@ -427,18 +486,24 @@ class Registry:
                         f"unreconciled duplicate transition for {cid} {td}")
 
                 # 1) history FIRST — append-only; UNIQUE index is the structural backstop.
+                #    The complete, deterministic transition snapshot (+ hash) is stored here so
+                #    the content-aware idempotency check covers EVERY material output — including
+                #    cooldown bookkeeping that the feature hash omits (R1.3 / Finding 2).
+                t_json, t_hash = _transition_json_and_hash(state, history)
                 conn.execute(
                     """
                     INSERT INTO universe_state_history
                         (canonical_instrument_id, trading_date, prior_state, new_state,
                          reason_codes, feature_snapshot_json, feature_snapshot_hash,
-                         evaluator_version, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                         evaluator_version, created_at,
+                         transition_snapshot_json, transition_snapshot_hash)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (cid, td, history.get("prior_state"), history["new_state"],
                      _dumps(history.get("reason_codes")),
                      _dumps(history.get("feature_snapshot")),
-                     history.get("feature_snapshot_hash"), ver, _utc_now_iso()),
+                     history.get("feature_snapshot_hash"), ver, _utc_now_iso(),
+                     t_json, t_hash),
                 )
                 fault("after_history")
                 # 2) then the mutable current state + ALL lifecycle/authoritative markers
@@ -467,12 +532,14 @@ class Registry:
         broken/impossible history/state pair. Read-only (the caller rolls back).
 
         The append-only history row is the authoritative record of this key's transition.
-        Which comparison applies is decided by the ordering of the current-state row's
-        evaluated date relative to this history date (R1.2 / P2-A): a current state that has
-        legitimately ADVANCED past this date is NOT corruption and is NOT required to still
-        equal this history row's new_state."""
+        Idempotency is decided on the COMPLETE immutable transition snapshot hash (R1.3 /
+        Finding 2) — which covers cooldown bookkeeping that the feature hash omits — so a
+        divergent replay is detected even when the current state has legitimately ADVANCED
+        past this date. STRUCTURAL consistency/ordering checks run FIRST, before the
+        idempotency short-circuit, so an incoherent (history, current-state) pair can never be
+        masked as a no-op."""
         cid = history["canonical_instrument_id"]
-        ex_prior, ex_new, ex_reasons, ex_hash = existing_h
+        ex_prior, ex_new, ex_reasons, ex_hash, ex_thash = existing_h
 
         row = conn.execute(
             "SELECT current_state, evaluated_trading_date, cooldown_sessions_remaining, "
@@ -487,14 +554,7 @@ class Registry:
         (s_state, s_eval_date, s_cd_rem, s_cd_start, s_cd_last, s_event, s_close,
          s_auth_status, s_auth_pid, s_recon) = row
 
-        # The immutable history row is authoritative for this key. A divergent PROPOSED
-        # history content is a conflict regardless of how far the current state has advanced.
-        history_same = (
-            ex_prior == history.get("prior_state")
-            and ex_new == history["new_state"]
-            and ex_reasons == _dumps(history.get("reason_codes"))
-            and ex_hash == history.get("feature_snapshot_hash"))
-
+        # ── 1) STRUCTURAL consistency / ordering — MUST precede idempotency ──
         if s_eval_date is None:
             raise StateHistoryConsistencyError(
                 f"history exists for {cid} {trading_date} but current state has no evaluated date")
@@ -505,44 +565,52 @@ class Registry:
             raise StateHistoryConsistencyError(
                 f"history exists for {cid} {trading_date} but current state is older "
                 f"({s_eval_date}) — impossible ordering")
-
-        if str(s_eval_date) > str(trading_date):
-            # The universe legitimately ADVANCED past this date (later evaluations ran). This
-            # is NOT corruption (P2-A). Decide purely on the immutable history content: an
-            # exact historical replay is an idempotent no-op; a divergent one is a conflict.
-            # The current-state row is NOT required to still equal this history's new_state.
-            if history_same:
-                return "idempotent"
-            raise TransitionConflictError(
-                f"duplicate idempotency key with DIVERGENT history content for {cid} "
-                f"{trading_date} (current state has since advanced to {s_eval_date})")
-
-        # s_eval_date == trading_date: the current state still reflects THIS transition. The
-        # stored current_state must agree with the stored history new_state, else the two
-        # stored rows are inconsistent (corruption).
-        if s_state != ex_new:
+        same_date = (str(s_eval_date) == str(trading_date))
+        if same_date and s_state != ex_new:
+            # The current state still reflects THIS date but disagrees with the stored history
+            # new_state → the two stored rows are inconsistent (corruption). Checked BEFORE the
+            # idempotency short-circuit so a re-proposed original transition cannot mask it.
             raise StateHistoryConsistencyError(
                 f"current_state={s_state!r} disagrees with history.new_state={ex_new!r} "
                 f"for {cid} {trading_date}")
 
-        # Full same-date comparison: history fields AND current-state lifecycle / cooldown /
-        # authoritative markers must all agree for an idempotent no-op.
-        prop_cd_rem = state.get("cooldown_sessions_remaining")
-        prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
-        state_same = (
-            s_state == state["current_state"]
-            and s_cd_rem == prop_cd_rem
-            and s_cd_start == state.get("cooldown_started_trading_date")
-            and s_cd_last == state.get("cooldown_last_counted_trading_date")
-            and s_event == state.get("last_processed_position_event_id")
-            and s_close == state.get("last_position_close_trading_date")
-            and s_auth_status == state.get("last_authoritative_position_status")
-            and s_auth_pid == state.get("last_authoritative_position_id_hash")
-            and int(s_recon or 0) == (1 if state.get("position_reconciliation_required") else 0))
+        # ── 2) COMPLETE-content idempotency: compare the immutable transition snapshot hash
+        #       (covers prior/new state, reason_codes, feature hash, cooldown bookkeeping,
+        #       lifecycle/authoritative/reconciliation markers). A current state that has
+        #       legitimately ADVANCED is NOT required to still equal this history's new_state. ──
+        _, prop_thash = _transition_json_and_hash(state, history)
+        if ex_thash is not None:
+            transition_same = (ex_thash == prop_thash)
+        else:
+            # Legacy/back-compat row with no stored transition hash (e.g. a raw append_history
+            # insert): compare the constituent fields directly. NULL is never treated as a
+            # match.
+            history_same = (
+                ex_prior == history.get("prior_state")
+                and ex_new == history["new_state"]
+                and ex_reasons == _dumps(history.get("reason_codes"))
+                and ex_hash == history.get("feature_snapshot_hash"))
+            if same_date:
+                prop_cd_rem = state.get("cooldown_sessions_remaining")
+                prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
+                state_same = (
+                    s_state == state["current_state"]
+                    and s_cd_rem == prop_cd_rem
+                    and s_cd_start == state.get("cooldown_started_trading_date")
+                    and s_cd_last == state.get("cooldown_last_counted_trading_date")
+                    and s_event == state.get("last_processed_position_event_id")
+                    and s_close == state.get("last_position_close_trading_date")
+                    and s_auth_status == state.get("last_authoritative_position_status")
+                    and s_auth_pid == state.get("last_authoritative_position_id_hash")
+                    and int(s_recon or 0) == (1 if state.get("position_reconciliation_required") else 0))
+                transition_same = history_same and state_same
+            else:
+                transition_same = history_same
 
-        if history_same and state_same:
+        if transition_same:
             return "idempotent"
+        where = (f"current state has since advanced to {s_eval_date}" if not same_date
+                 else "same (instrument, date, evaluator_version) recorded a different result")
         raise TransitionConflictError(
-            f"duplicate idempotency key with DIVERGENT content for {cid} {trading_date}: "
-            f"the same (instrument, date, evaluator_version) was already recorded with a "
-            f"different transition/lifecycle result")
+            f"duplicate idempotency key with DIVERGENT transition content for {cid} "
+            f"{trading_date}: {where}")

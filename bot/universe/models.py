@@ -92,6 +92,17 @@ class PositionSnapshot:
     Closure evidence (R1.1): a durable open→flat exit is only recognised when the snapshot
     carries EXPLICIT closure evidence — ``closed_trading_date``, ``close_event_id``, or
     ``explicitly_closed=True``. A bare ``position_id`` is NOT proof of closure.
+
+    Close-event IDENTITY (R1.3 / Finding 1): recognising the exit is necessary but not
+    sufficient to START COOLDOWN — the evaluator must also be able to form a COLLISION-SAFE
+    close-event identity so a reused ``position_id`` across distinct lifecycles cannot mask a
+    genuine second exit. That requires EITHER an explicit ``close_event_id`` (preferred,
+    strongest), OR a lifecycle discriminator: ``opened_trading_date`` together with the close
+    date. A close that has neither (e.g. ``closed_trading_date`` alone, or ``explicitly_closed``
+    alone, or a bare ``POSITION_EXITED``/``POSITION_EXITED_TODAY`` with no open date) is
+    AMBIGUOUS → it does NOT start cooldown and instead requires authoritative reconciliation
+    (POSITION_RECONCILIATION). Providers SHOULD supply ``close_event_id`` (or both lifecycle
+    dates) for every close they want treated as a durable, cooldown-starting exit.
     """
     status: "PositionStatus"
     observed_at: Optional[datetime] = None

@@ -66,6 +66,7 @@ def test_open_unknown_flat_with_evidence_starts_cooldown_once(tmp_path):
     _open(reg, "2026-06-12")
     _run(reg, PositionStatus.UNKNOWN, "2026-06-13")
     o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                          opened_trading_date=date(2026, 6, 12),  # R1.3 discriminator
                                           closed_trading_date=date(2026, 6, 14)), "2026-06-14")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["cooldown_sessions_remaining"] == 3
@@ -108,11 +109,17 @@ def test_bare_position_id_is_not_closure_evidence(tmp_path):
     assert (st["cooldown_sessions_remaining"] or 0) == 0
 
 
-def test_each_valid_closure_evidence_starts_cooldown_once(tmp_path):
+def test_closure_with_lifecycle_discriminator_starts_cooldown_once(tmp_path):
+    # R1.3 (Finding 1): cooldown starts only when a COLLISION-SAFE close identity can be
+    # formed — an explicit close_event_id, OR opened_trading_date + closed_trading_date.
     for i, ev_snap in enumerate((
-        PositionSnapshot(status=PositionStatus.NO_POSITION, closed_trading_date=date(2026, 6, 13)),
         PositionSnapshot(status=PositionStatus.NO_POSITION, close_event_id="close-7"),
-        PositionSnapshot(status=PositionStatus.NO_POSITION, explicitly_closed=True),
+        PositionSnapshot(status=PositionStatus.NO_POSITION,
+                         opened_trading_date=date(2026, 6, 12),
+                         closed_trading_date=date(2026, 6, 13)),
+        # explicit id wins even when a (reused) position_id is also present.
+        PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="reused",
+                         close_event_id="close-9"),
     )):
         d = tmp_path / f"ev{i}"
         d.mkdir()
@@ -121,6 +128,28 @@ def test_each_valid_closure_evidence_starts_cooldown_once(tmp_path):
         o, st, _ = _run(reg, ev_snap, "2026-06-13")
         assert o["new_state"] == State.COOLDOWN.value, ev_snap
         assert st["cooldown_sessions_remaining"] == 3
+
+
+def test_closure_without_lifecycle_discriminator_requires_reconciliation(tmp_path):
+    # R1.3 (Finding 1): a close with closure evidence but NO collision-safe identity
+    # (closed_trading_date alone, or explicitly_closed alone, or a bare position_id) is
+    # AMBIGUOUS → POSITION_RECONCILIATION, never a collision-prone cooldown bypass.
+    for i, ambiguous_snap in enumerate((
+        PositionSnapshot(status=PositionStatus.NO_POSITION, closed_trading_date=date(2026, 6, 13)),
+        PositionSnapshot(status=PositionStatus.NO_POSITION, explicitly_closed=True),
+        PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                         closed_trading_date=date(2026, 6, 13)),
+    )):
+        d = tmp_path / f"amb{i}"
+        d.mkdir()
+        reg = Registry(_seed(d))
+        _open(reg, "2026-06-12")
+        o, st, _ = _run(reg, ambiguous_snap, "2026-06-13")
+        assert o["new_state"] == State.POSITION_RECONCILIATION.value, ambiguous_snap
+        assert st["position_reconciliation_required"] == 1
+        assert (st["cooldown_sessions_remaining"] or 0) == 0
+        assert st["last_processed_position_event_id"] is None
+        assert st["last_authoritative_position_status"] == "POSITION_OPEN"   # anchor kept
 
 
 # ── observation freshness / ordering ──────────────────────────────────────────
@@ -196,13 +225,27 @@ def test_reconciliation_cleared_by_evidence_close_starts_cooldown(tmp_path):
     assert st["cooldown_sessions_remaining"] == 3
 
 
-def test_exited_today_backcompat_still_starts_cooldown_once(tmp_path):
-    # the deprecated transient signal is still honoured (never depended upon).
+def test_exited_today_backcompat_with_discriminator_starts_cooldown_once(tmp_path):
+    # The deprecated transient signal is still honoured WHEN it carries a collision-safe
+    # identity (R1.3 / Finding 1 — here an opened_trading_date lifecycle discriminator).
+    reg = Registry(_seed(tmp_path))
+    _open(reg, "2026-06-12")
+    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.POSITION_EXITED_TODAY,
+                                          opened_trading_date=date(2026, 6, 12),
+                                          closed_trading_date=date(2026, 6, 13)), "2026-06-13")
+    assert o["new_state"] == State.COOLDOWN.value
+    assert st["cooldown_sessions_remaining"] == 3
+
+
+def test_exited_today_backcompat_bare_is_ambiguous_reconciliation(tmp_path):
+    # R1.3 (Finding 1): a BARE POSITION_EXITED_TODAY (no explicit id, no opened date) cannot
+    # form a collision-safe identity → POSITION_RECONCILIATION, not a cooldown bypass.
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     o, st, _ = _run(reg, PositionStatus.POSITION_EXITED_TODAY, "2026-06-13")
-    assert o["new_state"] == State.COOLDOWN.value
-    assert st["cooldown_sessions_remaining"] == 3
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value
+    assert st["position_reconciliation_required"] == 1
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
 
 
 # ── R1.2 (P2-C): the dedicated POSITION_RECONCILIATION state ────────────────────

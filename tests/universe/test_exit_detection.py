@@ -57,8 +57,9 @@ def _open(reg, day="2026-06-12"):
 def test_open_to_flat_with_evidence_starts_cooldown_once(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg)
-    snap = PositionSnapshot(status=PositionStatus.NO_POSITION,
-                            position_id="p1", closed_trading_date=date(2026, 6, 15))
+    snap = PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                            opened_trading_date=date(2026, 6, 12),   # R1.3: lifecycle discriminator
+                            closed_trading_date=date(2026, 6, 15))
     o, st = _run_day(reg, snap, "2026-06-15")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["cooldown_sessions_remaining"] == COOLDOWN_FULL   # E not counted
@@ -76,6 +77,7 @@ def test_missed_transient_exited_still_detected_by_durable_evidence(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg)
     o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                           opened_trading_date=date(2026, 6, 12),
                                            closed_trading_date=date(2026, 6, 15)),
                      "2026-06-15")
     assert o["new_state"] == State.COOLDOWN.value
@@ -124,8 +126,9 @@ def test_replayed_close_event_does_not_restart_cooldown(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg)
     # explicit durable exit signal for a specific close.
-    snap = PositionSnapshot(status=PositionStatus.POSITION_EXITED,
-                            position_id="p1", closed_trading_date=date(2026, 6, 15))
+    snap = PositionSnapshot(status=PositionStatus.POSITION_EXITED, position_id="p1",
+                            opened_trading_date=date(2026, 6, 12),
+                            closed_trading_date=date(2026, 6, 15))
     o1, st1 = _run_day(reg, snap, "2026-06-15")
     assert o1["new_state"] == State.COOLDOWN.value
     assert st1["cooldown_sessions_remaining"] == COOLDOWN_FULL
@@ -141,6 +144,7 @@ def test_new_separate_close_starts_new_cooldown(tmp_path):
     _open(reg, "2026-06-12")
     o1, st1 = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
                                              position_id="p1",
+                                             opened_trading_date=date(2026, 6, 12),
                                              closed_trading_date=date(2026, 6, 13)),
                        "2026-06-13")
     assert o1["new_state"] == State.COOLDOWN.value
@@ -155,8 +159,81 @@ def test_new_separate_close_starts_new_cooldown(tmp_path):
     _open(reg, "2026-06-18")
     o2, st2 = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
                                              position_id="p2",
+                                             opened_trading_date=date(2026, 6, 18),
                                              closed_trading_date=date(2026, 6, 19)),
                        "2026-06-19")
     assert o2["new_state"] == State.COOLDOWN.value
     assert st2["last_processed_position_event_id"] != event1        # distinct close event
     assert st2["cooldown_sessions_remaining"] == COOLDOWN_FULL      # fresh 3-session cooldown
+
+
+# ── R1.3 (Finding 1): lifecycle-safe close-event identity ───────────────────────
+def test_synthetic_close_id_distinguishes_lifecycles_and_instruments():
+    from bot.universe.evaluator import _synth_close_event_id
+    # same instrument + same (reused) pid + same close date, DIFFERENT open dates → distinct.
+    a = _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    b = _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 13), date(2026, 6, 20))
+    assert a != b
+    # different instruments, same pid + same dates → distinct (canonical id is keyed in).
+    c = _synth_close_event_id("US_MSFT", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    assert a != c
+    # same lifecycle → identical id (a replay never looks like a new close).
+    assert a == _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    # version-prefixed, hashed → no raw position id leaks into the identity string.
+    assert "pidX" not in a
+
+
+def test_reused_pid_same_close_date_distinct_lifecycles_each_start_cooldown(tmp_path):
+    # The Finding-1 collision case: a provider reuses position_id "X" across TWO distinct
+    # lifecycles that close on the SAME trading date. The second genuine exit must NOT be
+    # masked — distinct open dates yield distinct identities → second cooldown starts.
+    from bot.universe.evaluator import _pid_hash
+    reg = Registry(_seed(tmp_path))
+    ev = ShadowEvaluator(reg, bars_provider=lambda r: None, flags={})
+    px = _pid_hash("X")
+    prior1 = {"last_authoritative_position_status": "POSITION_OPEN",
+              "last_authoritative_position_id_hash": px,
+              "last_authoritative_observed_at": "2026-06-10",
+              "position_reconciliation_required": 0}
+    c1 = ev._position_continuity(CID, prior1, PositionSnapshot(
+        status=PositionStatus.NO_POSITION, position_id="X",
+        opened_trading_date=date(2026, 6, 10), closed_trading_date=date(2026, 6, 20)),
+        date(2026, 6, 20))
+    assert c1["exit_detected"] is True
+    # second lifecycle: SAME pid X, SAME close date 06-20, DIFFERENT open date 06-13.
+    prior2 = {"last_authoritative_position_status": "POSITION_OPEN",
+              "last_authoritative_position_id_hash": px,
+              "last_authoritative_observed_at": "2026-06-25",
+              "last_processed_position_event_id": c1["last_processed_position_event_id"],
+              "last_position_close_trading_date": c1["last_position_close_trading_date"],
+              "position_reconciliation_required": 0}
+    c2 = ev._position_continuity(CID, prior2, PositionSnapshot(
+        status=PositionStatus.NO_POSITION, position_id="X",
+        opened_trading_date=date(2026, 6, 13), closed_trading_date=date(2026, 6, 20)),
+        date(2026, 6, 26))
+    assert c2["exit_detected"] is True                                   # NOT masked by collision
+    assert c2["last_processed_position_event_id"] != c1["last_processed_position_event_id"]
+
+
+def test_explicit_close_event_id_controls_identity_even_with_reused_pid(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    # explicit close_event_id takes precedence over any synthesized id (and over a reused pid).
+    snap = PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="reused",
+                            close_event_id="explicit-1", closed_trading_date=date(2026, 6, 15))
+    o, st = _run_day(reg, snap, "2026-06-15")
+    assert o["new_state"] == State.COOLDOWN.value
+    assert st["last_processed_position_event_id"] == "explicit-1"        # explicit id used verbatim
+
+
+def test_close_without_explicit_id_or_open_date_is_reconciliation(tmp_path):
+    # missing close_event_id AND missing opened_trading_date → ambiguous → reconciliation,
+    # entry blocked, never a cooldown bypass (Finding 1).
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                                           closed_trading_date=date(2026, 6, 15)), "2026-06-15")
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value
+    assert st["position_reconciliation_required"] == 1
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert st["last_processed_position_event_id"] is None

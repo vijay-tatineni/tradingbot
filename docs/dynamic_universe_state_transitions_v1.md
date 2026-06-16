@@ -149,6 +149,31 @@ authoritative anchor survives a `UNKNOWN` outage, an exit during the outage
 `last_processed_position_event_id` (with a stale-close guard so an older close never restarts
 a newer lifecycle); a genuinely new later close starts a fresh cooldown.
 
+**Lifecycle-safe close identity + cooldown sufficiency (R1.3 / Finding 1).** Recognising the
+exit is necessary but NOT sufficient to start cooldown — the evaluator must also form a
+COLLISION-SAFE close-event identity so a provider that reuses a `position_id` across distinct
+lifecycles cannot mask a genuine second exit. Identity, strongest first: (1) an explicit
+`close_event_id` (preferred — the provider owns uniqueness); (2) a synthetic id keyed on
+`(canonical_id, position_id_hash, opened_trading_date, closed_trading_date)` with a `close:v2`
+version prefix — `opened_trading_date` is the required lifecycle discriminator, so a reused
+`position_id` closing on the same date in a DIFFERENT lifecycle still yields a distinct id.
+A close with NEITHER an explicit id NOR an `opened_trading_date` (e.g. `closed_trading_date`
+alone, `explicitly_closed` alone, or a bare `POSITION_EXITED`/`POSITION_EXITED_TODAY`) is
+**AMBIGUOUS** → it does NOT start cooldown and instead routes to `POSITION_RECONCILIATION`
+(never a collision-prone cooldown bypass). So the R1.1 "with evidence → COOLDOWN" rule is now
+satisfied specifically by supplying a lifecycle discriminator (a `close_event_id`, or
+`opened_trading_date` + `closed_trading_date`). The old `(pid_hash, closed)`-only fallback is
+removed. Identities are hashed and version-prefixed; no raw account id or unredacted
+identifier is ever embedded.
+
+**Complete-content replay integrity (R1.3 / Finding 2).** Each persisted transition stores a
+deterministic `transition_snapshot_json` + `transition_snapshot_hash` (in the append-only
+history row) covering ALL material outputs — prior/new state, sorted reason codes, feature
+hash, cooldown bookkeeping, lifecycle/authoritative/reconciliation markers. The content-aware
+idempotency check compares that hash, so a divergent replay (e.g. a different
+`cooldown_sessions_remaining`) raises `TransitionConflictError` EVEN when the current state has
+legitimately advanced past the replayed date; an exact replay remains an idempotent no-op.
+
 ## Structural eligibility (inputs to the transition)
 
 `bot/universe/eligibility.py` evaluates (task §7): ≥250 valid completed daily bars,

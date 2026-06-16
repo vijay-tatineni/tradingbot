@@ -119,6 +119,39 @@ could not be cleared until P2-A was fixed).
 See `docs/dynamic_universe_pre_enable_r1_2_completion.md`. The foundation remains
 default-off and un-wired; nothing is enabled, wired, migrated, or deployed.
 
+### R1.3 — pre-enable corrections from the independent R1.2 review
+
+The independent review of R1.2 **approved the disabled merge** and raised two **P2** findings
+plus a **P3** coverage gap. **Phase R1.3** (branch `feature/dynamic-universe-preenable-r1-fix3`)
+corrects all three. They are **IMPLEMENTED and tested — awaiting independent review**, not
+resolved. P3-3/P3-8/P3-9 stay `IMPLEMENTED — awaiting independent review` (P3-3 specifically
+could not be cleared until Finding 2 was fixed — it lives in the same content-aware
+idempotency machinery).
+
+| ID | One-line | Status |
+|----|----------|--------|
+| Finding 1 | synthetic close-event IDs could collide across distinct lifecycles (cooldown bypass) | IMPLEMENTED (R1.3) — awaiting independent review |
+| Finding 2 | advanced historical replay did not detect divergent cooldown bookkeeping | IMPLEMENTED (R1.3) — awaiting independent review |
+| Finding 3 | minor migration test-coverage gaps | TEST COVERAGE COMPLETED (R1.3) — awaiting independent review |
+
+- **Finding 1:** close-event identity is now lifecycle-safe — explicit `close_event_id`
+  (preferred), else a synthetic id keyed on `(canonical_id, position_id_hash,
+  opened_trading_date, closed_trading_date)` with a `close:v2` version prefix. A close with
+  NEITHER an explicit id NOR an `opened_trading_date` discriminator is AMBIGUOUS → it does NOT
+  start cooldown and instead requires authoritative reconciliation (POSITION_RECONCILIATION).
+  The old `(pid_hash, closed)`-only fallback is removed.
+- **Finding 2:** the append-only history row now stores a deterministic
+  `transition_snapshot_json` + `transition_snapshot_hash` covering ALL material transition
+  outputs (incl. cooldown bookkeeping the feature hash omits). Idempotency is decided on that
+  hash, so a divergent replay is detected even after the current state has legitimately
+  advanced. Two history columns added to the unreleased v3 migration IN PLACE (no v4).
+- **Finding 3:** added tests for the `latest_observed_at` column, the `POSITION_EXITED_TODAY`
+  migration fixture, all six v3 authoritative/reconciliation columns + the two transition
+  columns, and an active-cooldown + reconciliation no-decrement safety test.
+
+See `docs/dynamic_universe_pre_enable_r1_3_completion.md`. The foundation remains default-off
+and un-wired; nothing is enabled, wired, migrated, or deployed.
+
 ### P3-1 — Documentation scope deviation (advisory; no code change)
 - **Risk:** none (inert documentation).
 - **Current behavior:** `docs/ig_service_pause_runbook.md`,

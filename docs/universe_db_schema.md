@@ -23,8 +23,9 @@
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
 * Current schema version: **3** (v2 = Pre-Enable R1; v3 = Pre-Enable R1.1 authoritative
-  position continuity, back-fill corrected in place by R1.2 / P2-B — both strictly additive;
-  see below). No schema v4 is added: v3 is unreleased / never run in production.
+  position continuity, back-fill corrected in place by R1.2 / P2-B, and the
+  `transition_snapshot_*` history columns added in place by R1.3 / Finding 2 — all strictly
+  additive; see below). No schema v4 is added: v3 is unreleased / never run in production.
 
 ## Tables (v1)
 
@@ -130,9 +131,17 @@ bar → not countable), while a position is open, or while the status is UNKNOWN
 ### universe_state_history (append-only — physically enforced)
 ```text
 id PK AUTOINCREMENT, canonical_instrument_id, trading_date, prior_state, new_state,
-reason_codes, feature_snapshot_json, feature_snapshot_hash, evaluator_version, created_at
+reason_codes, feature_snapshot_json, feature_snapshot_hash, evaluator_version, created_at,
+transition_snapshot_json, transition_snapshot_hash    -- v3 / R1.3 (Finding 2)
 UNIQUE(canonical_instrument_id, trading_date, evaluator_version)   -- idempotency key
 ```
+`transition_snapshot_json` / `transition_snapshot_hash` (added to the unreleased v3 migration
+in place, via `ALTER TABLE … ADD COLUMN` — DDL, so the append-only triggers do not fire) hold
+a deterministic serialization (+ sha256) of ALL material transition outputs: prior/new state,
+sorted reason codes, feature hash, cooldown bookkeeping, and lifecycle/authoritative/
+reconciliation markers. Wall-clock fields are excluded so the same logical transition always
+hashes identically. This is the complete immutable record the content-aware idempotency check
+compares (R1.3 / Finding 2).
 v2 adds `BEFORE UPDATE`/`BEFORE DELETE` triggers (`trg_universe_history_no_update`,
 `trg_universe_history_no_delete`) that `RAISE(ABORT, 'universe_state_history is
 append-only')`, so a committed history row can never be rewritten or deleted (defence in
@@ -148,14 +157,19 @@ longer calls `upsert_state` + `append_history` separately). The `universe_state`
 built from a single `_STATE_COLUMNS` registry shared with `upsert_state` (lockstep — no
 column can be silently dropped from one write path).
 
-**Content-aware idempotency (R1.1).** On a duplicate idempotency key the stored content is
-compared to the proposed transition INSIDE the transaction:
-* identical (history fields AND current-state cooldown/lifecycle/authoritative markers all
-  agree) → idempotent no-op (returns `False`); the tx rolls back, neither table changes;
-* DIVERGENT (different `new_state` / `feature_snapshot_hash` / cooldown result / close event /
-  authoritative markers) → `TransitionConflictError` — never silently accepted as a no-op;
-* history row without a current-state row, or a current-state row reflecting an incompatible
-  later/earlier transition → `StateHistoryConsistencyError`.
+**Content-aware idempotency (R1.1, completed in R1.3 / Finding 2).** On a duplicate
+idempotency key the stored content is compared to the proposed transition INSIDE the
+transaction. STRUCTURAL consistency checks run FIRST (current-state row missing, current
+state older than the history row, or — same date — `current_state` ≠ stored `new_state` →
+`StateHistoryConsistencyError`), so an incoherent pair can never be masked as a no-op. Then
+idempotency is decided on the COMPLETE immutable `transition_snapshot_hash`:
+* identical hash → idempotent no-op (returns `False`); the tx rolls back, neither table changes;
+* DIVERGENT hash (ANY material output differs — `new_state` / reason codes / `feature_snapshot_hash`
+  / **cooldown bookkeeping** / close-event marker / authoritative / reconciliation markers) →
+  `TransitionConflictError`. This holds even when the current state has legitimately ADVANCED
+  past the replayed date (the comparison is against the immutable history snapshot, not the
+  current row) — closing the R1.2 gap where a cooldown-only divergence on an advanced replay
+  went undetected.
 A conflict/inconsistency fails closed (rollback + raise); it is never silently repaired.
 
 ## Idempotency
