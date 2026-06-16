@@ -30,14 +30,15 @@ import json
 import logging
 from typing import Callable, Optional
 
-from datetime import date
+from datetime import date, datetime
 
 from backtest.breakout_strategy import compute_indicators
 from bot.universe import params
 from bot.universe.eligibility import structural_eligibility
 from bot.universe.fx import normalize_to_usd
 from bot.universe.models import (
-    ELIGIBILITY_MODE_SHADOW, HypotheticalOrder, PositionStatus, Reason, State,
+    AUTHORITATIVE_STATUSES, ELIGIBILITY_MODE_SHADOW, EXIT_SIGNAL_STATUSES, HypotheticalOrder,
+    PositionSnapshot, PositionStatus, Reason, State, StateOutcome,
 )
 from bot.universe.registry import Registry
 from bot.universe.state_machine import transition
@@ -51,6 +52,36 @@ def _snapshot_hash(snapshot: dict) -> str:
     return hashlib.sha256(
         json.dumps(snapshot, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _pid_hash(position_id) -> Optional[str]:
+    """Non-sensitive, stable hash of a position_id (never store the raw id). None → None."""
+    if position_id is None:
+        return None
+    return hashlib.sha256(str(position_id).encode()).hexdigest()[:16]
+
+
+def _synth_close_event_id(canonical_instrument_id, pid_hash, opened, closed) -> str:
+    """Lifecycle-safe synthetic close-event identity (R1.3 / Finding 1).
+
+    Keyed on the canonical instrument, the (hashed) position identity, AND the lifecycle
+    WINDOW (opened + closed trading dates) — so two DISTINCT lifecycles that reuse the same
+    position_id and even close on the same trading date still get DISTINCT ids (their open
+    dates differ). A replay of the SAME close yields the SAME id (no cooldown reset). The
+    ``close:v2`` version prefix lets the scheme evolve. Never embeds a raw account id or any
+    unredacted sensitive identifier (the position id is pre-hashed).
+
+    NOTE: ``opened`` is the required lifecycle discriminator; the caller must NOT invoke this
+    without it (a missing open date is treated as an ambiguous close → reconciliation, never a
+    collision-prone fallback). The old ``(pid_hash, closed)``-only identity is removed.
+    """
+    canonical = (f"close:v2:{canonical_instrument_id}|{pid_hash or '?'}"
+                 f"|{_date_iso(opened)}|{_date_iso(closed)}")
+    return hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
+def _date_iso(d) -> str:
+    return d.isoformat() if hasattr(d, "isoformat") else str(d)
 
 
 def _last_bar_valid(row) -> bool:
@@ -133,15 +164,26 @@ class ShadowEvaluator:
 
     # ── per-instrument evaluation ─────────────────────────────────────
     def _evaluate_one(self, rec: dict, trading_date: str) -> dict:
+        # Evaluation sequence (task §5): (1) load current record → (2) completed-bar
+        # availability → (3) authoritative position snapshot → (4) structural eligibility
+        # → (5) position lifecycle → (6) cooldown transition → (7) one transition object
+        # → (8) atomic state+history+lifecycle-marker persist. No partial state is written
+        # before the complete transition is known.
         cid = rec["canonical_instrument_id"]
         td_date = (date.fromisoformat(trading_date)
                    if isinstance(trading_date, str) else trading_date)
+        # ── 1. load current universe record ───────────────────────────
         prior = self.registry.get_state(cid)
         prior_state = prior["current_state"] if prior else None
         prior_passes = prior["consecutive_passes"] if prior else 0
         prior_failures = prior["consecutive_failures"] if prior else 0
-        prior_cooldown = int(prior["cooldown_until"]) if (prior and prior.get("cooldown_until")) else 0
+        # P3-2: cooldown count comes from the session-based field; the legacy
+        # `cooldown_until` is NOT read here. An ambiguous legacy row fails safe (blocked).
+        prior_cooldown, cooldown_ambiguous = self._resolve_prior_cooldown(prior)
+        prior_last_counted = prior.get("cooldown_last_counted_trading_date") if prior else None
+        prior_started_date = prior.get("cooldown_started_trading_date") if prior else None
 
+        # ── 2. completed-bar availability ─────────────────────────────
         src = self.bars_provider(rec) or {}
         bars = src.get("bars")
         ibkr_map = self.registry.get_gateway_ibkr(cid)
@@ -204,15 +246,50 @@ class ShadowEvaluator:
         # block); the paper/live hard-block policy is a separate, un-wired code path.
         elig = structural_eligibility(snap, mode=ELIGIBILITY_MODE_SHADOW)
 
-        pos = self._position_ctx(cid, trading_date, prior_state, trend_break)
+        # ── 3. authoritative position snapshot (task §2 / P3-8) ───────
+        # No provider / error / malformed → UNKNOWN (fail-safe). A stale prior state is
+        # NEVER used as proof of an open position.
+        pos_snap = self._position_snapshot(cid, td_date)
+
+        # ── 5. position lifecycle: authoritative continuity + durable exactly-once
+        #       exit (R1.1 — P3-8/P3-9). A non-authoritative observation (UNKNOWN / error /
+        #       stale / future / missing provider) updates only the LATEST observed status
+        #       and NEVER erases the LAST AUTHORITATIVE evidence, so an exit that happens
+        #       during an outage is still detected, exactly once, when an authoritative
+        #       evidence-bearing close arrives.
+        cont = self._position_continuity(cid, prior, pos_snap, td_date)
+
+        # ── 6. cooldown transition inputs (P3-2 counting rules) ───────
+        # A session counts at most once and only when a completed bar exists (weekends/
+        # holidays/missing bars → not a completed session → never decrement); a duplicate
+        # same-date run (trading_date not strictly after the last counted date) does not
+        # count twice.
+        session_complete = (bars is not None and len(bars) > 0
+                            and bool(src.get("fresh_bar", True)))
+        countable = bool(session_complete
+                         and (prior_last_counted is None
+                              or str(trading_date) > str(prior_last_counted)))
         ctx = {
             "hard_disabled": bool(rec.get("hard_disabled")),
             "admin_active": bool(rec.get("administratively_active", 1)),
             "admin_paused": bool(src.get("admin_paused", False)),
-            **pos,
+            "has_open_position": cont["has_open_position"],
+            "position_unknown": cont["position_unknown"],
+            "reconciliation_required": cont["reconciliation_required"],
+            "exit_detected": cont["exit_detected"],
+            "cooldown_session_countable": countable,
         }
-        outcome = transition(prior_state, prior_passes, prior_failures,
-                             prior_cooldown, elig, ctx)
+
+        # ── 7. one transition object ──────────────────────────────────
+        if cooldown_ambiguous:
+            # P3-2: an ambiguous legacy cooldown is NOT inferred — fail safe into a
+            # blocked/manual-review COOLDOWN; the session count stays NULL until a human
+            # re-establishes it. (HARD_DISABLED still dominates.)
+            outcome = self._ambiguous_cooldown_outcome(rec, elig, prior_passes,
+                                                        prior_failures)
+        else:
+            outcome = transition(prior_state, prior_passes, prior_failures,
+                                 prior_cooldown, elig, ctx)
 
         feature_snapshot = {
             **{k: snap.get(k) for k in (
@@ -224,29 +301,66 @@ class ShadowEvaluator:
             "atr14": atr, "sma50": sma50,
             "primary_gateway": rec.get("primary_gateway"),
             "ibkr_mapping_ok": ibkr_ok,
+            # non-sensitive operational status + DETERMINISTIC lifecycle markers (no
+            # wall-clock): folding these into the hash makes a differing close-event /
+            # authoritative status / reconciliation surface as a feature-hash change, which
+            # the content-aware idempotency check treats as a conflict (R1.1 §6).
+            "position_status": pos_snap.status.value,
+            "latest_observed_position_status": cont["latest_observed_position_status"],
+            "last_authoritative_position_status": cont["last_authoritative_position_status"],
+            "position_reconciliation_required": cont["reconciliation_required"],
+            "exit_detected": cont["exit_detected"],
+            "position_event_id": cont["last_processed_position_event_id"],
         }
         fhash = _snapshot_hash(feature_snapshot)
 
-        # persist (idempotent history)
-        self.registry.upsert_state({
+        # ── persisted cooldown bookkeeping (P3-2) ─────────────────────
+        cooldown_remaining = (None if cooldown_ambiguous else int(outcome.cooldown_remaining))
+        started_date = trading_date if outcome.cooldown_started else prior_started_date
+        last_counted = trading_date if outcome.cooldown_counted else prior_last_counted
+
+        state_rec = {
             "canonical_instrument_id": cid,
             "current_state": outcome.new_state.value,
             "previous_state": prior_state,
             "reason_codes": outcome.reason_codes,
             "consecutive_passes": outcome.consecutive_passes,
             "consecutive_failures": outcome.consecutive_failures,
-            "cooldown_until": str(outcome.cooldown_remaining),
+            # legacy compatibility metadata ONLY (deprecated; not read by runtime logic):
+            "cooldown_until": (None if cooldown_remaining is None else str(cooldown_remaining)),
             "evaluated_trading_date": trading_date,
             "feature_snapshot_hash": fhash,
             "evaluator_version": self.evaluator_version,
-        })
-        self.registry.append_history({
+            # P3-2 canonical session-based cooldown:
+            "cooldown_started_trading_date": started_date,
+            "cooldown_sessions_remaining": cooldown_remaining,
+            "cooldown_last_counted_trading_date": last_counted,
+            "cooldown_release_estimate": None,   # never authoritative without a calendar
+            # ── R1.1 authoritative position continuity ──
+            # latest observation (UNKNOWN may overwrite this) ...
+            "latest_observed_position_status": cont["latest_observed_position_status"],
+            "latest_observed_at": cont["latest_observed_at"],
+            # ... vs last AUTHORITATIVE evidence (survives outages; never erased by UNKNOWN):
+            "last_authoritative_position_status": cont["last_authoritative_position_status"],
+            "last_authoritative_position_id_hash": cont["last_authoritative_position_id_hash"],
+            "last_authoritative_observed_at": cont["last_authoritative_observed_at"],
+            "position_reconciliation_required": cont["reconciliation_required"],
+            # durable exactly-once close markers (P3-9):
+            "last_processed_position_event_id": cont["last_processed_position_event_id"],
+            "last_position_close_trading_date": cont["last_position_close_trading_date"],
+            # deprecated v2 mirror (kept = latest observed; not read by runtime logic):
+            "last_observed_position_status": cont["latest_observed_position_status"],
+            "last_observed_position_id_hash": cont["last_authoritative_position_id_hash"],
+        }
+        history_rec = {
             "canonical_instrument_id": cid, "trading_date": trading_date,
             "prior_state": prior_state, "new_state": outcome.new_state.value,
             "reason_codes": outcome.reason_codes,
             "feature_snapshot": feature_snapshot, "feature_snapshot_hash": fhash,
             "evaluator_version": self.evaluator_version,
-        })
+        }
+        # ── 8. atomic state + history + lifecycle-marker persist (P3-3) ─
+        self.registry.persist_transition_atomic(state_rec, history_rec)
 
         return {
             "canonical_instrument_id": cid,
@@ -260,54 +374,244 @@ class ShadowEvaluator:
             "primary_gateway": rec.get("primary_gateway"),
         }
 
-    # ── broker-free position context (task §3) ────────────────────────
-    def _position_ctx(self, cid: str, trading_date, prior_state, trend_break) -> dict:
-        """Resolve operational position context for the state transition.
+    # ── cooldown legacy resolution (P3-2) ─────────────────────────────
+    @staticmethod
+    def _resolve_prior_cooldown(prior) -> tuple:
+        """Return (remaining_sessions:int, ambiguous:bool) from the prior state row.
 
-        With an injected PositionSnapshotProvider the status is authoritative and the
-        POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle is driven organically. Without
-        a provider the legacy derivation is used (prior open-class state + hypothetical
-        trend-break exit). UNKNOWN is fail-safe: possibly-open (no flat assumption),
-        never entry-eligible, never liquidated.
+        Reads ONLY the session-based `cooldown_sessions_remaining` (P3-2). If that column
+        is NULL but the deprecated legacy `cooldown_until` holds a non-zero value, the
+        count is AMBIGUOUS — it is NOT inferred; the caller fails safe into a blocked
+        manual-review state.
         """
-        if self.position_provider is not None:
-            status = self._query_position(cid, trading_date)
-            if status == PositionStatus.UNKNOWN:
-                return {"has_open_position": True, "exited_this_session": False,
-                        "position_unknown": True}
-            has_open = status in (PositionStatus.POSITION_OPEN,
-                                  PositionStatus.POSITION_EXITED_TODAY)
-            exited = status == PositionStatus.POSITION_EXITED_TODAY
-            return {"has_open_position": has_open, "exited_this_session": exited,
-                    "position_unknown": False}
-        has_open = prior_state in (State.POSITION_OPEN.value, State.EXIT_ONLY.value)
-        exited = bool(has_open and trend_break)   # hypothetical trend-break exit
-        return {"has_open_position": has_open, "exited_this_session": exited,
-                "position_unknown": False}
+        if prior is None:
+            return 0, False
+        sr = prior.get("cooldown_sessions_remaining")
+        if sr is not None:
+            return int(sr), False
+        legacy = prior.get("cooldown_until")
+        if legacy is None or str(legacy).strip() in ("", "0"):
+            return 0, False          # unambiguous: not in cooldown
+        return 0, True               # legacy non-zero count, no v2 field → ambiguous
 
-    def _query_position(self, cid: str, trading_date) -> PositionStatus:
-        """Query the injected provider, coercing any failure/garbage to UNKNOWN (fail
-        safe). The provider is broker-free by contract; this call makes no broker access."""
+    def _ambiguous_cooldown_outcome(self, rec, elig, prior_passes, prior_failures):
+        """Fail-safe COOLDOWN outcome for an ambiguous legacy cooldown row (P3-2):
+        blocked/manual-review, no inferred session count. HARD_DISABLED still dominates."""
+        reasons = list(elig.reason_codes)
+        if bool(rec.get("hard_disabled")):
+            if Reason.HARD_DISABLED not in reasons:
+                reasons.append(Reason.HARD_DISABLED)
+            return StateOutcome(State.HARD_DISABLED, 0, 0, reasons, 0)
+        for r in (Reason.IN_COOLDOWN, Reason.COOLDOWN_LEGACY_AMBIGUOUS):
+            if r not in reasons:
+                reasons.append(r)
+        # cooldown_remaining is left semantically NULL by the caller; the 0 here is unused.
+        return StateOutcome(State.COOLDOWN, prior_passes, prior_failures, reasons, 0)
+
+    # ── broker-free position snapshot (task §2 / P3-8) ────────────────
+    def _position_snapshot(self, cid: str, td_date) -> PositionSnapshot:
+        """Resolve a PositionSnapshot from the INJECTED provider.
+
+        No provider configured → UNKNOWN (never a stale prior-state assumption, P3-8).
+        Any provider exception / timeout / malformed / unrecognised value → UNKNOWN
+        (fail-safe). The provider is broker-free by contract; this makes no broker access.
+        """
+        if self.position_provider is None:
+            return PositionSnapshot(status=PositionStatus.UNKNOWN)
         try:
-            td = (date.fromisoformat(trading_date)
-                  if isinstance(trading_date, str) else trading_date)
-            status = self.position_provider.get_position_status(cid, td)
+            raw = self.position_provider.get_position_status(cid, td_date)
         except Exception:
             logger.warning("position provider error for %s on %s; treating as UNKNOWN",
-                           cid, trading_date)
-            return PositionStatus.UNKNOWN
-        if isinstance(status, PositionStatus):
-            return status
+                           cid, td_date)
+            return PositionSnapshot(status=PositionStatus.UNKNOWN)
+        return self._coerce_snapshot(raw)
+
+    @staticmethod
+    def _coerce_snapshot(raw) -> PositionSnapshot:
+        """Coerce a provider return (PositionSnapshot | PositionStatus | str) into a
+        PositionSnapshot; anything unrecognised → UNKNOWN (fail-safe)."""
+        if isinstance(raw, PositionSnapshot):
+            if isinstance(raw.status, PositionStatus):
+                return raw
+            return PositionSnapshot(status=PositionStatus.UNKNOWN)
+        if isinstance(raw, PositionStatus):
+            return PositionSnapshot(status=raw)
         try:
-            return PositionStatus(status)
+            return PositionSnapshot(status=PositionStatus(raw))
         except (ValueError, TypeError):
-            return PositionStatus.UNKNOWN
+            return PositionSnapshot(status=PositionStatus.UNKNOWN)
+
+    # ── R1.1 authoritative position continuity ────────────────────────
+    @staticmethod
+    def _observed_date(pos_snap: PositionSnapshot, td_date):
+        """Return (observed_date, malformed). A bare status (no observed_at) is taken as
+        observed on the evaluation trading date. A non-date/datetime observed_at → malformed."""
+        oa = pos_snap.observed_at
+        if oa is None:
+            return td_date, False
+        if isinstance(oa, datetime):
+            return oa.date(), False
+        if isinstance(oa, date):
+            return oa, False
+        return None, True       # malformed timestamp → non-authoritative
+
+    @staticmethod
+    def _is_authoritative(pos_snap, observed_date, malformed, td_date, prior_auth_at) -> bool:
+        """An observation is AUTHORITATIVE only when it is a real position status from a
+        fresh, in-order snapshot. UNKNOWN, malformed/future/stale/out-of-order → False."""
+        if pos_snap.status not in AUTHORITATIVE_STATUSES:
+            return False
+        if malformed or observed_date is None:
+            return False
+        if observed_date > td_date:                                  # future-dated
+            return False
+        if (td_date - observed_date).days > params.MAX_POSITION_SNAPSHOT_STALENESS_DAYS:
+            return False                                             # stale
+        if prior_auth_at:
+            try:
+                if observed_date < date.fromisoformat(str(prior_auth_at)):
+                    return False                                    # older than last authoritative
+            except ValueError:
+                pass
+        return True
+
+    @staticmethod
+    def _close_event_identity(cid, pos_snap: PositionSnapshot, pid_hash, closed):
+        """Resolve the close-event identity for a close (R1.3 / Finding 1). Returns
+        ``(event_id, ambiguous)``:
+
+          * explicit ``close_event_id`` → ``(str(id), False)`` — strongest, provider owns it;
+          * else ``opened_trading_date`` present → lifecycle-safe synthetic id, ``(id, False)``;
+          * else → ``(None, True)`` — no explicit id AND no lifecycle discriminator, so a
+            collision-safe identity cannot be formed (the close is ambiguous).
+
+        A bare ``position_id`` + ``closed_trading_date`` is deliberately NOT enough: a provider
+        may reuse a position_id across distinct lifecycles closing on the same date.
+        """
+        explicit = pos_snap.close_event_id
+        if explicit is not None:
+            return str(explicit), False
+        opened = pos_snap.opened_trading_date
+        if opened is None:
+            return None, True
+        return _synth_close_event_id(cid, pid_hash, opened, closed), False
+
+    @staticmethod
+    def _stale_close(closed, prior_close) -> bool:
+        """True if `closed` predates the already-processed close date (older event after a
+        newer one) — such a close must be ignored, never restart a newer lifecycle."""
+        if prior_close is None:
+            return False
+        try:
+            c = closed if isinstance(closed, date) else date.fromisoformat(str(closed))
+            return c < date.fromisoformat(str(prior_close))
+        except (ValueError, TypeError):
+            return False
+
+    def _position_continuity(self, cid, prior, pos_snap: PositionSnapshot, td_date) -> dict:
+        """Resolve the authoritative position lifecycle for one evaluation (R1.1, P3-8/P3-9).
+
+        Separates the LATEST observation (which a non-authoritative UNKNOWN may overwrite)
+        from the LAST AUTHORITATIVE evidence (which non-authoritative observations must NEVER
+        erase). Detects a durable, exactly-once open→flat exit keyed off the last
+        AUTHORITATIVE open; an open→flat WITHOUT explicit closure evidence sets a persistent
+        `position_reconciliation_required` block (never assume flat / never manufacture an
+        exit). A bare position_id is NOT closure evidence.
+        """
+        prior = prior or {}
+        p_auth_status = prior.get("last_authoritative_position_status")
+        p_auth_pid = prior.get("last_authoritative_position_id_hash")
+        p_auth_at = prior.get("last_authoritative_observed_at")
+        p_event = prior.get("last_processed_position_event_id")
+        p_close = prior.get("last_position_close_trading_date")
+        recon = bool(prior.get("position_reconciliation_required"))
+
+        observed_date, malformed = self._observed_date(pos_snap, td_date)
+        authoritative = self._is_authoritative(pos_snap, observed_date, malformed,
+                                               td_date, p_auth_at)
+        status = pos_snap.status
+        pid_hash = _pid_hash(pos_snap.position_id)
+        obs_iso = (observed_date.isoformat() if observed_date else td_date.isoformat())
+
+        # carry authoritative evidence forward by default; touch ONLY when authoritative.
+        new_auth_status, new_auth_pid, new_auth_at = p_auth_status, p_auth_pid, p_auth_at
+        new_event, new_close = p_event, p_close
+        exit_detected = False
+
+        if authoritative:
+            is_exit_signal = status in EXIT_SIGNAL_STATUSES
+            open_to_flat = (status == PositionStatus.NO_POSITION
+                            and p_auth_status == PositionStatus.POSITION_OPEN.value)
+
+            if status == PositionStatus.POSITION_OPEN:
+                recon = False                                    # confirmed open clears the block
+                new_auth_status = PositionStatus.POSITION_OPEN.value
+                new_auth_pid = pid_hash or p_auth_pid
+                new_auth_at = obs_iso
+            elif is_exit_signal or open_to_flat:
+                # An explicit exit SIGNAL is itself durable closure intent; an OPEN→flat
+                # transition needs EXPLICIT evidence (bare position_id is insufficient).
+                if is_exit_signal or pos_snap.has_closure_evidence():
+                    closed = pos_snap.closed_trading_date or td_date
+                    # Close-event identity (R1.3 / Finding 1), strongest first:
+                    #   1. explicit provider close_event_id (preferred, owns uniqueness);
+                    #   2. lifecycle-safe synthetic id REQUIRING opened_trading_date as the
+                    #      lifecycle discriminator (so a reused position_id + same close date
+                    #      across DISTINCT lifecycles still yields distinct ids);
+                    #   3. otherwise AMBIGUOUS — cannot distinguish the close safely.
+                    ev, ambiguous = self._close_event_identity(cid, pos_snap,
+                                                               pid_hash or p_auth_pid, closed)
+                    if ambiguous:
+                        # No explicit id AND no opened_trading_date → we cannot form a
+                        # collision-safe identity. Do NOT mark the close processed, do NOT
+                        # start cooldown, do NOT permit entry — require authoritative
+                        # reconciliation (never the old collision-prone cooldown bypass). Keep
+                        # the authoritative anchor at POSITION_OPEN.
+                        recon = True
+                    else:
+                        if not self._stale_close(closed, p_close) and ev != p_event:
+                            exit_detected = True
+                            new_event = ev
+                            new_close = closed.isoformat() if isinstance(closed, date) else str(closed)
+                        recon = False                            # close reconciled
+                        new_auth_status = PositionStatus.NO_POSITION.value
+                        new_auth_pid = pid_hash or p_auth_pid
+                        new_auth_at = obs_iso
+                else:
+                    # OPEN→flat WITHOUT durable evidence → reconciliation required. Keep the
+                    # authoritative anchor at POSITION_OPEN (do NOT trust the unverified flat).
+                    recon = True
+            else:
+                # authoritative NO_POSITION with NO prior authoritative open → ordinary flat.
+                new_auth_status = PositionStatus.NO_POSITION.value
+                new_auth_at = obs_iso
+        # else: non-authoritative → latest_* updated below, authoritative evidence untouched,
+        #       reconciliation block (if any) persists across the outage.
+
+        return {
+            "has_open_position": authoritative and status == PositionStatus.POSITION_OPEN,
+            "position_unknown": not authoritative,
+            "reconciliation_required": recon,
+            "exit_detected": exit_detected,
+            "latest_observed_position_status": status.value,
+            "latest_observed_at": obs_iso,
+            "last_authoritative_position_status": new_auth_status,
+            "last_authoritative_position_id_hash": new_auth_pid,
+            "last_authoritative_observed_at": new_auth_at,
+            "last_processed_position_event_id": new_event,
+            "last_position_close_trading_date": new_close,
+        }
 
     # ── hypothetical slot / sector / heat contention ──────────────────
     def _apply_contention(self, outcomes: list) -> dict:
         live = [o for o in outcomes if "skipped" not in o]
+        # POSITION_RECONCILIATION conservatively counts as occupying a slot/sector: the
+        # position MAY exist (ownership unresolved), so reserving its slot avoids
+        # over-allocating new hypothetical entries. This preserves the pre-R1.2 behaviour
+        # where the (overloaded) EXIT_ONLY uncertainty case reserved a slot (P2-C).
         open_now = [o for o in live if o["new_state"] in
-                    (State.POSITION_OPEN.value, State.EXIT_ONLY.value)]
+                    (State.POSITION_OPEN.value, State.EXIT_ONLY.value,
+                     State.POSITION_RECONCILIATION.value)]
         candidates = [o for o in live
                       if o["new_state"] == State.ENTRY_ELIGIBLE.value and o["entry_signal"]]
         candidates.sort(key=params.candidate_sort_key)

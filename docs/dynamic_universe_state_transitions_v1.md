@@ -13,10 +13,23 @@ DATA_INELIGIBLE  structurally failing (history/price/ADV/indicators/mapping/corp
 WATCHLIST        structurally eligible, still accruing the 2-pass entry hysteresis
 ENTRY_ELIGIBLE   structurally eligible AND ≥2 consecutive passing sessions
 POSITION_OPEN    hypothetical position open and still fully eligible
-EXIT_ONLY        hypothetical position open but entries suppressed (exits continue)
+EXIT_ONLY        position AUTHORITATIVELY open but entries suppressed (exits continue)
+POSITION_RECONCILIATION  position ownership UNRESOLVED — blocks entry, asserts nothing (R1.2)
 COOLDOWN         post-exit cooldown (3 completed sessions)
 ADMIN_PAUSED     operator off/paused, flat (blocks entries; not an open position)
 ```
+
+`POSITION_RECONCILIATION` (R1.2 / P2-C) is a dedicated state for position *uncertainty*.
+It replaces the R1.1 overloading of `EXIT_ONLY` for this case. It is entered when either:
+the last authoritative status was `POSITION_OPEN` and the position is now reported flat
+without durable closure evidence (the durable `position_reconciliation_required` flag, reason
+`position_reconciliation_required`); OR the current observation is non-authoritative —
+`UNKNOWN` / error / stale / future / missing provider (reason `position_status_unknown`). It
+blocks all new entry, NEVER asserts a position exists or is flat, never forces liquidation,
+never decrements cooldown, and (for the durable flag) persists until an authoritative
+`POSITION_OPEN` or an evidence-bearing close clears it. `EXIT_ONLY` is now reserved strictly
+for a position that AUTHORITATIVELY exists (current authoritative snapshot is `POSITION_OPEN`)
+with entries suppressed — it never represents uncertainty.
 
 ## Dominance / rules (explicit precedence)
 
@@ -61,10 +74,23 @@ E+4    cooldown block released   → may transition out of COOLDOWN if all else 
 ```
 
 On the exit session the count is set to `COOLDOWN_SESSIONS` (3) and is **not**
-decremented. On each subsequent confirmed-flat session it is decremented (check-then-
-decrement). While a hypothetical position is still open — OR while the position status
-is UNKNOWN (cannot confirm flat) — the count is **held**, never advanced. (v1 counts in
-completed evaluated sessions — no trading-calendar dependency.)
+decremented. On each subsequent confirmed-flat **completed** session it is decremented
+(check-then-decrement). While a hypothetical position is still open — OR while the position
+status is UNKNOWN (cannot confirm flat) — the count is **held**, never advanced. (v1 counts
+in completed evaluated sessions — no trading-calendar dependency.)
+
+**Session-based fields (P3-2, R1).** The count lives in
+`universe_state.cooldown_sessions_remaining` (canonical), with
+`cooldown_started_trading_date` (= E) and `cooldown_last_counted_trading_date`. The
+deprecated `cooldown_until` column is no longer read by runtime logic (it stored a count
+despite its date-implying name); it remains as deprecated compatibility metadata. A session
+counts at most once (`cooldown_last_counted_trading_date` guards a duplicate same-date run)
+and only when a completed bar exists — a **weekend / holiday / missing-bar session never
+counts** (no calendar lookup; absence of a completed bar is the signal). The display-only
+`cooldown_release_estimate` is left NULL: it is never authoritative without an approved
+exchange calendar. An ambiguous legacy row (non-zero `cooldown_until`, NULL session field)
+fails safe to a blocked/manual-review `COOLDOWN` (`cooldown_legacy_ambiguous`); the count is
+never inferred from the legacy value.
 
 Because `in_cooldown` is itself a blocking structural reason, the 2-pass entry
 hysteresis counter resets during cooldown. So at E+4 the instrument leaves COOLDOWN into
@@ -72,22 +98,81 @@ WATCHLIST and must re-accrue two passing sessions (ENTRY_ELIGIBLE at E+5). The c
 *block* is fully released at E+4 — that is the §2 invariant; the re-accrual is the
 ordinary entry hysteresis, applied conservatively.
 
-## Position status seam (task §3)
+## Position status seam (task §3 / P3-8 / P3-9, R1.1)
 
 POSITION_OPEN / EXIT_ONLY / COOLDOWN are driven by an INJECTED, broker-free
-`PositionSnapshotProvider` returning one of `NO_POSITION`, `POSITION_OPEN`,
-`POSITION_EXITED_TODAY`, `UNKNOWN`. The provider never calls a broker. When no provider
-is injected the evaluator falls back to the legacy prior-state + trend-break derivation.
+`PositionSnapshotProvider` returning a `PositionStatus` **or** a richer `PositionSnapshot`
+(status + durable exit evidence: `position_id`, `opened_/closed_trading_date`,
+`close_event_id`, `explicitly_closed`, `observed_at`, `source_version` — never account ids /
+quantities / prices). The provider never calls a broker.
+
+**Authoritative vs latest (P3-8, R1.1).** Only `POSITION_OPEN` / `NO_POSITION` /
+`POSITION_EXITED` (+ honoured-deprecated `POSITION_EXITED_TODAY`) from a FRESH, in-order,
+non-future snapshot are *authoritative*. `UNKNOWN`, a provider exception/timeout, a malformed
+/ unrecognised value, a stale (> `MAX_POSITION_SNAPSHOT_STALENESS_DAYS`) or out-of-order
+observation, and a missing provider are *non-authoritative* → resolved as `UNKNOWN`
+(fail-safe). The evaluator persists the **latest** observation (`latest_observed_*`, which a
+non-authoritative observation MAY overwrite) separately from the **last authoritative**
+evidence (`last_authoritative_*`, which a non-authoritative observation NEVER erases). There
+is no legacy prior-state fallback.
 
 ```text
-NO_POSITION            → flat branch (WATCHLIST/ENTRY_ELIGIBLE/COOLDOWN/…)
-POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused)
-POSITION_EXITED_TODAY  → COOLDOWN (exit on E)
-UNKNOWN                → EXIT_ONLY, reason position_status_unknown; never entry-eligible,
-                         never forced liquidation, cooldown held (do not assume flat)
+POSITION_OPEN          → POSITION_OPEN (or EXIT_ONLY if eligibility lost / admin paused);
+                         clears any reconciliation block; refreshes authoritative evidence
+NO_POSITION (auth.)    → if last authoritative was OPEN and durable closure evidence present
+                         → COOLDOWN (exit on E); if OPEN without evidence → reconciliation;
+                         else ordinary flat branch (WATCHLIST/ENTRY_ELIGIBLE/…)
+POSITION_EXITED        → durable exit signal → COOLDOWN (exit on E)
+POSITION_EXITED_TODAY  → DEPRECATED transient exit signal (still honoured) → COOLDOWN
+UNKNOWN / non-auth.    → POSITION_RECONCILIATION (R1.2), reason position_status_unknown;
+                         never entry-eligible, never forced liquidation, cooldown held;
+                         authoritative evidence kept
+reconciliation block   → POSITION_RECONCILIATION (R1.2), reason
+                         position_reconciliation_required (durable)
 ```
 
-`UNKNOWN` is fail-safe: a provider error or any unrecognised value is coerced to UNKNOWN.
+> **R1.2 (P2-C) change:** position *uncertainty* — both the `UNKNOWN`/non-authoritative case
+> and the durable `position_reconciliation_required` block — now resolves to the dedicated
+> `POSITION_RECONCILIATION` state, not `EXIT_ONLY`. `EXIT_ONLY` is reserved for a position
+> that authoritatively exists. Consumers must NOT read `EXIT_ONLY` as "a position may not
+> exist"; uncertainty is `POSITION_RECONCILIATION`.
+
+**Durable, exactly-once exit (P3-9, R1.1).** Cooldown does NOT depend on the transient
+`POSITION_EXITED_TODAY`. It starts when the evaluator sees an explicit durable exit signal,
+OR an authoritative `last_authoritative_position_status == POSITION_OPEN` → current
+`NO_POSITION` transition **with EXPLICIT closure evidence** (`closed_trading_date` /
+`close_event_id` / `explicitly_closed`; a bare `position_id` is **not** evidence). A
+no-evidence open→flat sets `position_reconciliation_required` (no cooldown, no flat
+assumption). `UNKNOWN → NO_POSITION` and provider errors never start cooldown. Because the
+authoritative anchor survives a `UNKNOWN` outage, an exit during the outage
+(`OPEN → UNKNOWN → NO_POSITION+evidence`) IS detected — exactly once, de-duplicated by
+`last_processed_position_event_id` (with a stale-close guard so an older close never restarts
+a newer lifecycle); a genuinely new later close starts a fresh cooldown.
+
+**Lifecycle-safe close identity + cooldown sufficiency (R1.3 / Finding 1).** Recognising the
+exit is necessary but NOT sufficient to start cooldown — the evaluator must also form a
+COLLISION-SAFE close-event identity so a provider that reuses a `position_id` across distinct
+lifecycles cannot mask a genuine second exit. Identity, strongest first: (1) an explicit
+`close_event_id` (preferred — the provider owns uniqueness); (2) a synthetic id keyed on
+`(canonical_id, position_id_hash, opened_trading_date, closed_trading_date)` with a `close:v2`
+version prefix — `opened_trading_date` is the required lifecycle discriminator, so a reused
+`position_id` closing on the same date in a DIFFERENT lifecycle still yields a distinct id.
+A close with NEITHER an explicit id NOR an `opened_trading_date` (e.g. `closed_trading_date`
+alone, `explicitly_closed` alone, or a bare `POSITION_EXITED`/`POSITION_EXITED_TODAY`) is
+**AMBIGUOUS** → it does NOT start cooldown and instead routes to `POSITION_RECONCILIATION`
+(never a collision-prone cooldown bypass). So the R1.1 "with evidence → COOLDOWN" rule is now
+satisfied specifically by supplying a lifecycle discriminator (a `close_event_id`, or
+`opened_trading_date` + `closed_trading_date`). The old `(pid_hash, closed)`-only fallback is
+removed. Identities are hashed and version-prefixed; no raw account id or unredacted
+identifier is ever embedded.
+
+**Complete-content replay integrity (R1.3 / Finding 2).** Each persisted transition stores a
+deterministic `transition_snapshot_json` + `transition_snapshot_hash` (in the append-only
+history row) covering ALL material outputs — prior/new state, sorted reason codes, feature
+hash, cooldown bookkeeping, lifecycle/authoritative/reconciliation markers. The content-aware
+idempotency check compares that hash, so a divergent replay (e.g. a different
+`cooldown_sessions_remaining`) raises `TransitionConflictError` EVEN when the current state has
+legitimately advanced past the replayed date; an exact replay remains an idempotent no-op.
 
 ## Structural eligibility (inputs to the transition)
 

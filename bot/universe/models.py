@@ -5,9 +5,15 @@ shadow position tracked by the evaluator's own ledger — they NEVER read or man
 live positions.db. "Exit management continues" in EXIT_ONLY means the hypothetical
 ATR-trail / trend-break calculation keeps running on the synthetic position; no
 broker call is made.
+
+EXIT_ONLY (R1.2 / P2-C) is reserved for the case where a position AUTHORITATIVELY
+EXISTS (the current authoritative snapshot is POSITION_OPEN) but no new entry / reversal
+/ pyramiding is permitted while deterministic exit management continues. Position
+*uncertainty* — an unsupported open→flat, or any non-authoritative observation — is the
+separate POSITION_RECONCILIATION state, which never asserts a position exists.
 """
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional, Protocol, runtime_checkable
 
@@ -19,6 +25,12 @@ class State(str, Enum):
     ENTRY_ELIGIBLE = "ENTRY_ELIGIBLE"
     POSITION_OPEN = "POSITION_OPEN"
     EXIT_ONLY = "EXIT_ONLY"
+    # R1.2 (P2-C): position ownership/status is UNRESOLVED — an authoritative open→flat
+    # without durable closure evidence, or a non-authoritative (UNKNOWN/stale/future/missing)
+    # observation. Distinct from EXIT_ONLY: it does NOT assert that a position exists. Blocks
+    # all new entries, never forces liquidation, never decrements cooldown; cleared only by an
+    # authoritative POSITION_OPEN or an evidence-bearing close. See state_machine.transition.
+    POSITION_RECONCILIATION = "POSITION_RECONCILIATION"
     COOLDOWN = "COOLDOWN"
     ADMIN_PAUSED = "ADMIN_PAUSED"
 
@@ -32,11 +44,81 @@ class PositionStatus(str, Enum):
     UNKNOWN is the fail-safe value: it means the position state could not be
     determined, NOT that the instrument is flat. The evaluator treats it
     conservatively (no new entry, no forced liquidation).
+
+    POSITION_EXITED is the DURABLE exit status (P3-9): it represents an authoritatively
+    closed position and should carry durable exit information (closed_trading_date /
+    position_id) on its PositionSnapshot. POSITION_EXITED_TODAY is the DEPRECATED
+    one-cycle transient marker retained for back-compat — the evaluator now derives an
+    exit primarily from a durable OPEN→NO_POSITION transition + evidence, so cooldown no
+    longer depends on observing the transient value (P3-9).
     """
     NO_POSITION = "NO_POSITION"
     POSITION_OPEN = "POSITION_OPEN"
-    POSITION_EXITED_TODAY = "POSITION_EXITED_TODAY"
+    POSITION_EXITED = "POSITION_EXITED"                # durable, evidence-bearing exit
+    POSITION_EXITED_TODAY = "POSITION_EXITED_TODAY"    # DEPRECATED transient marker
     UNKNOWN = "UNKNOWN"
+
+
+# Status values that, when observed, represent an exit signal from the provider.
+EXIT_SIGNAL_STATUSES = frozenset({
+    PositionStatus.POSITION_EXITED, PositionStatus.POSITION_EXITED_TODAY,
+})
+
+# Statuses that can be AUTHORITATIVE when supplied by a valid, fresh provider snapshot
+# (R1.1). Everything else (UNKNOWN, exception, timeout, malformed, stale, missing provider)
+# is non-authoritative and must NEVER overwrite prior authoritative position evidence.
+# POSITION_EXITED_TODAY is the deprecated transient exit alias — honoured when present (it
+# maps to POSITION_EXITED with closed=trading_date), but never depended upon.
+AUTHORITATIVE_STATUSES = frozenset({
+    PositionStatus.POSITION_OPEN, PositionStatus.NO_POSITION,
+    PositionStatus.POSITION_EXITED, PositionStatus.POSITION_EXITED_TODAY,
+})
+
+
+@dataclass(frozen=True)
+class PositionSnapshot:
+    """Authoritative, broker-free, read-only position observation (task §2).
+
+    Carries the operational facts needed to drive the universe lifecycle and to detect a
+    durable open→flat exit EXACTLY ONCE (P3-9): the status plus durable exit evidence
+    (position_id / opened/closed trading dates / a source version). It NEVER carries
+    account ids, quantities, prices, or any sensitive broker detail — and the provider
+    that produces it must never call a broker.
+
+    A bare PositionStatus is also accepted by the evaluator (wrapped into a snapshot with
+    no durable evidence, observed_at defaulting to the evaluation trading date) for
+    back-compat.
+
+    Closure evidence (R1.1): a durable open→flat exit is only recognised when the snapshot
+    carries EXPLICIT closure evidence — ``closed_trading_date``, ``close_event_id``, or
+    ``explicitly_closed=True``. A bare ``position_id`` is NOT proof of closure.
+
+    Close-event IDENTITY (R1.3 / Finding 1): recognising the exit is necessary but not
+    sufficient to START COOLDOWN — the evaluator must also be able to form a COLLISION-SAFE
+    close-event identity so a reused ``position_id`` across distinct lifecycles cannot mask a
+    genuine second exit. That requires EITHER an explicit ``close_event_id`` (preferred,
+    strongest), OR a lifecycle discriminator: ``opened_trading_date`` together with the close
+    date. A close that has neither (e.g. ``closed_trading_date`` alone, or ``explicitly_closed``
+    alone, or a bare ``POSITION_EXITED``/``POSITION_EXITED_TODAY`` with no open date) is
+    AMBIGUOUS → it does NOT start cooldown and instead requires authoritative reconciliation
+    (POSITION_RECONCILIATION). Providers SHOULD supply ``close_event_id`` (or both lifecycle
+    dates) for every close they want treated as a durable, cooldown-starting exit.
+    """
+    status: "PositionStatus"
+    observed_at: Optional[datetime] = None
+    position_id: Optional[str] = None
+    opened_trading_date: Optional[date] = None
+    closed_trading_date: Optional[date] = None
+    close_event_id: Optional[str] = None        # durable id of the close event (P3-9 dedup)
+    explicitly_closed: bool = False             # provider asserts the prior open is closed
+    source_version: Optional[str] = None
+
+    def has_closure_evidence(self) -> bool:
+        """True iff the snapshot carries EXPLICIT durable closure evidence (R1.1). A bare
+        position_id alone is deliberately NOT sufficient."""
+        return bool(self.closed_trading_date is not None
+                    or self.close_event_id is not None
+                    or self.explicitly_closed)
 
 
 @runtime_checkable
@@ -44,16 +126,17 @@ class PositionSnapshotProvider(Protocol):
     """Broker-free, read-only seam supplying operational position status.
 
     Implementations MUST NOT import a broker adapter, call IBKR/IG, submit/amend an
-    order, or read a live broker session. They return only a PositionStatus derived
-    from an already-materialised, non-broker source (e.g. a fixture, a copied
-    non-production snapshot, or a shadow ledger). The evaluator dependency-injects an
-    instance; when none is injected it falls back to the legacy prior-state derivation.
+    order, or read a live broker session. They return only a PositionStatus or a
+    PositionSnapshot derived from an already-materialised, non-broker source (e.g. a
+    fixture, a copied non-production snapshot, or a shadow ledger). The evaluator
+    dependency-injects an instance; when NONE is injected the position status is UNKNOWN
+    (fail-safe) — never a stale prior-state assumption (P3-8).
     """
     def get_position_status(
         self,
         canonical_instrument_id: str,
         trading_date: date,
-    ) -> "PositionStatus":
+    ) -> "PositionStatus | PositionSnapshot":
         ...
 
 
@@ -94,6 +177,16 @@ class Reason:
     NORMALIZED_ADV20_INVALID = "normalized_adv20_invalid"
     SECTOR_UNKNOWN = "sector_unknown"                      # informational; not a hard fail
     POSITION_STATUS_UNKNOWN = "position_status_unknown"    # safe non-entry; never silent
+    # Legacy v1 row carried a non-zero `cooldown_until` count but no v2
+    # `cooldown_sessions_remaining`; the count is NOT inferred (P3-2). The instrument is
+    # held BLOCKED pending manual review rather than guessing a remaining session count.
+    COOLDOWN_LEGACY_AMBIGUOUS = "cooldown_legacy_ambiguous"
+    # R1.1: the last authoritative status was POSITION_OPEN and the position is now reported
+    # flat WITHOUT durable closure evidence (or only via a non-authoritative observation).
+    # We cannot safely assume flat or manufacture an exit — a durable, persistent blocked
+    # condition that requires authoritative reconciliation. Blocks new entry; never forces
+    # liquidation; cleared only by an authoritative POSITION_OPEN or an evidence-bearing close.
+    POSITION_RECONCILIATION_REQUIRED = "position_reconciliation_required"
     # contention / routing (hypothetical)
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"
@@ -143,10 +236,16 @@ class StateOutcome:
     consecutive_passes: int
     consecutive_failures: int
     reason_codes: list = field(default_factory=list)
-    # v1 shadow has no trading calendar dependency: cooldown is counted in
-    # completed evaluated sessions (decremented each session). Persisted as a
-    # string in universe_state.cooldown_until.
+    # v1 shadow has no trading-calendar dependency: cooldown is counted in COMPLETED
+    # evaluated sessions (P3-2). The canonical persisted home is
+    # universe_state.cooldown_sessions_remaining (the legacy `cooldown_until` column is
+    # deprecated compatibility metadata only and is NOT read by runtime logic).
     cooldown_remaining: int = 0
+    # True on the session a fresh exit starts cooldown (exit session E is NOT counted).
+    cooldown_started: bool = False
+    # True when this session was a countable completed post-exit session that decremented
+    # the remaining count (drives cooldown_last_counted_trading_date — exactly-once/day).
+    cooldown_counted: bool = False
 
 
 @dataclass

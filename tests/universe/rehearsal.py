@@ -15,17 +15,17 @@ from contextlib import contextmanager
 
 from bot.universe import params
 from bot.universe.evaluator import ShadowEvaluator
-from bot.universe.models import PositionStatus, Reason, State
+from bot.universe.models import PositionSnapshot, PositionStatus, Reason, State
 from bot.universe.registry import Registry
 from bot.universe.scheduler import DailyUniverseScheduler
 from bot.universe.seed import canonical_id, seed_registry
 from bot.universe.db import current_version, migrate
 
 from tests.universe._fixtures import (
-    ON, SpyProvider, StaticFxRateProvider, StubPositionProvider, inst, make_bars,
+    ON, SpyProvider, StaticFxRateProvider, StubPositionProvider, flat, inst, make_bars,
     write_configs,
 )
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 # Deterministic, broker-free FX rates so non-USD (GBP) instruments are USD-normalised
 # for eligibility (P2-2). Effective on the requested trading date (zero staleness).
@@ -69,6 +69,7 @@ def run_rehearsal(db_path: str) -> dict:
         "admin_pause_suppressions": 0,
         "position_open_transitions": 0,
         "exit_only_transitions": 0,
+        "position_reconciliation_transitions": 0,
         "cooldown_transitions": 0,
         "slot_rejections": 0,
         "sector_cap_rejections": 0,
@@ -99,6 +100,8 @@ def run_rehearsal(db_path: str) -> dict:
                 counts["position_open_transitions"] += 1
             elif st == State.EXIT_ONLY.value:
                 counts["exit_only_transitions"] += 1
+            elif st == State.POSITION_RECONCILIATION.value:
+                counts["position_reconciliation_transitions"] += 1
             elif st == State.COOLDOWN.value:
                 counts["cooldown_transitions"] += 1
             elif st == State.DATA_INELIGIBLE.value:
@@ -170,7 +173,8 @@ def run_rehearsal(db_path: str) -> dict:
         canonical_id("XAUUSD", "USD", "SMART"): _src(sector="Metals"),
     }
     prov = SpyProvider(sources)
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, fx_provider=fx)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, fx_provider=fx,
+                         position_provider=flat())
     # two completed sessions to drive entry hysteresis (WATCHLIST→ENTRY_ELIGIBLE)
     for d in ("2026-06-10", "2026-06-11"):
         r = ev.maybe_run(d)
@@ -193,11 +197,17 @@ def run_rehearsal(db_path: str) -> dict:
 
     # ── Scenario D: organic POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle ────
     # Drive AAPL through the full position lifecycle via the injected position seam.
+    # P3-9: the exit (E) is detected from a DURABLE open→flat transition + evidence
+    # (closed_trading_date), NOT from the deprecated one-cycle POSITION_EXITED_TODAY —
+    # so the rehearsal exercises the robust path rather than masking the blocker.
     lifecycle = [
         ("2026-06-12", PositionStatus.POSITION_OPEN, _src()),                 # → POSITION_OPEN
         ("2026-06-13", PositionStatus.POSITION_OPEN, _src(bars=False)),       # lose elig → EXIT_ONLY
         ("2026-06-14", PositionStatus.POSITION_OPEN, _src()),                 # restore → POSITION_OPEN
-        ("2026-06-15", PositionStatus.POSITION_EXITED_TODAY, _src()),         # exit → COOLDOWN (E)
+        ("2026-06-15", PositionSnapshot(status=PositionStatus.NO_POSITION,    # exit → COOLDOWN (E)
+                                        position_id="aapl-pos-1",
+                                        opened_trading_date=date(2026, 6, 12),  # R1.3 discriminator
+                                        closed_trading_date=date(2026, 6, 15)), _src()),
         ("2026-06-16", PositionStatus.NO_POSITION, _src()),                   # E+1 COOLDOWN
         ("2026-06-17", PositionStatus.NO_POSITION, _src()),                   # E+2 COOLDOWN
         ("2026-06-18", PositionStatus.NO_POSITION, _src()),                   # E+3 COOLDOWN
@@ -215,7 +225,7 @@ def run_rehearsal(db_path: str) -> dict:
     # ── Scenario E: 2-failure eligibility removal (ENTRY_ELIGIBLE → out) ──────
     msft = canonical_id("MSFT", "USD", "NASDAQ")
     fail_src = SpyProvider({msft: _src(bars=False)})       # structural fail
-    ev_f = ShadowEvaluator(reg, fail_src, ON, equity=100_000)
+    ev_f = ShadowEvaluator(reg, fail_src, ON, equity=100_000, position_provider=flat())
     for d in ("2026-06-12", "2026-06-13"):                  # 2 consecutive failures
         r = ev_f.maybe_run(d, only_ids={msft})
         counts["sessions_evaluated"] += 1
@@ -235,7 +245,8 @@ def run_rehearsal(db_path: str) -> dict:
                                                             volume=1_000_000.0 * (i + 1))
     sc_sources[canonical_id("C6", "USD", "NASDAQ")] = _src(sector="sec0",   # same sector as C0/dup
                                                           volume=500_000.0)
-    sc_ev = ShadowEvaluator(sc_reg, SpyProvider(sc_sources), ON, equity=100_000)
+    sc_ev = ShadowEvaluator(sc_reg, SpyProvider(sc_sources), ON, equity=100_000,
+                            position_provider=flat())
     sc_ev.maybe_run("2026-06-10")
     rc = sc_ev.maybe_run("2026-06-11")
     counts["sessions_evaluated"] += 2
@@ -252,7 +263,8 @@ def run_rehearsal(db_path: str) -> dict:
         hp_sources = {canonical_id(s, "USD", "NASDAQ"): _src(sector=f"h{i}",
                                                             volume=1_000_000.0 * (i + 1))
                       for i, s in enumerate(hp_syms)}
-        hp_ev = ShadowEvaluator(hp_reg, SpyProvider(hp_sources), ON, equity=100_000)
+        hp_ev = ShadowEvaluator(hp_reg, SpyProvider(hp_sources), ON, equity=100_000,
+                                position_provider=flat())
         hp_ev.maybe_run("2026-06-10")
         rh = hp_ev.maybe_run("2026-06-11")
         counts["sessions_evaluated"] += 2
@@ -268,7 +280,7 @@ def run_rehearsal(db_path: str) -> dict:
     sch_ev = ShadowEvaluator(sch_reg, SpyProvider({
         canonical_id("AAPL", "USD", "NASDAQ"): _src(),
         canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
-    }), ON, equity=100_000, fx_provider=fx)
+    }), ON, equity=100_000, fx_provider=fx, position_provider=flat())
     avail = {canonical_id("AAPL", "USD", "NASDAQ"): False,    # US bar late/holiday
              canonical_id("BARC", "GBP", "SMART"): True}
     now = datetime(2026, 6, 10, 23, 0, tzinfo=timezone.utc)
@@ -284,7 +296,7 @@ def run_rehearsal(db_path: str) -> dict:
         ShadowEvaluator(Registry(sch_db), SpyProvider({
             canonical_id("AAPL", "USD", "NASDAQ"): _src(),
             canonical_id("BARC", "GBP", "SMART"): _src(sector="Financials", price_unit="MAJOR"),
-        }), ON, equity=100_000, fx_provider=fx),
+        }), ON, equity=100_000, fx_provider=fx, position_provider=flat()),
         ON, now_fn=lambda: now,
         bar_available_fn=lambda rec, td: avail[rec["canonical_instrument_id"]])
     r_sched2 = sched2.maybe_run(sch_reg.all_canonical())

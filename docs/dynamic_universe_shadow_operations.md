@@ -7,8 +7,11 @@
 
 ```python
 from bot.universe.db import migrate
-migrate("/path/to/universe.db")   # idempotent; creates/updates the 6 tables to version 1
+migrate("/path/to/universe.db")   # idempotent; creates/updates the 6 tables to version 2
 ```
+Schema head is **version 2** (Pre-Enable R1, strictly additive: session-based cooldown
+fields, durable exit-event markers, append-only history triggers). Upgrading a v1 DB is
+additive and does not back-fill — see `docs/universe_db_schema.md`.
 
 ## Registry seed (idempotent, read-only on configs)
 
@@ -48,15 +51,36 @@ post-close gating and restart-safe idempotency.
   `rejected` (with `rejected_reason`: slot_cap_reached / sector_cap_reached /
   portfolio_heat_exceeded). **No PF / Sharpe / returns / rankings are computed or logged.**
 
-## Position-status seam (broker-free; task §3)
+## Position-status seam (broker-free; task §3 / P3-8 / P3-9, R1)
 
-The evaluator optionally takes an injected `PositionSnapshotProvider`
-(`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus`). It is
-broker-free by contract (a fixture / non-production snapshot — never a broker call) and
-drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle organically. `UNKNOWN` is
-fail-safe (no flat assumption, no entry, no forced liquidation, cooldown held); a
-provider error is coerced to `UNKNOWN`. With no provider injected the legacy
-prior-state + trend-break derivation is used.
+The evaluator takes an injected `PositionSnapshotProvider`
+(`get_position_status(canonical_instrument_id, trading_date) -> PositionStatus |
+PositionSnapshot`). It is broker-free by contract (a fixture / non-production snapshot —
+never a broker call) and drives the POSITION_OPEN / EXIT_ONLY / COOLDOWN lifecycle
+organically. **The provider is authoritative (P3-8, R1.1):** with **no provider injected** —
+or on a provider exception / timeout / malformed / unrecognised / stale / future / out-of-order
+value — the observation is non-authoritative → `UNKNOWN` (fail-safe: no flat assumption, no
+entry, no forced liquidation, cooldown held). The evaluator persists the LATEST observation
+(`latest_observed_*`) separately from the LAST AUTHORITATIVE evidence (`last_authoritative_*`),
+which a non-authoritative observation NEVER erases — so an exit during an outage survives.
+**Exit detection is durable and exactly-once (P3-9, R1.1):** cooldown starts from an explicit
+durable `POSITION_EXITED` signal, or an authoritative `last_authoritative=POSITION_OPEN →
+NO_POSITION` transition with EXPLICIT closure evidence, de-duplicated by
+`last_processed_position_event_id` (with a stale-close guard). **Close identity is
+lifecycle-safe (R1.3 / Finding 1):** to START cooldown the close must carry a collision-safe
+identity — an explicit `close_event_id` (preferred), OR `opened_trading_date` +
+`closed_trading_date` (the synthetic id is keyed on the lifecycle window so a reused
+`position_id` cannot mask a second exit). A close lacking both (e.g. `closed_trading_date`
+alone, `explicitly_closed` alone, or a bare exit signal) is AMBIGUOUS → it routes to
+`POSITION_RECONCILIATION`, never a cooldown bypass. **Providers SHOULD supply `close_event_id`
+(or both lifecycle dates) for every cooldown-starting close.** An authoritative open→flat
+WITHOUT evidence sets a durable `position_reconciliation_required` block, surfaced since R1.2
+as the dedicated `POSITION_RECONCILIATION` state (blocks entry, no liquidation, holds cooldown;
+cleared only by an authoritative `POSITION_OPEN` or an evidence-bearing close). A
+non-authoritative observation (`UNKNOWN`/stale/future/missing provider) also resolves to
+`POSITION_RECONCILIATION` (R1.2 / P2-C) — `EXIT_ONLY` now means a position AUTHORITATIVELY
+exists, never uncertainty. Cooldown never starts from `UNKNOWN → NO_POSITION`, a no-evidence
+open→flat, or a provider error.
 
 ```python
 ev = ShadowEvaluator(Registry(db), bars_provider, flags, equity=100_000,
@@ -84,11 +108,16 @@ sched = DailyUniverseScheduler(ev, flags, bar_available_fn=lambda rec, td: bar_e
   fail-closed) records `corp_action_data_unavailable` and FAILS eligibility. A detected
   `anomaly` blocks in both. Never a silent pass. See state-transitions doc §"Corporate-
   action policy".
-* Position status UNKNOWN → `position_status_unknown`, safe non-entry EXIT_ONLY hold.
+* Position status UNKNOWN → `position_status_unknown`, safe non-entry `POSITION_RECONCILIATION`
+  hold (R1.2 / P2-C — no longer `EXIT_ONLY`, which now means an authoritative open exists).
 * Completed bar not yet available (holiday/late) → scheduler skip + retry (no history).
 * Unknown sector → `sector_unknown` recorded (non-blocking).
 * Idempotency conflict on history insert → skipped (already recorded); other DB errors
   propagate (not silently swallowed).
+* State + history are persisted ATOMICALLY (P3-3, R1) via
+  `Registry.persist_transition_atomic` in one `BEGIN IMMEDIATE` transaction — both commit or
+  both roll back, so a crash never leaves `universe_state` advanced without its history row
+  (no double-advance on the next run). History rows are physically append-only (v2 triggers).
 
 ## Offline rehearsal (task §6)
 
@@ -97,10 +126,14 @@ offline end-to-end rehearsal on synthetic fixtures (no broker, no data provider,
 DB, no production config writes). It exercises seed, idempotent migration rerun,
 AUTO/TTI/MANUAL candidates + 5-session TTL, entry/removal hysteresis, ADMIN_PAUSED,
 DATA_INELIGIBLE, HARD_DISABLED, the full POSITION_OPEN ⇄ EXIT_ONLY → COOLDOWN lifecycle
-with E+1..E+3 blocking and E+4 release, slot/sector/heat contention, IBKR-primary +
+with E+1..E+3 blocking and E+4 release, the POSITION_RECONCILIATION uncertainty hold (R1.2),
+slot/sector/heat contention, IBKR-primary +
 IG-routing-blocked, multi-timezone scheduling, same-day idempotency, restart recovery,
 missing-bar skip, corporate-action UNKNOWN warning, and position-status UNKNOWN safe
-behaviour. It reports **operational metrics only** — never returns / PF / Sharpe /
+behaviour. The exit (E) is driven by a **durable `OPEN → NO_POSITION` + `closed_trading_date`
+transition (P3-9)** — not the deprecated transient `POSITION_EXITED_TODAY` — so the rehearsal
+exercises the robust exit path rather than masking the blocker. It reports **operational
+metrics only** — never returns / PF / Sharpe /
 winners / rankings (`format_report`). Determinism and the no-performance-metric guard
 are asserted in `tests/universe/test_rehearsal.py`.
 

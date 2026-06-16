@@ -8,8 +8,9 @@ from bot.universe.evaluator import ShadowEvaluator
 from bot.universe.registry import Registry
 from bot.universe.seed import canonical_id, seed_registry
 from bot.universe.models import State
+from bot.universe.models import PositionStatus
 from tests.universe._fixtures import (
-    OFF, ON, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+    OFF, ON, SpyProvider, StubPositionProvider, flat, inst, make_bars, write_configs,
 )
 
 
@@ -49,7 +50,7 @@ def test_flag_off_is_zero_effect(tmp_path):
 def test_idempotent_same_day(tmp_path):
     db = _seed(tmp_path, ["AAPL", "MSFT"])
     reg = Registry(db)
-    ev = ShadowEvaluator(reg, SpyProvider({}), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider({}), ON, equity=100_000, position_provider=flat())
     r1 = ev.maybe_run("2026-06-10")
     assert r1["evaluated"] == 2
     r2 = ev.maybe_run("2026-06-10")
@@ -63,7 +64,7 @@ def test_entry_hysteresis_two_sessions_to_eligible(tmp_path):
     reg = Registry(db)
     cid = canonical_id("AAPL", "USD", "NASDAQ")
     prov = SpyProvider({cid: _uptrend_source()})
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, position_provider=flat())
     o1 = [o for o in ev.maybe_run("2026-06-10")["outcomes"] if o["canonical_instrument_id"] == cid][0]
     assert o1["new_state"] == State.WATCHLIST.value and o1["entry_signal"] is True
     r2 = ev.maybe_run("2026-06-11")
@@ -77,7 +78,7 @@ def test_ibkr_only_routing_in_selection(tmp_path):
     reg = Registry(db)
     cid = canonical_id("AAPL", "USD", "NASDAQ")
     prov = SpyProvider({cid: _uptrend_source()})
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     sel = ev.maybe_run("2026-06-11")["selected"]
     assert sel and all(s["hypothetical_order"]["primary_gateway"] == "IBKR" for s in sel)
@@ -94,7 +95,7 @@ def test_slot_contention_orders_by_adv(tmp_path):
     for i, s in enumerate(syms):
         sources[canonical_id(s, "USD", "NASDAQ")] = _uptrend_source(
             sector=f"sec{i}", volume=1_000_000.0 * (i + 1))
-    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     r = ev.maybe_run("2026-06-11")
     assert len(r["selected"]) == params.MAX_OPEN_POSITIONS       # 5 slots
@@ -111,7 +112,7 @@ def test_shadow_outputs_logged_and_ranked(tmp_path, caplog):
     reg = Registry(db)
     sources = {canonical_id(s, "USD", "NASDAQ"): _uptrend_source(
         sector=f"sec{i}", volume=1_000_000.0 * (i + 1)) for i, s in enumerate(syms)}
-    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     with caplog.at_level(logging.INFO, logger="universe.evaluator"):
         r = ev.maybe_run("2026-06-11")
@@ -129,7 +130,7 @@ def test_sector_cap(tmp_path):
     reg = Registry(db)
     sources = {canonical_id(s, "USD", "NASDAQ"): _uptrend_source(
         sector="Tech", volume=1_000_000.0 * (i + 1)) for i, s in enumerate(syms)}
-    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     r = ev.maybe_run("2026-06-11")
     assert len(r["selected"]) == params.MAX_POSITIONS_PER_SECTOR  # capped at 2 / sector
@@ -142,7 +143,7 @@ def test_heat_and_risk_within_caps(tmp_path):
     reg = Registry(db)
     sources = {canonical_id(s, "USD", "NASDAQ"): _uptrend_source(sector=f"x{i}")
                for i, s in enumerate(syms)}
-    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider(sources), ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     r = ev.maybe_run("2026-06-11")
     total_heat = 0.0
@@ -160,7 +161,7 @@ def test_no_broker_calls_only_injected_provider(tmp_path):
     db = _seed(tmp_path, ["AAPL", "MSFT"])
     reg = Registry(db)
     prov = SpyProvider({canonical_id("AAPL", "USD", "NASDAQ"): _uptrend_source()})
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000)
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, position_provider=flat())
     ev.maybe_run("2026-06-10")
     # the ONLY data seam used is the injected provider; it was called once per instrument
     assert set(prov.calls) == {canonical_id("AAPL", "USD", "NASDAQ"),
@@ -171,10 +172,10 @@ def test_restart_recovery_idempotent_and_continues(tmp_path):
     db = _seed(tmp_path, ["AAPL"])
     cid = canonical_id("AAPL", "USD", "NASDAQ")
     src = {cid: _uptrend_source()}
-    ev1 = ShadowEvaluator(Registry(db), SpyProvider(src), ON, equity=100_000)
+    ev1 = ShadowEvaluator(Registry(db), SpyProvider(src), ON, equity=100_000, position_provider=flat())
     ev1.maybe_run("2026-06-10")
     # simulate restart: brand-new Registry + Evaluator over the same db
-    ev2 = ShadowEvaluator(Registry(db), SpyProvider(src), ON, equity=100_000)
+    ev2 = ShadowEvaluator(Registry(db), SpyProvider(src), ON, equity=100_000, position_provider=flat())
     assert ev2.maybe_run("2026-06-10")["evaluated"] == 0   # same day → idempotent
     r = ev2.maybe_run("2026-06-11")                         # next day continues
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == cid][0]
@@ -189,7 +190,7 @@ def test_candidate_ttl_expiry(tmp_path):
                        "source": "MANUAL", "expires_after_trading_date": "2026-06-05"})
     reg.add_candidate({"candidate_id": "c-live", "canonical_instrument_id": cid,
                        "source": "TTI", "expires_after_trading_date": "2026-12-31"})
-    ev = ShadowEvaluator(reg, SpyProvider({}), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider({}), ON, equity=100_000, position_provider=flat())
     r = ev.maybe_run("2026-06-10")
     assert r["expired_candidates"] == 1
     active_ids = {c["candidate_id"] for c in reg.active_candidates()}
@@ -203,12 +204,16 @@ def test_exit_only_instrument_not_selected_as_candidate(tmp_path):
     # pre-seed an EXIT_ONLY state (hypothetical open position, exits-only)
     reg.upsert_state({"canonical_instrument_id": cid, "current_state": "EXIT_ONLY",
                       "consecutive_passes": 2, "consecutive_failures": 0,
-                      "cooldown_until": "0", "evaluator_version": "dyn_universe_shadow_v1"})
+                      "cooldown_sessions_remaining": 0,
+                      "evaluator_version": "dyn_universe_shadow_v1"})
     prov = SpyProvider({cid: _uptrend_source()})   # strong breakout signal present
-    ev = ShadowEvaluator(reg, prov, ON, equity=100_000)
+    # Authoritative provider reports the position is still open (P3-8): no stale-state
+    # reliance — the open-ness is asserted by the provider, not inferred from prior state.
+    pos = StubPositionProvider({cid: PositionStatus.POSITION_OPEN})
+    ev = ShadowEvaluator(reg, prov, ON, equity=100_000, position_provider=pos)
     r = ev.maybe_run("2026-06-10")
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == cid][0]
-    # has_open carried from EXIT_ONLY; no exit this bar (uptrend) → stays EXIT_ONLY (POSITION_OPEN class)
+    # position still open + eligible (uptrend) → POSITION_OPEN (open class), never re-entry
     assert o["new_state"] in (State.EXIT_ONLY.value, State.POSITION_OPEN.value)
     # and it is NEVER offered as a new-entry candidate (no reversal/pyramiding)
     assert cid not in [s["canonical_instrument_id"] for s in r["selected"]]

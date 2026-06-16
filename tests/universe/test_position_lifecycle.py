@@ -6,9 +6,10 @@ package still imports no broker adapter and calls no broker method (asserted in
 tests/universe/test_no_live_integration.py and by the recorded provider calls here).
 """
 import sqlite3
+from datetime import date
 
 from bot.universe.evaluator import ShadowEvaluator
-from bot.universe.models import PositionStatus, Reason, State
+from bot.universe.models import PositionSnapshot, PositionStatus, Reason, State
 from bot.universe.registry import Registry
 from bot.universe.seed import canonical_id, seed_registry
 from tests.universe._fixtures import (
@@ -31,11 +32,11 @@ def _src(sector="Tech", bars=True):
     return s
 
 
-def _preset_state(reg, state, passes=2, cooldown="0"):
+def _preset_state(reg, state, passes=2, cooldown=0, **extra):
     reg.upsert_state({"canonical_instrument_id": CID, "current_state": state,
                       "consecutive_passes": passes, "consecutive_failures": 0,
-                      "cooldown_until": cooldown,
-                      "evaluator_version": "dyn_universe_shadow_v1"})
+                      "cooldown_sessions_remaining": int(cooldown),
+                      "evaluator_version": "dyn_universe_shadow_v1", **extra})
 
 
 def _run(reg, prov, pos, date):
@@ -79,7 +80,10 @@ def test_position_exit_to_cooldown(tmp_path):
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
-    pos = StubPositionProvider({CID: PositionStatus.POSITION_EXITED_TODAY})
+    # R1.3 (Finding 1): the exit carries a collision-safe identity (opened+closed dates).
+    pos = StubPositionProvider({CID: PositionSnapshot(
+        status=PositionStatus.POSITION_EXITED_TODAY,
+        opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, o = _run(reg, SpyProvider({CID: _src()}), pos, "2026-06-10")
     assert o["new_state"] == State.COOLDOWN.value
     # persisted cooldown_remaining is 3 (exit session does not count — task §2)
@@ -93,7 +97,7 @@ def test_unknown_position_blocks_entry_and_is_recorded(tmp_path):
     _preset_state(reg, State.ENTRY_ELIGIBLE.value)
     pos = StubPositionProvider({CID: PositionStatus.UNKNOWN})
     r, o = _run(reg, SpyProvider({CID: _src()}), pos, "2026-06-10")
-    assert o["new_state"] == State.EXIT_ONLY.value           # safe non-entry hold
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): safe non-entry hold
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
     # never offered as a new-entry candidate despite a strong breakout signal
     assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]
@@ -109,20 +113,27 @@ def test_provider_error_is_treated_as_unknown(tmp_path):
             raise RuntimeError("provider down")
 
     r, o = _run(reg, SpyProvider({CID: _src()}), Boom(), "2026-06-10")
-    assert o["new_state"] == State.EXIT_ONLY.value           # fail safe, not entry-eligible
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): fail safe
     assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
 
 
-def test_legacy_derivation_without_provider_unchanged(tmp_path):
-    # No provider injected → legacy prior-state derivation still works (back-compat).
+def test_no_provider_is_unknown_safe_not_stale_open(tmp_path):
+    # P3-8: with NO position provider injected, the status is UNKNOWN (fail-safe) — the
+    # evaluator must NOT fall back to the prior state as proof of position knowledge. A
+    # prior ENTRY_ELIGIBLE instrument therefore does NOT silently stay entry-eligible; it
+    # is held in the safe non-entry POSITION_RECONCILIATION state (R1.2 / P2-C) and the
+    # unknown is recorded loudly.
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.ENTRY_ELIGIBLE.value)
-    ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)
+    ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000)  # no provider
     r = ev.maybe_run("2026-06-10")
     o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == CID][0]
-    # flat by derivation + passing → stays ENTRY_ELIGIBLE
-    assert o["new_state"] == State.ENTRY_ELIGIBLE.value
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # UNKNOWN-safe hold
+    assert Reason.POSITION_STATUS_UNKNOWN in o["reason_codes"]
+    assert CID not in [s["canonical_instrument_id"] for s in r["selected"]]
+    # the stale prior is preserved only as descriptive history, never as current proof
+    assert reg.get_state(CID)["last_observed_position_status"] == "UNKNOWN"
 
 
 def test_cooldown_e1_e2_e3_block_e4_release_via_provider(tmp_path):
@@ -137,8 +148,11 @@ def test_cooldown_e1_e2_e3_block_e4_release_via_provider(tmp_path):
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
     src = SpyProvider({CID: _src()})
-    # E: exit today → COOLDOWN (remaining 3; exit session does not count)
-    pos_exit = StubPositionProvider({CID: PositionStatus.POSITION_EXITED_TODAY})
+    # E: exit today → COOLDOWN (remaining 3; exit session does not count). R1.3 (Finding 1):
+    # the exit carries a collision-safe identity (opened+closed dates).
+    pos_exit = StubPositionProvider({CID: PositionSnapshot(
+        status=PositionStatus.POSITION_EXITED_TODAY,
+        opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, oE = _run(reg, src, pos_exit, "2026-06-10")
     assert oE["new_state"] == State.COOLDOWN.value
     # E+1..E+3: flat, still COOLDOWN (blocked)

@@ -1,0 +1,239 @@
+"""P3-9 — durable, exactly-once open→flat exit detection.
+
+Cooldown no longer depends on observing the transient POSITION_EXITED_TODAY. An exit is
+started from an authoritative OPEN→NO_POSITION transition WITH durable evidence
+(closed_trading_date / position_id) — or an explicit durable POSITION_EXITED signal —
+and is de-duplicated by a durable position_event_id so a replay never restarts cooldown.
+UNKNOWN→flat, a no-evidence open→flat, and OPEN→UNKNOWN never start cooldown.
+
+These tests assert the persisted markers directly (not just the resulting state), since
+the marker bookkeeping is the exactly-once linchpin.
+"""
+from datetime import date
+
+from bot.universe.evaluator import ShadowEvaluator
+from bot.universe.models import PositionSnapshot, PositionStatus, Reason, State
+from bot.universe.registry import Registry
+from bot.universe.seed import canonical_id, seed_registry
+from tests.universe._fixtures import (
+    ON, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+)
+
+CID = canonical_id("AAPL", "USD", "NASDAQ")
+COOLDOWN_FULL = 3
+
+
+def _seed(tmp_path):
+    p1, p2 = write_configs(tmp_path, [inst("AAPL")], [])
+    db = str(tmp_path / "universe.db")
+    seed_registry(db, p1, p2)
+    return db
+
+
+def _src():
+    return {"bars": make_bars(), "corp_action_status": "ok", "sector": "Tech",
+            "spread": 0.01}
+
+
+def _run_day(reg, snap, day):
+    """Run a single evaluation for CID with the given position snapshot/status."""
+    pos = StubPositionProvider({CID: snap})
+    ev = ShadowEvaluator(reg, SpyProvider({CID: _src()}), ON, equity=100_000,
+                         position_provider=pos)
+    r = ev.maybe_run(day, only_ids={CID})
+    o = [x for x in r["outcomes"] if x["canonical_instrument_id"] == CID][0]
+    return o, reg.get_state(CID)
+
+
+def _open(reg, day="2026-06-12"):
+    """Drive CID to an authoritatively-open position; assert the observed marker."""
+    o, st = _run_day(reg, PositionStatus.POSITION_OPEN, day)
+    assert o["new_state"] == State.POSITION_OPEN.value
+    assert st["last_observed_position_status"] == "POSITION_OPEN"
+    return st
+
+
+# ── the core P3-9 fix: durable open→flat with evidence, no EXITED_TODAY ─────────
+def test_open_to_flat_with_evidence_starts_cooldown_once(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    snap = PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                            opened_trading_date=date(2026, 6, 12),   # R1.3: lifecycle discriminator
+                            closed_trading_date=date(2026, 6, 15))
+    o, st = _run_day(reg, snap, "2026-06-15")
+    assert o["new_state"] == State.COOLDOWN.value
+    assert st["cooldown_sessions_remaining"] == COOLDOWN_FULL   # E not counted
+    assert st["cooldown_started_trading_date"] == "2026-06-15"
+    assert st["last_processed_position_event_id"] is not None    # event recorded
+    assert st["last_position_close_trading_date"] == "2026-06-15"
+    # after an exit the persisted observed status is NO_POSITION (so the next flat day is
+    # not a fresh open→flat).
+    assert st["last_observed_position_status"] == "NO_POSITION"
+
+
+def test_missed_transient_exited_still_detected_by_durable_evidence(tmp_path):
+    # The provider NEVER emits POSITION_EXITED_TODAY — it goes straight OPEN → NO_POSITION
+    # (with a close date). Cooldown must still start (the masking dependency is gone).
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                           opened_trading_date=date(2026, 6, 12),
+                                           closed_trading_date=date(2026, 6, 15)),
+                     "2026-06-15")
+    assert o["new_state"] == State.COOLDOWN.value
+    assert st["cooldown_sessions_remaining"] == COOLDOWN_FULL
+
+
+# ── things that must NOT start cooldown ────────────────────────────────────────
+def test_open_to_no_position_without_evidence_does_not_start_cooldown(tmp_path):
+    # A bare OPEN→NO_POSITION (no close date, no position_id) is indistinguishable from a
+    # provider glitch → cooldown must NOT start (spec: distinguish exit from failure).
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    o, st = _run_day(reg, PositionStatus.NO_POSITION, "2026-06-15")
+    assert o["new_state"] != State.COOLDOWN.value
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert st["last_processed_position_event_id"] is None         # no exit event recorded
+
+
+def test_open_to_unknown_does_not_start_cooldown(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    o, st = _run_day(reg, PositionStatus.UNKNOWN, "2026-06-15")
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value  # R1.2 (P2-C): UNKNOWN safe hold
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert st["last_processed_position_event_id"] is None
+    # OPEN→UNKNOWN: the stored observed status is UNKNOWN (so a later NO_POSITION is NOT a
+    # fresh open→flat — prevents a false trigger via UNKNOWN).
+    assert st["last_observed_position_status"] == "UNKNOWN"
+
+
+def test_unknown_to_flat_does_not_start_cooldown(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    # never authoritatively open: UNKNOWN then NO_POSITION (even with a close date) is not
+    # an authoritative open→flat exit.
+    _run_day(reg, PositionStatus.UNKNOWN, "2026-06-12")
+    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                           closed_trading_date=date(2026, 6, 13)),
+                     "2026-06-13")
+    assert o["new_state"] != State.COOLDOWN.value
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert st["last_processed_position_event_id"] is None
+
+
+# ── exactly-once dedup + genuinely-new close ───────────────────────────────────
+def test_replayed_close_event_does_not_restart_cooldown(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    # explicit durable exit signal for a specific close.
+    snap = PositionSnapshot(status=PositionStatus.POSITION_EXITED, position_id="p1",
+                            opened_trading_date=date(2026, 6, 12),
+                            closed_trading_date=date(2026, 6, 15))
+    o1, st1 = _run_day(reg, snap, "2026-06-15")
+    assert o1["new_state"] == State.COOLDOWN.value
+    assert st1["cooldown_sessions_remaining"] == COOLDOWN_FULL
+    event1 = st1["last_processed_position_event_id"]
+    # the SAME close re-observed on a later session: must NOT reset the counter to 3.
+    o2, st2 = _run_day(reg, snap, "2026-06-16")
+    assert st2["last_processed_position_event_id"] == event1       # same event, no reprocess
+    assert st2["cooldown_sessions_remaining"] < COOLDOWN_FULL       # not restarted
+
+
+def test_new_separate_close_starts_new_cooldown(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg, "2026-06-12")
+    o1, st1 = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                             position_id="p1",
+                                             opened_trading_date=date(2026, 6, 12),
+                                             closed_trading_date=date(2026, 6, 13)),
+                       "2026-06-13")
+    assert o1["new_state"] == State.COOLDOWN.value
+    event1 = st1["last_processed_position_event_id"]
+    # drain the first cooldown to completion (E+1..E+3 blocked, released at E+4).
+    for d in ("2026-06-14", "2026-06-15", "2026-06-16"):
+        o, _ = _run_day(reg, PositionStatus.NO_POSITION, d)
+        assert o["new_state"] == State.COOLDOWN.value
+    o4, _ = _run_day(reg, PositionStatus.NO_POSITION, "2026-06-17")
+    assert o4["new_state"] != State.COOLDOWN.value          # cooldown released
+    # a NEW position opens after cooldown, then a separate later close → new lifecycle.
+    _open(reg, "2026-06-18")
+    o2, st2 = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+                                             position_id="p2",
+                                             opened_trading_date=date(2026, 6, 18),
+                                             closed_trading_date=date(2026, 6, 19)),
+                       "2026-06-19")
+    assert o2["new_state"] == State.COOLDOWN.value
+    assert st2["last_processed_position_event_id"] != event1        # distinct close event
+    assert st2["cooldown_sessions_remaining"] == COOLDOWN_FULL      # fresh 3-session cooldown
+
+
+# ── R1.3 (Finding 1): lifecycle-safe close-event identity ───────────────────────
+def test_synthetic_close_id_distinguishes_lifecycles_and_instruments():
+    from bot.universe.evaluator import _synth_close_event_id
+    # same instrument + same (reused) pid + same close date, DIFFERENT open dates → distinct.
+    a = _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    b = _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 13), date(2026, 6, 20))
+    assert a != b
+    # different instruments, same pid + same dates → distinct (canonical id is keyed in).
+    c = _synth_close_event_id("US_MSFT", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    assert a != c
+    # same lifecycle → identical id (a replay never looks like a new close).
+    assert a == _synth_close_event_id("US_AAPL", "pidX", date(2026, 6, 10), date(2026, 6, 20))
+    # version-prefixed, hashed → no raw position id leaks into the identity string.
+    assert "pidX" not in a
+
+
+def test_reused_pid_same_close_date_distinct_lifecycles_each_start_cooldown(tmp_path):
+    # The Finding-1 collision case: a provider reuses position_id "X" across TWO distinct
+    # lifecycles that close on the SAME trading date. The second genuine exit must NOT be
+    # masked — distinct open dates yield distinct identities → second cooldown starts.
+    from bot.universe.evaluator import _pid_hash
+    reg = Registry(_seed(tmp_path))
+    ev = ShadowEvaluator(reg, bars_provider=lambda r: None, flags={})
+    px = _pid_hash("X")
+    prior1 = {"last_authoritative_position_status": "POSITION_OPEN",
+              "last_authoritative_position_id_hash": px,
+              "last_authoritative_observed_at": "2026-06-10",
+              "position_reconciliation_required": 0}
+    c1 = ev._position_continuity(CID, prior1, PositionSnapshot(
+        status=PositionStatus.NO_POSITION, position_id="X",
+        opened_trading_date=date(2026, 6, 10), closed_trading_date=date(2026, 6, 20)),
+        date(2026, 6, 20))
+    assert c1["exit_detected"] is True
+    # second lifecycle: SAME pid X, SAME close date 06-20, DIFFERENT open date 06-13.
+    prior2 = {"last_authoritative_position_status": "POSITION_OPEN",
+              "last_authoritative_position_id_hash": px,
+              "last_authoritative_observed_at": "2026-06-25",
+              "last_processed_position_event_id": c1["last_processed_position_event_id"],
+              "last_position_close_trading_date": c1["last_position_close_trading_date"],
+              "position_reconciliation_required": 0}
+    c2 = ev._position_continuity(CID, prior2, PositionSnapshot(
+        status=PositionStatus.NO_POSITION, position_id="X",
+        opened_trading_date=date(2026, 6, 13), closed_trading_date=date(2026, 6, 20)),
+        date(2026, 6, 26))
+    assert c2["exit_detected"] is True                                   # NOT masked by collision
+    assert c2["last_processed_position_event_id"] != c1["last_processed_position_event_id"]
+
+
+def test_explicit_close_event_id_controls_identity_even_with_reused_pid(tmp_path):
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    # explicit close_event_id takes precedence over any synthesized id (and over a reused pid).
+    snap = PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="reused",
+                            close_event_id="explicit-1", closed_trading_date=date(2026, 6, 15))
+    o, st = _run_day(reg, snap, "2026-06-15")
+    assert o["new_state"] == State.COOLDOWN.value
+    assert st["last_processed_position_event_id"] == "explicit-1"        # explicit id used verbatim
+
+
+def test_close_without_explicit_id_or_open_date_is_reconciliation(tmp_path):
+    # missing close_event_id AND missing opened_trading_date → ambiguous → reconciliation,
+    # entry blocked, never a cooldown bypass (Finding 1).
+    reg = Registry(_seed(tmp_path))
+    _open(reg)
+    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                                           closed_trading_date=date(2026, 6, 15)), "2026-06-15")
+    assert o["new_state"] == State.POSITION_RECONCILIATION.value
+    assert st["position_reconciliation_required"] == 1
+    assert (st["cooldown_sessions_remaining"] or 0) == 0
+    assert st["last_processed_position_event_id"] is None

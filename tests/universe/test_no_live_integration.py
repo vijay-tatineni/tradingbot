@@ -77,6 +77,55 @@ def test_universe_package_imports_no_broker():
     assert offenders == [], f"universe package references broker modules: {offenders}"
 
 
+def test_flag_off_makes_zero_provider_calls_and_zero_db_writes(tmp_path):
+    # Flag off ⇒ the evaluator is a pure no-op: the bars provider AND the position provider
+    # are never called, and not a single universe.db row is written (R1 isolation).
+    import sqlite3
+
+    from bot.universe.evaluator import ShadowEvaluator
+    from bot.universe.registry import Registry
+    from bot.universe.seed import canonical_id, seed_registry
+    from tests.universe._fixtures import (
+        OFF, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+    )
+
+    p1, p2 = write_configs(tmp_path, [inst("AAPL")], [])
+    db = str(tmp_path / "universe.db")
+    seed_registry(db, p1, p2)
+    cid = canonical_id("AAPL", "USD", "NASDAQ")
+    bars = SpyProvider({cid: {"bars": make_bars(), "corp_action_status": "ok"}})
+    pos = StubPositionProvider({cid: None})
+    ev = ShadowEvaluator(Registry(db), bars, OFF, equity=100_000, position_provider=pos)
+
+    con = sqlite3.connect(db)
+    before = (con.execute("SELECT COUNT(*) FROM universe_state").fetchone()[0],
+              con.execute("SELECT COUNT(*) FROM universe_state_history").fetchone()[0])
+    con.close()
+
+    assert ev.maybe_run("2026-06-10") == {"ran": False, "reason": "flag_off", "evaluated": 0}
+    assert bars.calls == [] and pos.calls == []          # neither seam consulted
+
+    con = sqlite3.connect(db)
+    after = (con.execute("SELECT COUNT(*) FROM universe_state").fetchone()[0],
+             con.execute("SELECT COUNT(*) FROM universe_state_history").fetchone()[0])
+    con.close()
+    assert after == before                                # zero DB writes
+
+
+def test_universe_package_does_not_rewrite_live_config():
+    # The universe package never WRITES instruments.json / instruments_ig.json (seed reads
+    # them read-only). Assert no open(..., 'w')/write_text/json.dump targets those configs.
+    import re
+    offenders = []
+    for p in (REPO / "bot" / "universe").glob("*.py"):
+        text = p.read_text()
+        for m in re.finditer(r"(open\([^\n]*['\"][wa]['\"]|write_text|json\.dump)", text):
+            window = text[max(0, m.start() - 120):m.end() + 120]
+            if "instruments.json" in window or "instruments_ig.json" in window:
+                offenders.append(f"{p.name}:{m.group(0)}")
+    assert offenders == [], f"universe package rewrites live config: {offenders}"
+
+
 def test_universe_db_module_only_connects_to_its_own_path():
     # Isolation proof: the universe store opens ONLY the db_path it is handed — there
     # is no hard-coded live-DB filename in any executable connect() call. (Safety

@@ -28,6 +28,14 @@ ENTRY_HYSTERESIS_PASSES = 2     # consecutive passing sessions to become ENTRY_E
 REMOVAL_HYSTERESIS_FAILS = 2    # consecutive failing sessions for ordinary removal
 COOLDOWN_SESSIONS = 3           # post-exit cooldown
 
+# ── Position-snapshot freshness (R1.1) ───────────────────────────────
+# A position observation older than this many trading days (relative to the evaluation
+# trading date) is treated as STALE → non-authoritative (it must not override newer
+# authoritative position evidence). A future-dated or out-of-order observation is also
+# non-authoritative. Bare PositionStatus returns (no observed_at) are taken as observed on
+# the evaluation trading date (staleness 0).
+MAX_POSITION_SNAPSHOT_STALENESS_DAYS = 3
+
 # ── Portfolio caps ───────────────────────────────────────────────────
 MAX_OPEN_POSITIONS = 5
 MAX_POSITIONS_PER_SECTOR = 2
