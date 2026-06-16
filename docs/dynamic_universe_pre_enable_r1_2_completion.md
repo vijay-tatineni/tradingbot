@@ -6,12 +6,16 @@
 > **Scope:** exactly the three **P2 pre-enable** findings from the independent R1/R1.1 review
 > — **P2-A, P2-B, P2-C**. Nothing else.
 >
-> **STATUS — IMPLEMENTED, NOT RESOLVED.** All three corrections are implemented and tested;
-> they **await independent review**. **The feature remains default-off, un-wired, broker-free,
-> and not running.** This work does NOT authorize enablement, scheduler wiring, shadow soak,
-> production migration, production `universe.db`, paper/live trading, service restart, or
-> Phase R2. P3-3 / P3-8 / P3-9 stay `IMPLEMENTED — awaiting independent review`; P3-4 / P3-5 /
-> P3-6 / P3-7 / BLOCKER-S (FX-normalized sizing) remain OPEN for R2.
+> **STATUS — RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (consolidated R1–R1.3 review,
+> `R1_SERIES_APPROVED_FOR_DISABLED_MERGE`; P0/P1/P2 = 0). P2-A, P2-B, P2-C are cleared for
+> merging while the feature remains default-off, un-wired, and not migrated in production.
+>
+> > This status does not authorize runtime enablement, scheduler wiring, production migration,
+> > shadow soak, paper trading, live trading, or Phase R2.
+>
+> Not a claim that all pre-enable work is complete: residuals P3-R1-A/B/C remain OPEN —
+> mandatory before runtime enablement. P3-4 / P3-5 / P3-6 / P3-7 / BLOCKER-S (FX-normalized
+> sizing) remain OPEN for R2. See `docs/dynamic_universe_pre_enable_blockers.md`.
 
 ## The three corrections
 

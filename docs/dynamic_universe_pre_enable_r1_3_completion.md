@@ -6,11 +6,21 @@
 > **Scope:** exactly the two **P2** findings and the **P3** coverage gap from the independent
 > R1.2 review — **Finding 1, Finding 2, Finding 3**. Nothing else.
 >
-> **STATUS — IMPLEMENTED, NOT RESOLVED.** All corrections are implemented and tested; they
-> **await independent review**. **The feature remains default-off, un-wired, broker-free, and
-> not running.** This work does NOT authorize enablement, scheduler wiring, shadow soak,
-> production migration, production `universe.db`, paper/live trading, service restart, or
-> Phase R2. P3-3 / P3-8 / P3-9 stay `IMPLEMENTED — awaiting independent review`; P3-4 / P3-5 /
+> **STATUS — RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (consolidated R1–R1.3 review,
+> `R1_SERIES_APPROVED_FOR_DISABLED_MERGE`; P0/P1/P2 = 0). Finding 1, Finding 2, Finding 3 are
+> cleared for merging while the feature remains default-off, un-wired, and not migrated in
+> production.
+>
+> > This status does not authorize runtime enablement, scheduler wiring, production migration,
+> > shadow soak, paper trading, live trading, or Phase R2.
+>
+> The consolidated review surfaced three P3 residuals that remain **OPEN — mandatory before
+> runtime enablement**: **P3-R1-A** (a reused explicit provider `close_event_id` can mask a
+> second close — Finding 1's explicit-id path), **P3-R1-B** (the legacy NULL transition-hash
+> fallback does not compare all markers on an advanced replay — Finding 2's fallback path;
+> unreachable via the runtime write path, which always stores the hash), and **P3-R1-C**
+> (remaining test completeness). See `docs/dynamic_universe_pre_enable_blockers.md`.
+> **The feature remains default-off, un-wired, broker-free, and not running.** P3-4 / P3-5 /
 > P3-6 / P3-7 / FX-normalized sizing remain OPEN for R2.
 
 ## Finding 1 — lifecycle-safe close-event identity

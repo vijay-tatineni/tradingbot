@@ -19,6 +19,37 @@
 
 ---
 
+## Consolidated R1–R1.3 independent review — outcome
+
+The full R1–R1.3 series (`breakout-strategy @ 46b8f257` → `feature/dynamic-universe-preenable-r1-fix3
+@ 6713cfa`; commits R1 `5da3e6e`, R1.1 `5c09119`, R1.2 `73d305f`, R1.3 `6713cfa`) received a
+consolidated independent read-only review:
+
+```text
+R1_SERIES_APPROVED_FOR_DISABLED_MERGE
+P0: 0   P1: 0   P2: 0   P3: 3 pre-enable residuals
+```
+
+Focused suite: **221 passed** (`pytest tests/universe`); full-suite failures remain only in the
+pre-existing `tests/test_breakout_indicators.py` isolation issue (identical at base `46b8f257`).
+
+**The reviewed R1-series items are therefore marked `RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE`:**
+
+> Resolved only for merging while the feature remains default-off,
+> un-wired, and not migrated in production.
+>
+> This status does not authorize runtime enablement, scheduler wiring,
+> production migration, shadow soak, paper trading, live trading,
+> or Phase R2.
+
+This is **not** a claim that all pre-enable work is complete. Three P3 residuals
+(**P3-R1-A**, **P3-R1-B**, **P3-R1-C**, below) remain **OPEN — mandatory before runtime
+enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain open. See
+`docs/dynamic_universe_pre_enable_r1_completion.md`,
+`…_r1_2_completion.md`, and `…_r1_3_completion.md`.
+
+---
+
 ## P2 — resolved in this hardening commit (were "fix before enablement")
 
 ### P2-1 — Migration atomicity — **RESOLVED**
@@ -70,40 +101,43 @@
 | ID | Class | One-line | Status |
 |----|-------|----------|--------|
 | P3-1 | advisory (doc only) | three docs outside declared naming scope | acknowledged |
-| P3-2 | mandatory | `cooldown_until` stores a session count, not a date | IMPLEMENTED (R1) — awaiting independent review |
-| P3-3 | **mandatory** | state + history writes not atomic together | IMPLEMENTED (R1 atomic + R1.1 conflict detection) — awaiting independent review |
+| P3-2 | mandatory | `cooldown_until` stores a session count, not a date | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1) |
+| P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
 | P3-4 | mandatory | candidate-source table not consumed in selection | OPEN (R2) |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
 | P3-6 | mandatory | canonical-ID collision risk | OPEN (R2) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | OPEN (R2) |
-| P3-8 | **mandatory** | provider removal can preserve stale open-position state | IMPLEMENTED (R1.1) — awaiting independent review |
-| P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | IMPLEMENTED (R1.1) — awaiting independent review |
+| P3-8 | **mandatory** | provider removal can preserve stale open-position state | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1) |
+| P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1/R1.3); see residual P3-R1-A |
+| P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | OPEN — mandatory before runtime enablement |
+| P3-R1-B | **mandatory (pre-enable)** | legacy NULL transition-hash fallback skips some markers | OPEN — mandatory before runtime enablement |
+| P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | OPEN — mandatory before runtime enablement |
 | BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | OPEN (R2) |
 
 > "mandatory" = must be resolved + independently reviewed before the flag is enabled
-> outside isolated tests. **No item is marked RESOLVED on this branch.** The R1 attempt
-> at P3-8/P3-9 was found DEFECTIVE in independent review (an `UNKNOWN` observation erased
-> the last authoritative open state, so an exit during a provider outage bypassed cooldown
-> and re-enabled entry). **Phase R1.1** (branch `feature/dynamic-universe-preenable-r1-fix1`)
-> re-implements P3-8/P3-9 with authoritative position continuity and adds the content-aware
-> idempotency conflict detection for P3-3. These are **IMPLEMENTED and tested — awaiting
-> independent review**, not resolved. See `docs/dynamic_universe_pre_enable_r1_completion.md`.
-> The foundation remains default-off and un-wired. P3-4, P3-5, P3-6, P3-7, BLOCKER-S are
-> deferred to Phase R2.
+> outside isolated tests. P3-2/P3-3/P3-8/P3-9 are now `RESOLVED FOR DEFAULT-OFF / UN-WIRED
+> MERGE` following the consolidated R1–R1.3 review (above) — see the qualification there; this
+> is **not** an enablement authorization, and the pre-enable residuals P3-R1-A/B/C remain OPEN.
+> The R1 attempt at P3-8/P3-9 was found DEFECTIVE in the first independent review (an `UNKNOWN`
+> observation erased the last authoritative open state, so an exit during a provider outage
+> bypassed cooldown and re-enabled entry). **Phase R1.1**
+> (`feature/dynamic-universe-preenable-r1-fix1`) re-implemented P3-8/P3-9 with authoritative
+> position continuity and added content-aware idempotency conflict detection for P3-3. See
+> `docs/dynamic_universe_pre_enable_r1_completion.md`. The foundation remains default-off and
+> un-wired. P3-4, P3-5, P3-6, P3-7, BLOCKER-S are deferred to Phase R2.
 
 ### R1.2 — pre-enable corrections from the independent R1.1 review
 
 The independent review of R1/R1.1 **approved the disabled merge** but raised three **P2
 pre-enable** findings. **Phase R1.2** (branch `feature/dynamic-universe-preenable-r1-fix2`)
-corrects all three. They are **IMPLEMENTED and tested — awaiting independent review**, not
-resolved. P3-3/P3-8/P3-9 stay `IMPLEMENTED — awaiting independent review` (P3-3 specifically
-could not be cleared until P2-A was fixed).
+corrects all three; the consolidated R1–R1.3 review (above) marks them `RESOLVED FOR
+DEFAULT-OFF / UN-WIRED MERGE`.
 
 | ID | One-line | Status |
 |----|----------|--------|
-| P2-A | historical replay rejected after current state legitimately advanced (`persist_transition_atomic`) | IMPLEMENTED (R1.2) — awaiting independent review |
-| P2-B | v3 migration lost the authoritative open anchor for a position open at the migration boundary | IMPLEMENTED (R1.2) — awaiting independent review |
-| P2-C | `EXIT_ONLY` overloaded for position uncertainty (could imply a position definitely exists) | IMPLEMENTED (R1.2) — awaiting independent review |
+| P2-A | historical replay rejected after current state legitimately advanced (`persist_transition_atomic`) | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.2) |
+| P2-B | v3 migration lost the authoritative open anchor for a position open at the migration boundary | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.2) |
+| P2-C | `EXIT_ONLY` overloaded for position uncertainty (could imply a position definitely exists) | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.2) |
 
 - **P2-A:** `_reconcile_duplicate` now treats a current-state row that has legitimately
   advanced past the replayed history date as a valid idempotent no-op (exact replay) or a
@@ -123,16 +157,16 @@ default-off and un-wired; nothing is enabled, wired, migrated, or deployed.
 
 The independent review of R1.2 **approved the disabled merge** and raised two **P2** findings
 plus a **P3** coverage gap. **Phase R1.3** (branch `feature/dynamic-universe-preenable-r1-fix3`)
-corrects all three. They are **IMPLEMENTED and tested — awaiting independent review**, not
-resolved. P3-3/P3-8/P3-9 stay `IMPLEMENTED — awaiting independent review` (P3-3 specifically
-could not be cleared until Finding 2 was fixed — it lives in the same content-aware
-idempotency machinery).
+corrects all three; the consolidated R1–R1.3 review (above) marks them `RESOLVED FOR
+DEFAULT-OFF / UN-WIRED MERGE`. P3-3 is cleared because the **runtime write path always stores
+the complete transition hash**; the legacy NULL-hash fallback (residual **P3-R1-B**) is the
+named follow-up that does NOT reopen P3-3 but must be hardened before enablement.
 
 | ID | One-line | Status |
 |----|----------|--------|
-| Finding 1 | synthetic close-event IDs could collide across distinct lifecycles (cooldown bypass) | IMPLEMENTED (R1.3) — awaiting independent review |
-| Finding 2 | advanced historical replay did not detect divergent cooldown bookkeeping | IMPLEMENTED (R1.3) — awaiting independent review |
-| Finding 3 | minor migration test-coverage gaps | TEST COVERAGE COMPLETED (R1.3) — awaiting independent review |
+| Finding 1 | synthetic close-event IDs could collide across distinct lifecycles (cooldown bypass) | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.3); residual P3-R1-A (explicit-id reuse) |
+| Finding 2 | advanced historical replay did not detect divergent cooldown bookkeeping | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.3); residual P3-R1-B (legacy NULL-hash fallback) |
+| Finding 3 | minor migration test-coverage gaps | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.3); residual P3-R1-C (remaining test completeness) |
 
 - **Finding 1:** close-event identity is now lifecycle-safe — explicit `close_event_id`
   (preferred), else a synthetic id keyed on `(canonical_id, position_id_hash,
@@ -151,6 +185,59 @@ idempotency machinery).
 
 See `docs/dynamic_universe_pre_enable_r1_3_completion.md`. The foundation remains default-off
 and un-wired; nothing is enabled, wired, migrated, or deployed.
+
+### Pre-enable residuals from the consolidated R1–R1.3 review (P3-R1-A/B/C)
+
+These three P3 residuals were surfaced by the consolidated review. They are **OPEN —
+mandatory before runtime enablement**. They are **not** blockers to the disabled, un-wired
+merge (none can manifest while the flag is off and no provider/migration runs), and they do
+not reopen the items marked `RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE`.
+
+#### P3-R1-A — reused explicit provider close-event ID
+```text
+A provider-supplied close_event_id must be globally unique per close
+lifecycle.
+
+A reused explicit ID across distinct lifecycles is currently interpreted
+as a replay and can mask the second genuine close.
+
+Before enablement:
+- enforce and document the uniqueness contract;
+- preferably detect the same explicit event ID paired with a different
+  lifecycle discriminator;
+- route that violation to POSITION_RECONCILIATION;
+- add a regression test.
+```
+Status: **OPEN — mandatory before runtime enablement.** Touches P3-9's exactly-once cooldown
+property; the synthetic-id path is already collision-safe (R1.3 Finding 1).
+
+#### P3-R1-B — legacy NULL transition hash
+```text
+The primary runtime persistence path always writes a complete
+transition_snapshot_hash.
+
+Legacy/raw history rows with a NULL hash use a bounded fallback that
+does not compare all cooldown and authoritative-position markers.
+
+Before enablement:
+- fail closed for advanced replay of NULL-hash history;
+  or
+- ensure every history-writing API computes the complete hash;
+- add a regression test.
+```
+Status: **OPEN — mandatory before runtime enablement.** Unreachable via the runtime write path
+(`persist_transition_atomic` always stores the hash); the residual lives only on the
+`append_history`/raw-insert fallback. Tracked within P3-3's machinery; does not reopen P3-3.
+
+#### P3-R1-C — remaining test completeness
+```text
+- explicit provider close_event_id reuse across lifecycles;
+- NULL-hash replay outcome;
+- explicit coverage of all transition-hash fields;
+- bare POSITION_EXITED ambiguity.
+```
+Status: **OPEN — mandatory before runtime enablement.** Test-completeness only; the live code
+paths are correct by inspection/trace.
 
 ### P3-1 — Documentation scope deviation (advisory; no code change)
 - **Risk:** none (inert documentation).
@@ -188,7 +275,7 @@ and un-wired; nothing is enabled, wired, migrated, or deployed.
   completed session; weekends/holidays/missing-bar sessions, open positions, and UNKNOWN
   status never decrement.
 - **Tests:** `tests/universe/test_cooldown_sessions.py`, `tests/universe/test_r1_migration.py`.
-- **Owner/Status:** universe owner — **IMPLEMENTED (R1) — awaiting independent review**.
+- **Owner/Status:** universe owner — **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (R1).
 
 ### P3-3 — Current-state and history writes are not atomic together (**mandatory**)
 - **Risk:** a crash between `upsert_state` and `append_history` leaves `universe_state`
@@ -219,8 +306,10 @@ and un-wired; nothing is enabled, wired, migrated, or deployed.
   authoritative/close markers, rollback leaves both tables unchanged, identical-replay
   idempotency, conflicting new_state/hash/cooldown/close-event → conflict, history/state
   inconsistency → consistency error, concurrent-writer serialisation, append-only triggers).
-- **Owner/Status:** universe owner — atomic transaction **IMPLEMENTED (R1)**; content-aware
-  conflict detection **IMPLEMENTED (R1.1)** — awaiting independent review.
+- **Owner/Status:** universe owner — **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (atomic
+  transaction R1; content-aware conflict detection R1.1; complete transition-hash replay
+  integrity R1.3). Cleared because the runtime write path always stores the complete hash;
+  residual **P3-R1-B** (legacy NULL-hash fallback) is OPEN — mandatory before enablement.
 
 ### P3-4 — Candidate-source table not used in candidate selection (mandatory)
 - **Risk:** the AUTO/TTI/MANUAL candidate concept is decoupled from selection; enabling
@@ -316,7 +405,7 @@ and un-wired; nothing is enabled, wired, migrated, or deployed.
   `tests/universe/test_position_continuity.py` (OPEN→UNKNOWN→OPEN / →flat-with-evidence /
   →flat-without-evidence; reconciliation persists across the UNKNOWN gap; cleared by
   authoritative open or evidence-close).
-- **Owner/Status:** universe owner — **IMPLEMENTED (R1.1) — awaiting independent review**.
+- **Owner/Status:** universe owner — **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (R1.1).
 
 ### P3-9 — Cooldown depends on observing `POSITION_EXITED_TODAY` (**mandatory**)
 - **Risk:** if the provider transitions `POSITION_OPEN → NO_POSITION` directly (never
@@ -349,7 +438,9 @@ and un-wired; nothing is enabled, wired, migrated, or deployed.
   (OPEN→UNKNOWN→flat-with-evidence starts cooldown once; without evidence → reconciliation,
   no cooldown; replayed close does not reset; new separate close starts a fresh cooldown;
   older/future snapshots are non-authoritative; deprecated EXITED_TODAY still honoured once).
-- **Owner/Status:** universe owner — **IMPLEMENTED (R1.1) — awaiting independent review**.
+- **Owner/Status:** universe owner — **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (R1.1;
+  lifecycle-safe close identity R1.3). Residual **P3-R1-A** (reused explicit `close_event_id`
+  can mask a second close) is OPEN — mandatory before enablement.
 
 ### BLOCKER-S — Hypothetical sizing not FX-normalized (mandatory; from P2-2)
 - **Risk:** hypothetical qty/risk use local price/ATR; cross-currency risk figures are not
@@ -368,16 +459,18 @@ and un-wired; nothing is enabled, wired, migrated, or deployed.
 ## Enablement gate (summary)
 
 Before `enable_dynamic_universe_shadow` is set true **anywhere outside isolated tests**:
-1. All **mandatory** items above are implemented, tested, AND independently reviewed.
-   **Phase R1 (P3-2, P3-3 atomic) + Phase R1.1 (P3-8, P3-9, P3-3 conflict detection) are
-   IMPLEMENTED and tested but NOT yet independently reviewed** — they are not "resolved".
-   **Still OPEN for Phase R2:** P3-4 (candidate-source wiring), P3-5 (inherited/open-book
+1. **Phase R1–R1.3 (P3-2, P3-3, P3-8, P3-9; P2-A/B/C; R1.3 Finding 1/2/3) passed the
+   consolidated independent review and are `RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE`** —
+   this clears them for the inert merge ONLY, and is **not** an enablement authorization.
+2. The pre-enable residuals **P3-R1-A, P3-R1-B, P3-R1-C** remain **OPEN — mandatory before
+   runtime enablement** (see their entries above).
+3. **Still OPEN for Phase R2:** P3-4 (candidate-source wiring), P3-5 (inherited/open-book
    portfolio heat), P3-6 (canonical identity), P3-7 (IBKR verification status), BLOCKER-S
    (FX-normalized sizing).
-2. The R1.1 position-continuity correction (and the R1 atomic/cooldown work) require
-   independent review; candidate-source wiring and canonical identity remain for R2.
-3. A separate runtime-wiring change (into `main.py`/scheduler) is proposed and reviewed on
+4. A separate runtime-wiring change (into `main.py`/scheduler) is proposed and reviewed on
    its own — it is explicitly **out of scope** here.
 
-Neither the R1/R1.1 work nor this register changes the posture: the foundation remains
-default-off and un-wired. Implementing these blockers does **not** authorize enablement.
+Neither the R1–R1.3 work nor this register changes the posture: the foundation remains
+default-off and un-wired. Marking these items resolved-for-disabled-merge does **not**
+authorize enablement, scheduler wiring, production migration, shadow soak, paper/live trading,
+or Phase R2.

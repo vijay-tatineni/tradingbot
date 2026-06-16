@@ -18,12 +18,20 @@
 > **P3-2, P3-3, P3-8, P3-9** only. **The feature remains default-off, un-wired, broker-free,
 > and not running. This work does NOT authorize enablement, wiring, deployment, or Phase R2.**
 >
-> **STATUS — IMPLEMENTED, NOT RESOLVED.** R1's P3-8/P3-9 attempt was found DEFECTIVE in
-> independent review (an `UNKNOWN` observation erased the last authoritative open state, so
-> an exit during a provider outage bypassed cooldown and re-enabled entry). **Phase R1.1**
-> (below) re-implements P3-8/P3-9 with authoritative position continuity and adds content-aware
-> idempotency conflict detection for P3-3. All items are IMPLEMENTED and tested but **await
-> independent review** — none is marked RESOLVED on this branch. See the R1.1 section.
+> **STATUS — RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE** (consolidated R1–R1.3 review,
+> `R1_SERIES_APPROVED_FOR_DISABLED_MERGE`; P0/P1/P2 = 0). P3-2, P3-3, P3-8, P3-9 are cleared
+> for merging while the feature remains default-off, un-wired, and not migrated in production.
+>
+> > This status does not authorize runtime enablement, scheduler wiring, production migration,
+> > shadow soak, paper trading, live trading, or Phase R2.
+>
+> This is NOT a claim that all pre-enable work is complete: the residuals P3-R1-A/B/C remain
+> OPEN — mandatory before runtime enablement (see `docs/dynamic_universe_pre_enable_blockers.md`).
+> Background: R1's P3-8/P3-9 attempt was found DEFECTIVE in the first independent review (an
+> `UNKNOWN` observation erased the last authoritative open state, so an exit during a provider
+> outage bypassed cooldown and re-enabled entry). **Phase R1.1** (below) re-implemented
+> P3-8/P3-9 with authoritative position continuity and added content-aware idempotency conflict
+> detection for P3-3.
 
 ## Resolved blockers
 
