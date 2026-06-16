@@ -66,9 +66,15 @@ assertions over the paths above):
 ## Migration
 
 - **v4 (additive, forward-only):** `ALTER TABLE universe_state ADD COLUMN
-  last_close_event_key TEXT`. The reviewed **v1–v3 chain is not edited**. No back-fill (NULL
-  legacy key = "no prior qualified close key", handled safely). No production `universe.db`
-  exists; no production migration is run by this change.
+  last_close_event_key TEXT`. The reviewed **v1–v3 chain is not edited**.
+- **Superseded by R2A-0.1 (independent-review Finding 3):** the original R2A-0 v4 carried *no*
+  back-fill, which left a `v3→v4`-upgraded row with a processed event but a NULL key unable to
+  participate in the reuse-violation check (a reachable masking on a non-fresh upgrade). R2A-0.1
+  corrects this: the v4 migration now sets `position_reconciliation_required = 1` for any row with
+  `last_processed_position_event_id IS NOT NULL AND last_close_event_key IS NULL` (fail closed).
+  No production `universe.db` currently exists, but **v3→v4 now fails closed for imported,
+  rehearsal, restored, or future pre-v4 databases** — not merely a fresh DB. See
+  `docs/dynamic_universe_pre_enable_r2a0_1_completion.md`.
 
 ## Tests
 

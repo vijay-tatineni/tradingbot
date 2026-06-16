@@ -478,38 +478,63 @@ class ShadowEvaluator:
         return True
 
     @staticmethod
-    def _close_event_identity(cid, pos_snap: PositionSnapshot, pid_hash, closed):
-        """Resolve the close-event identity for a close (R1.3 / Finding 1). Returns
-        ``(event_id, ambiguous)``:
-
-          * explicit ``close_event_id`` → ``(str(id), False)`` — strongest, provider owns it;
-          * else ``opened_trading_date`` present → lifecycle-safe synthetic id, ``(id, False)``;
-          * else → ``(None, True)`` — no explicit id AND no lifecycle discriminator, so a
-            collision-safe identity cannot be formed (the close is ambiguous).
-
-        A bare ``position_id`` + ``closed_trading_date`` is deliberately NOT enough: a provider
-        may reuse a position_id across distinct lifecycles closing on the same date.
-        """
-        explicit = pos_snap.close_event_id
-        if explicit is not None:
-            return str(explicit), False
-        opened = pos_snap.opened_trading_date
-        if opened is None:
-            return None, True
-        return _synth_close_event_id(cid, pid_hash, opened, closed), False
+    def _valid_lifecycle_date(v):
+        """Strictly parse a lifecycle date (R2A-0.1). Accept ONLY a ``datetime.date`` /
+        ``datetime`` or a strict ISO ``YYYY-MM-DD`` string. Reject ``None``, empty/malformed
+        strings, impossible dates, and any other type → returns ``None`` (the caller fails
+        closed). Deliberately NO permissive ``str()`` coercion of malformed values."""
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            try:
+                return date.fromisoformat(v)      # strict YYYY-MM-DD; rejects empty/malformed
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
-    def _close_event_key(cid, pid_hash, opened, event_id) -> str:
-        """Discriminator-qualified close-event key (P3-R1-A / R2A-0). Binds the (explicit or
-        synthetic) close-event id to its lifecycle discriminator — canonical instrument id,
-        hashed position id, and opened trading date. A provider ``close_event_id`` MUST be
-        globally unique per close lifecycle; reusing the SAME explicit id under a DIFFERENT
-        discriminator changes this key, which ``_position_continuity`` treats as a
-        provider-contract violation (→ POSITION_RECONCILIATION) rather than an idempotent
-        replay. (For a synthetic id the discriminator is already baked into the id, so the key
-        only adds protection for the provider-controlled explicit-id path.)"""
-        opened_iso = _date_iso(opened) if opened is not None else "?"
-        return f"{cid}|{pid_hash or '?'}|{opened_iso}|{event_id}"
+    def _qualified_close_key(cid, pid_hash, opened, closed, explicit) -> str:
+        """Deterministic, versioned lifecycle-qualified close key (R2A-0.1). Binds the FULL
+        close lifecycle — canonical instrument id, hashed position id, valid opened & closed
+        trading dates, and the provider ``close_event_id`` when supplied. The explicit id is
+        folded in but is NOT itself sufficient: this key only exists when every required
+        lifecycle field is present and valid (see ``_lifecycle_close``). Two closes that share an
+        explicit id but differ in ANY lifecycle component (opened / closed / position hash) get
+        DIFFERENT keys → provider-contract violation, never a masked replay."""
+        return (f"close-key:v2:{cid}|{pid_hash}|{opened.isoformat()}|{closed.isoformat()}"
+                f"|{explicit if explicit is not None else '-'}")
+
+    def _lifecycle_close(self, cid, pos_snap: PositionSnapshot, td_date):
+        """Resolve a close's lifecycle-qualified identity, or return ``None`` when the lifecycle
+        evidence is insufficient/invalid (R2A-0.1 operator ruling — an explicit ``close_event_id``
+        alone is NOT sufficient). Requires a ``position_id`` (→ hash), a VALID
+        ``opened_trading_date`` and ``closed_trading_date``, with ``opened <= closed <= td_date``
+        and ``opened`` not in the future. Any missing/malformed/impossible field → ``None`` and
+        the caller fails closed to POSITION_RECONCILIATION. Never substitutes ``?`` / empty /
+        raw-malformed / guessed values."""
+        if pos_snap.position_id is None:
+            return None                                       # missing position id
+        opened = self._valid_lifecycle_date(pos_snap.opened_trading_date)
+        closed = self._valid_lifecycle_date(pos_snap.closed_trading_date)
+        if opened is None or closed is None:
+            return None                                       # missing/malformed opened or closed
+        if opened > td_date:                                  # future opened date
+            return None
+        if closed < opened:                                   # closed before opened
+            return None
+        if closed > td_date:                                  # closed after the observation/eval date
+            return None
+        pid_hash = _pid_hash(pos_snap.position_id)
+        explicit = (str(pos_snap.close_event_id)
+                    if pos_snap.close_event_id is not None else None)
+        event_id = (explicit if explicit is not None
+                    else _synth_close_event_id(cid, pid_hash, opened, closed))
+        return {
+            "qualified_key": self._qualified_close_key(cid, pid_hash, opened, closed, explicit),
+            "event_id": event_id, "explicit_id": explicit, "closed": closed, "pid_hash": pid_hash,
+        }
 
     @staticmethod
     def _stale_close(closed, prior_close) -> bool:
@@ -566,60 +591,48 @@ class ShadowEvaluator:
                 new_auth_pid = pid_hash or p_auth_pid
                 new_auth_at = obs_iso
             elif is_exit_signal or open_to_flat:
-                # An explicit exit SIGNAL is itself durable closure intent; an OPEN→flat
-                # transition needs EXPLICIT evidence (bare position_id is insufficient).
-                if is_exit_signal or pos_snap.has_closure_evidence():
-                    closed = pos_snap.closed_trading_date or td_date
-                    # Close-event identity (R1.3 / Finding 1), strongest first:
-                    #   1. explicit provider close_event_id (preferred, owns uniqueness);
-                    #   2. lifecycle-safe synthetic id REQUIRING opened_trading_date as the
-                    #      lifecycle discriminator (so a reused position_id + same close date
-                    #      across DISTINCT lifecycles still yields distinct ids);
-                    #   3. otherwise AMBIGUOUS — cannot distinguish the close safely.
-                    ev, ambiguous = self._close_event_identity(cid, pos_snap,
-                                                               pid_hash or p_auth_pid, closed)
-                    if ambiguous:
-                        # No explicit id AND no opened_trading_date → we cannot form a
-                        # collision-safe identity. Do NOT mark the close processed, do NOT
-                        # start cooldown, do NOT permit entry — require authoritative
-                        # reconciliation (never the old collision-prone cooldown bypass). Keep
-                        # the authoritative anchor at POSITION_OPEN.
+                # R2A-0.1 (operator ruling): a close is processed ONLY with COMPLETE, VALID
+                # lifecycle evidence — a position_id (→ hash), a valid opened_trading_date and a
+                # valid closed_trading_date, with opened <= closed <= the evaluation date and
+                # opened not in the future. An explicit provider close_event_id is PREFERRED and
+                # folded into the qualified key, but is NOT by itself sufficient lifecycle
+                # evidence. Any missing/malformed required field → fail closed to
+                # POSITION_RECONCILIATION (entry blocked, no cooldown, no processed marker,
+                # authoritative OPEN anchor retained — never substitute '?'/empty/guessed values).
+                lc = self._lifecycle_close(cid, pos_snap, td_date)
+                if lc is None:
+                    recon = True                                 # insufficient/invalid lifecycle evidence
+                else:
+                    qkey, closed, ev = lc["qualified_key"], lc["closed"], lc["event_id"]
+                    if self._stale_close(closed, p_close):
+                        # an OLDER close arriving after a newer one → ignore (never restart a
+                        # newer lifecycle); the anchor is already past this close.
+                        recon = False
+                        new_auth_status = PositionStatus.NO_POSITION.value
+                        new_auth_pid = lc["pid_hash"] or p_auth_pid
+                        new_auth_at = obs_iso
+                    elif qkey == p_close_key:
+                        # exact replay of the already-processed close → idempotent, no reset.
+                        recon = False
+                        new_auth_status = PositionStatus.NO_POSITION.value
+                        new_auth_pid = lc["pid_hash"] or p_auth_pid
+                        new_auth_at = obs_iso
+                    elif lc["explicit_id"] is not None and ev == p_event:
+                        # SAME explicit close_event_id but a DIFFERENT qualified lifecycle (the
+                        # opened/closed date or position hash differs) → provider-contract
+                        # violation. Fail closed: keep the authoritative OPEN anchor, no cooldown,
+                        # do NOT mark the event processed, no entry. Never a masked second close.
                         recon = True
                     else:
-                        # P3-R1-A: qualify the close-event id with its lifecycle discriminator.
-                        # An EXPLICIT provider close_event_id is contractually unique per close
-                        # lifecycle; the SAME explicit id observed under a DIFFERENT discriminator
-                        # (canonical id + hashed position id + opened trading date) is a provider-
-                        # contract violation, NOT a replay — route to reconciliation (entry
-                        # blocked, no cooldown manufactured, authoritative anchor kept at OPEN),
-                        # never mask the genuine second close. A synthetic id already bakes the
-                        # discriminator in, so its qualified key only changes when the id does.
-                        explicit = pos_snap.close_event_id is not None
-                        qkey = self._close_event_key(cid, pid_hash or p_auth_pid,
-                                                     pos_snap.opened_trading_date, ev)
-                        if (explicit and ev == p_event and p_close_key is not None
-                                and qkey != p_close_key):
-                            recon = True                         # provider-contract violation
-                        elif not self._stale_close(closed, p_close) and ev != p_event:
-                            exit_detected = True
-                            new_event = ev
-                            new_close_key = qkey
-                            new_close = closed.isoformat() if isinstance(closed, date) else str(closed)
-                            recon = False                        # close reconciled
-                            new_auth_status = PositionStatus.NO_POSITION.value
-                            new_auth_pid = pid_hash or p_auth_pid
-                            new_auth_at = obs_iso
-                        else:
-                            # idempotent replay (same id + same discriminator): the close is
-                            # already processed — reconcile the flat anchor, never restart cooldown.
-                            recon = False
-                            new_auth_status = PositionStatus.NO_POSITION.value
-                            new_auth_pid = pid_hash or p_auth_pid
-                            new_auth_at = obs_iso
-                else:
-                    # OPEN→flat WITHOUT durable evidence → reconciliation required. Keep the
-                    # authoritative anchor at POSITION_OPEN (do NOT trust the unverified flat).
-                    recon = True
+                        # genuine new close backed by complete, valid lifecycle evidence.
+                        exit_detected = True
+                        new_event = ev
+                        new_close_key = qkey
+                        new_close = closed.isoformat()
+                        recon = False                            # close reconciled
+                        new_auth_status = PositionStatus.NO_POSITION.value
+                        new_auth_pid = lc["pid_hash"] or p_auth_pid
+                        new_auth_at = obs_iso
             else:
                 # authoritative NO_POSITION with NO prior authoritative open → ordinary flat.
                 new_auth_status = PositionStatus.NO_POSITION.value

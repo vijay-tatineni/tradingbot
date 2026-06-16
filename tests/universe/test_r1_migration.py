@@ -205,11 +205,10 @@ def test_v3_migrated_open_anchor_makes_later_close_start_cooldown(tmp_path, monk
          "pid_hash": "hh", "eval_date": "2026-06-10"}])
     reg = Registry(db)
     ev = ShadowEvaluator(reg, bars_provider=lambda r: None, flags={})
-    # R1.3 (Finding 1): signature now takes the canonical id; the close carries a
-    # collision-safe identity (opened+closed dates).
+    # R2A-0.1: the close carries a COMPLETE valid lifecycle (position_id + opened + closed).
     cont = ev._position_continuity(
         CID, reg.get_state(CID),
-        PositionSnapshot(status=PositionStatus.NO_POSITION,
+        PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
                          opened_trading_date=date(2026, 6, 9),
                          closed_trading_date=date(2026, 6, 12)), date(2026, 6, 12))
     assert cont["exit_detected"] is True               # migrated anchor → close = exit

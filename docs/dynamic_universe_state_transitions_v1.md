@@ -149,21 +149,29 @@ authoritative anchor survives a `UNKNOWN` outage, an exit during the outage
 `last_processed_position_event_id` (with a stale-close guard so an older close never restarts
 a newer lifecycle); a genuinely new later close starts a fresh cooldown.
 
-**Lifecycle-safe close identity + cooldown sufficiency (R1.3 / Finding 1).** Recognising the
-exit is necessary but NOT sufficient to start cooldown — the evaluator must also form a
-COLLISION-SAFE close-event identity so a provider that reuses a `position_id` across distinct
-lifecycles cannot mask a genuine second exit. Identity, strongest first: (1) an explicit
-`close_event_id` (preferred — the provider owns uniqueness); (2) a synthetic id keyed on
-`(canonical_id, position_id_hash, opened_trading_date, closed_trading_date)` with a `close:v2`
-version prefix — `opened_trading_date` is the required lifecycle discriminator, so a reused
-`position_id` closing on the same date in a DIFFERENT lifecycle still yields a distinct id.
-A close with NEITHER an explicit id NOR an `opened_trading_date` (e.g. `closed_trading_date`
-alone, `explicitly_closed` alone, or a bare `POSITION_EXITED`/`POSITION_EXITED_TODAY`) is
-**AMBIGUOUS** → it does NOT start cooldown and instead routes to `POSITION_RECONCILIATION`
-(never a collision-prone cooldown bypass). So the R1.1 "with evidence → COOLDOWN" rule is now
-satisfied specifically by supplying a lifecycle discriminator (a `close_event_id`, or
-`opened_trading_date` + `closed_trading_date`). The old `(pid_hash, closed)`-only fallback is
-removed. Identities are hashed and version-prefixed; no raw account id or unredacted
+**Strict lifecycle-qualified close identity + cooldown sufficiency (R2A-0.1; supersedes R1.3 /
+Finding 1).** Recognising the exit is necessary but NOT sufficient to start cooldown — the
+evaluator must also form a lifecycle-qualified close key so a provider that reuses a
+`close_event_id` (or a `position_id`) across distinct lifecycles cannot mask a genuine second
+exit. **A close is processed ONLY with COMPLETE, VALID lifecycle evidence: a `position_id` (→
+hash), a valid `opened_trading_date` AND a valid `closed_trading_date`, with `opened <= closed <=
+evaluation date` and `opened` not in the future, plus the `close_event_id` when supplied.** An
+explicit `close_event_id` is PREFERRED but is NOT by itself sufficient (R2A-0.1 operator ruling —
+this supersedes the earlier R1.3 premise that an explicit id alone could start cooldown). The
+qualified key is deterministic and versioned:
+`close-key:v2:<canonical_id>|<position_id_hash>|<opened_iso>|<closed_iso>|<close_event_id or '->'`,
+persisted in `universe_state.last_close_event_key`. Outcomes:
+
+* same explicit id + same complete lifecycle → replay (no cooldown reset);
+* same explicit id + a DIFFERENT opened/closed date or position hash → **provider-contract
+  violation** → `POSITION_RECONCILIATION`;
+* any missing or malformed required field (no position id, no/invalid opened, no/invalid closed,
+  `closed` before `opened`, future `opened`/`closed`) → `POSITION_RECONCILIATION`.
+
+A violation/insufficient close does NOT start cooldown, mark the event processed, overwrite the
+authoritative OPEN anchor, or permit entry. Lifecycle dates are strictly validated (only a
+`date`/`datetime` or strict ISO `YYYY-MM-DD`); no permissive `str()` coercion of malformed
+values. The position id is hashed and the key version-prefixed; no raw account id or unredacted
 identifier is ever embedded.
 
 **Complete-content replay integrity (R1.3 / Finding 2).** Each persisted transition stores a

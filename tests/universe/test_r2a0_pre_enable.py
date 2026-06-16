@@ -103,7 +103,8 @@ def test_explicit_close_event_id_reuse_routes_state_to_reconciliation(tmp_path):
     # open date lands the universe state in POSITION_RECONCILIATION with no cooldown.
     reg = Registry(_seed(tmp_path))
     px = _pid_hash("X")
-    key1 = ShadowEvaluator._close_event_key(CID, px, date(2026, 6, 10), "E1")
+    # lifecycle-1 qualified key (R2A-0.1 format) for explicit id E1, opened 06-10, closed 06-20.
+    key1 = ShadowEvaluator._qualified_close_key(CID, px, date(2026, 6, 10), date(2026, 6, 20), "E1")
     reg.upsert_state({
         "canonical_instrument_id": CID, "current_state": "POSITION_OPEN",
         "evaluated_trading_date": "2026-06-24", "evaluator_version": VER,

@@ -109,9 +109,9 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | OPEN (R2) |
 | P3-8 | **mandatory** | provider removal can preserve stale open-position state | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1) |
 | P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1/R1.3); see residual P3-R1-A |
-| P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | IMPLEMENTED — awaiting independent review (R2A-0) |
+| P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
 | P3-R1-B | **mandatory (pre-enable)** | legacy NULL transition-hash fallback skips some markers | IMPLEMENTED — awaiting independent review (R2A-0) |
-| P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | IMPLEMENTED — awaiting independent review (R2A-0) |
+| P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
 | BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | OPEN (R2) |
 
 > "mandatory" = must be resolved + independently reviewed before the flag is enabled
@@ -208,15 +208,19 @@ Before enablement:
 - route that violation to POSITION_RECONCILIATION;
 - add a regression test.
 ```
-Status: **IMPLEMENTED — awaiting independent review (R2A-0).** The explicit/synthetic
-close-event id is now bound to its lifecycle discriminator (canonical id + hashed position id +
-opened trading date) as a persisted qualified key (`universe_state.last_close_event_key`,
-additive migration v4); the same explicit id under a DIFFERENT discriminator is routed to
-`POSITION_RECONCILIATION` (entry blocked, no cooldown manufactured), and the uniqueness contract
-is documented on `PositionSnapshot.close_event_id`. Tests in
-`tests/universe/test_r2a0_pre_enable.py`. NOT yet resolved — see
-`docs/dynamic_universe_pre_enable_r2a0_completion.md`. Touches P3-9's exactly-once cooldown
-property; the synthetic-id path is already collision-safe (R1.3 Finding 1).
+Status: **IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1).** R2A-0.1 (operator
+ruling) makes an explicit `close_event_id` PREFERRED but NOT sufficient alone: a close is
+processed only with a COMPLETE valid lifecycle — position_id (→ hash) + valid opened & closed
+dates (opened <= closed <= eval date, opened not future) — folded into a deterministic versioned
+qualified key (`close-key:v2:cid|pid|opened|closed|explicit`, persisted in
+`universe_state.last_close_event_key`). The same explicit id under ANY differing lifecycle
+component (opened/closed/pid), or any missing/malformed lifecycle field, routes to
+`POSITION_RECONCILIATION` (entry blocked, no cooldown, no processed marker, authoritative OPEN
+anchor retained). The v4 migration fails closed for pre-v4 processed-event rows
+(`position_reconciliation_required = 1` when the qualified key is NULL). Tests in
+`tests/universe/test_r2a0_pre_enable.py` and `tests/universe/test_r2a0_1_lifecycle.py`. NOT yet
+resolved — see `docs/dynamic_universe_pre_enable_r2a0_1_completion.md`. Touches P3-9's
+exactly-once cooldown property.
 
 #### P3-R1-B — legacy NULL transition hash
 ```text

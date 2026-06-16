@@ -66,14 +66,19 @@ which a non-authoritative observation NEVER erases — so an exit during an outa
 **Exit detection is durable and exactly-once (P3-9, R1.1):** cooldown starts from an explicit
 durable `POSITION_EXITED` signal, or an authoritative `last_authoritative=POSITION_OPEN →
 NO_POSITION` transition with EXPLICIT closure evidence, de-duplicated by
-`last_processed_position_event_id` (with a stale-close guard). **Close identity is
-lifecycle-safe (R1.3 / Finding 1):** to START cooldown the close must carry a collision-safe
-identity — an explicit `close_event_id` (preferred), OR `opened_trading_date` +
-`closed_trading_date` (the synthetic id is keyed on the lifecycle window so a reused
-`position_id` cannot mask a second exit). A close lacking both (e.g. `closed_trading_date`
-alone, `explicitly_closed` alone, or a bare exit signal) is AMBIGUOUS → it routes to
-`POSITION_RECONCILIATION`, never a cooldown bypass. **Providers SHOULD supply `close_event_id`
-(or both lifecycle dates) for every cooldown-starting close.** An authoritative open→flat
+`last_processed_position_event_id` + the lifecycle-qualified `last_close_event_key` (with a
+stale-close guard). **Close identity is strictly lifecycle-qualified (R2A-0.1; supersedes R1.3 /
+Finding 1):** to START cooldown the close must carry a COMPLETE valid lifecycle — a `position_id`
+(→ hash), a valid `opened_trading_date` AND a valid `closed_trading_date` (`opened <= closed <=
+evaluation date`, `opened` not future) — plus the `close_event_id` when supplied. An explicit
+`close_event_id` is PREFERRED but NOT sufficient alone. The qualified key is
+`close-key:v2:cid|pid_hash|opened|closed|close_event_id`. A close missing/with-malformed any
+required field, or the SAME explicit id reused under a DIFFERENT lifecycle (different
+opened/closed date or position hash), routes to `POSITION_RECONCILIATION` — entry blocked, no
+cooldown, no processed marker, authoritative OPEN anchor retained — never a cooldown bypass or a
+masked second close. **Providers MUST supply `position_id` AND both lifecycle dates (and SHOULD
+supply a globally-unique-per-lifecycle `close_event_id`) for every cooldown-starting close.** An
+authoritative open→flat
 WITHOUT evidence sets a durable `position_reconciliation_required` block, surfaced since R1.2
 as the dedicated `POSITION_RECONCILIATION` state (blocks entry, no liquidation, holds cooldown;
 cleared only by an authoritative `POSITION_OPEN` or an evidence-bearing close). A
