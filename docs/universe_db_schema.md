@@ -22,10 +22,11 @@
   `sqlite3.OperationalError` (database is locked) without creating an inconsistent schema.
 * **Idempotent**: rerunning a fully-migrated DB is a no-op. Migrations are append-only;
   never edit a released migration (add a new `(version, [stmts])` tuple).
-* Current schema version: **3** (v2 = Pre-Enable R1; v3 = Pre-Enable R1.1 authoritative
+* Current schema version: **4** (v2 = Pre-Enable R1; v3 = Pre-Enable R1.1 authoritative
   position continuity, back-fill corrected in place by R1.2 / P2-B, and the
-  `transition_snapshot_*` history columns added in place by R1.3 / Finding 2 — all strictly
-  additive; see below). No schema v4 is added: v3 is unreleased / never run in production.
+  `transition_snapshot_*` history columns added in place by R1.3 / Finding 2; v4 = Pre-Enable
+  R2A-0 / R2A-0.1 — adds `universe_state.last_close_event_key` (the lifecycle-qualified
+  close-event key) plus a fail-closed back-fill — all strictly additive; see below).
 
 ## Tables (v1)
 
@@ -89,7 +90,21 @@ last_authoritative_position_id_hash  TEXT   -- non-sensitive hash of the authori
 last_authoritative_observed_at       TEXT   -- observed date of the last authoritative status
 position_reconciliation_required     INT    -- durable block: authoritative open then flat w/o
                                             --   evidence; blocks entry, no liquidation (R1.1)
+-- ── v4 (R2A-0 / R2A-0.1) lifecycle-qualified close identity ───────────────────
+last_close_event_key                 TEXT   -- deterministic versioned key of the last processed
+                                            --   close: close-key:v2:cid|pid_hash|opened|closed|
+                                            --   close_event_id. A reused explicit close_event_id
+                                            --   under a DIFFERENT lifecycle yields a different
+                                            --   key → provider-contract violation (P3-R1-A).
 ```
+**Lifecycle-qualified close key (v4 / R2A-0.1).** A close is processed only with COMPLETE valid
+lifecycle evidence (position_id + valid opened & closed dates, opened <= closed <= eval date),
+recorded in `last_close_event_key`. An explicit `close_event_id` is preferred but not sufficient
+alone. The v4 migration also runs a **fail-closed back-fill**: any pre-v4 row with
+`last_processed_position_event_id IS NOT NULL AND last_close_event_key IS NULL` is set
+`position_reconciliation_required = 1` (no qualified key is inferred from incomplete legacy data),
+so a `v3→v4` upgrade of an imported / rehearsal / restored / future pre-v4 DB fails closed rather
+than risk a masked reuse. Strictly additive; v1–v3 DDL unchanged.
 **Authoritative continuity (R1.1, P3-8/P3-9).** `latest_observed_*` records the most recent
 observation (a non-authoritative `UNKNOWN`/stale/future/missing observation MAY overwrite it).
 `last_authoritative_*` records the last status from a fresh, in-order, real-status snapshot

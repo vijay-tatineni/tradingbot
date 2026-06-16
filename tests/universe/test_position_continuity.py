@@ -65,8 +65,8 @@ def test_open_unknown_flat_with_evidence_starts_cooldown_once(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     _run(reg, PositionStatus.UNKNOWN, "2026-06-13")
-    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
-                                          opened_trading_date=date(2026, 6, 12),  # R1.3 discriminator
+    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                                          opened_trading_date=date(2026, 6, 12),  # R2A-0.1: full lifecycle
                                           closed_trading_date=date(2026, 6, 14)), "2026-06-14")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["cooldown_sessions_remaining"] == 3
@@ -110,16 +110,19 @@ def test_bare_position_id_is_not_closure_evidence(tmp_path):
 
 
 def test_closure_with_lifecycle_discriminator_starts_cooldown_once(tmp_path):
-    # R1.3 (Finding 1): cooldown starts only when a COLLISION-SAFE close identity can be
-    # formed — an explicit close_event_id, OR opened_trading_date + closed_trading_date.
+    # R2A-0.1: cooldown starts only with a COMPLETE valid lifecycle — position_id + valid
+    # opened + closed dates (an explicit close_event_id is preferred but NOT sufficient alone).
     for i, ev_snap in enumerate((
-        PositionSnapshot(status=PositionStatus.NO_POSITION, close_event_id="close-7"),
-        PositionSnapshot(status=PositionStatus.NO_POSITION,
+        PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                         close_event_id="close-7", opened_trading_date=date(2026, 6, 12),
+                         closed_trading_date=date(2026, 6, 13)),
+        PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p2",
                          opened_trading_date=date(2026, 6, 12),
                          closed_trading_date=date(2026, 6, 13)),
         # explicit id wins even when a (reused) position_id is also present.
         PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="reused",
-                         close_event_id="close-9"),
+                         close_event_id="close-9", opened_trading_date=date(2026, 6, 12),
+                         closed_trading_date=date(2026, 6, 13)),
     )):
         d = tmp_path / f"ev{i}"
         d.mkdir()
@@ -185,7 +188,8 @@ def test_replayed_close_event_does_not_reset_cooldown(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     snap = PositionSnapshot(status=PositionStatus.POSITION_EXITED, close_event_id="close-1",
-                            closed_trading_date=date(2026, 6, 13))
+                            position_id="p1", opened_trading_date=date(2026, 6, 12),
+                            closed_trading_date=date(2026, 6, 13))   # R2A-0.1: full lifecycle
     o1, st1, _ = _run(reg, snap, "2026-06-13")
     assert o1["new_state"] == State.COOLDOWN.value and st1["cooldown_sessions_remaining"] == 3
     ev1 = st1["last_processed_position_event_id"]
@@ -218,8 +222,10 @@ def test_reconciliation_cleared_by_evidence_close_starts_cooldown(tmp_path):
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     _run(reg, PositionStatus.NO_POSITION, "2026-06-13")            # reconciliation set
-    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
-                                          close_event_id="c-9"), "2026-06-14")
+    # R2A-0.1: a reconciliation block is cleared by a close only with a COMPLETE valid lifecycle.
+    o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
+                                          close_event_id="c-9", opened_trading_date=date(2026, 6, 12),
+                                          closed_trading_date=date(2026, 6, 14)), "2026-06-14")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["position_reconciliation_required"] == 0
     assert st["cooldown_sessions_remaining"] == 3
@@ -231,7 +237,7 @@ def test_exited_today_backcompat_with_discriminator_starts_cooldown_once(tmp_pat
     reg = Registry(_seed(tmp_path))
     _open(reg, "2026-06-12")
     o, st, _ = _run(reg, PositionSnapshot(status=PositionStatus.POSITION_EXITED_TODAY,
-                                          opened_trading_date=date(2026, 6, 12),
+                                          position_id="p1", opened_trading_date=date(2026, 6, 12),
                                           closed_trading_date=date(2026, 6, 13)), "2026-06-13")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["cooldown_sessions_remaining"] == 3

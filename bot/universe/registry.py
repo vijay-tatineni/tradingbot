@@ -39,6 +39,10 @@ _TRANSITION_STATE_FIELDS = (
     "latest_observed_at", "last_authoritative_position_status",
     "last_authoritative_position_id_hash", "last_authoritative_observed_at",
     "position_reconciliation_required",
+    # ── v4 (R2A-0 / P3-R1-A) ── discriminator-qualified close-event key. Material lifecycle
+    # output (moves in lockstep with last_processed_position_event_id), so it is folded into
+    # the complete transition snapshot/hash for content-aware idempotency.
+    "last_close_event_key",
 )
 _TRANSITION_DATE_FIELDS = frozenset({
     "cooldown_started_trading_date", "cooldown_last_counted_trading_date",
@@ -126,6 +130,8 @@ _STATE_COLUMNS = (
     "latest_observed_position_status", "latest_observed_at",
     "last_authoritative_position_status", "last_authoritative_position_id_hash",
     "last_authoritative_observed_at", "position_reconciliation_required",
+    # ── v4 (R2A-0 / P3-R1-A) discriminator-qualified close-event key ──
+    "last_close_event_key",
 )
 
 
@@ -373,9 +379,18 @@ class Registry:
             ).fetchone()
             return row is not None
 
-    def append_history(self, rec: dict) -> bool:
+    def append_history(self, rec: dict, state: Optional[dict] = None) -> bool:
         """Append-only history write. Returns False if a row already exists for the
-        idempotency key (same instrument/date/version) — never duplicates."""
+        idempotency key (same instrument/date/version) — never duplicates.
+
+        P3-R1-B (R2A-0): every supported history-writing API now computes and stores the
+        COMPLETE deterministic transition snapshot + hash, so this path can never create a new
+        NULL-`transition_snapshot_hash` row (the fail-closed advanced-replay guard in
+        `_reconcile_duplicate` then only ever fires on genuinely legacy/raw rows, not on rows
+        this store wrote). The optional ``state`` dict supplies the current-state lifecycle/
+        cooldown markers; when omitted, the snapshot is built from the history rec alone (its
+        state-derived fields are recorded as NULL) and still hashed — never left NULL."""
+        t_json, t_hash = _transition_json_and_hash(state or {}, rec)
         with connect(self.db_path) as conn:
             try:
                 conn.execute(
@@ -383,8 +398,9 @@ class Registry:
                     INSERT INTO universe_state_history
                         (canonical_instrument_id, trading_date, prior_state, new_state,
                          reason_codes, feature_snapshot_json, feature_snapshot_hash,
-                         evaluator_version, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                         evaluator_version, created_at,
+                         transition_snapshot_json, transition_snapshot_hash)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         rec["canonical_instrument_id"], rec["trading_date"],
@@ -392,7 +408,7 @@ class Registry:
                         _dumps(rec.get("reason_codes")),
                         _dumps(rec.get("feature_snapshot")),
                         rec.get("feature_snapshot_hash"), rec["evaluator_version"],
-                        _utc_now_iso(),
+                        _utc_now_iso(), t_json, t_hash,
                     ),
                 )
                 return True
@@ -581,31 +597,44 @@ class Registry:
         _, prop_thash = _transition_json_and_hash(state, history)
         if ex_thash is not None:
             transition_same = (ex_thash == prop_thash)
+        elif not same_date:
+            # ── P3-R1-B (R2A-0) frozen policy: FAIL CLOSED on advanced replay of a NULL-hash row.
+            # A legacy/raw history row with no transition_snapshot_hash carries no complete,
+            # immutable record of this transition's cooldown / lifecycle / authoritative
+            # bookkeeping. Once the current state has legitimately ADVANCED past this date, that
+            # bookkeeping is no longer reconstructable, so a bounded field comparison could
+            # accept a DIVERGENT replay as idempotent. We refuse to trust or infer the missing
+            # content: raise rather than guess. (The runtime write path always stores the
+            # complete hash, so this can only arise from a pre-v3 / raw legacy row. The SAME-DATE
+            # case below remains a safe full comparison because the current-state row still
+            # reflects this exact transition.)
+            raise StateHistoryConsistencyError(
+                f"advanced replay of NULL transition_snapshot_hash history for {cid} "
+                f"{trading_date}: complete immutable transition content is unavailable "
+                f"(current state advanced to {s_eval_date}) — failing closed")
         else:
             # Legacy/back-compat row with no stored transition hash (e.g. a raw append_history
-            # insert): compare the constituent fields directly. NULL is never treated as a
-            # match.
+            # insert) replayed on the SAME date: the current-state row still reflects this
+            # transition, so a full constituent-field comparison is available and safe. NULL is
+            # never treated as a match.
             history_same = (
                 ex_prior == history.get("prior_state")
                 and ex_new == history["new_state"]
                 and ex_reasons == _dumps(history.get("reason_codes"))
                 and ex_hash == history.get("feature_snapshot_hash"))
-            if same_date:
-                prop_cd_rem = state.get("cooldown_sessions_remaining")
-                prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
-                state_same = (
-                    s_state == state["current_state"]
-                    and s_cd_rem == prop_cd_rem
-                    and s_cd_start == state.get("cooldown_started_trading_date")
-                    and s_cd_last == state.get("cooldown_last_counted_trading_date")
-                    and s_event == state.get("last_processed_position_event_id")
-                    and s_close == state.get("last_position_close_trading_date")
-                    and s_auth_status == state.get("last_authoritative_position_status")
-                    and s_auth_pid == state.get("last_authoritative_position_id_hash")
-                    and int(s_recon or 0) == (1 if state.get("position_reconciliation_required") else 0))
-                transition_same = history_same and state_same
-            else:
-                transition_same = history_same
+            prop_cd_rem = state.get("cooldown_sessions_remaining")
+            prop_cd_rem = int(prop_cd_rem) if prop_cd_rem is not None else None
+            state_same = (
+                s_state == state["current_state"]
+                and s_cd_rem == prop_cd_rem
+                and s_cd_start == state.get("cooldown_started_trading_date")
+                and s_cd_last == state.get("cooldown_last_counted_trading_date")
+                and s_event == state.get("last_processed_position_event_id")
+                and s_close == state.get("last_position_close_trading_date")
+                and s_auth_status == state.get("last_authoritative_position_status")
+                and s_auth_pid == state.get("last_authoritative_position_id_hash")
+                and int(s_recon or 0) == (1 if state.get("position_reconciliation_required") else 0))
+            transition_same = history_same and state_same
 
         if transition_same:
             return "idempotent"

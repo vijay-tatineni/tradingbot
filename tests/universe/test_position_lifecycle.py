@@ -80,9 +80,9 @@ def test_position_exit_to_cooldown(tmp_path):
     db = _seed(tmp_path)
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
-    # R1.3 (Finding 1): the exit carries a collision-safe identity (opened+closed dates).
+    # R2A-0.1: the exit carries a COMPLETE valid lifecycle (position_id + opened + closed).
     pos = StubPositionProvider({CID: PositionSnapshot(
-        status=PositionStatus.POSITION_EXITED_TODAY,
+        status=PositionStatus.POSITION_EXITED_TODAY, position_id="p1",
         opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, o = _run(reg, SpyProvider({CID: _src()}), pos, "2026-06-10")
     assert o["new_state"] == State.COOLDOWN.value
@@ -148,10 +148,10 @@ def test_cooldown_e1_e2_e3_block_e4_release_via_provider(tmp_path):
     reg = Registry(db)
     _preset_state(reg, State.POSITION_OPEN.value)
     src = SpyProvider({CID: _src()})
-    # E: exit today → COOLDOWN (remaining 3; exit session does not count). R1.3 (Finding 1):
-    # the exit carries a collision-safe identity (opened+closed dates).
+    # E: exit today → COOLDOWN (remaining 3; exit session does not count). R2A-0.1: the exit
+    # carries a COMPLETE valid lifecycle (position_id + opened + closed).
     pos_exit = StubPositionProvider({CID: PositionSnapshot(
-        status=PositionStatus.POSITION_EXITED_TODAY,
+        status=PositionStatus.POSITION_EXITED_TODAY, position_id="p1",
         opened_trading_date=date(2026, 6, 9), closed_trading_date=date(2026, 6, 10))})
     _, oE = _run(reg, src, pos_exit, "2026-06-10")
     assert oE["new_state"] == State.COOLDOWN.value

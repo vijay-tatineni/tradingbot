@@ -76,7 +76,9 @@ def test_missed_transient_exited_still_detected_by_durable_evidence(tmp_path):
     # (with a close date). Cooldown must still start (the masking dependency is gone).
     reg = Registry(_seed(tmp_path))
     _open(reg)
-    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION,
+    # R2A-0.1: a cooldown-starting close requires a COMPLETE valid lifecycle
+    # (position_id + opened + closed).
+    o, st = _run_day(reg, PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="p1",
                                            opened_trading_date=date(2026, 6, 12),
                                            closed_trading_date=date(2026, 6, 15)),
                      "2026-06-15")
@@ -219,8 +221,11 @@ def test_explicit_close_event_id_controls_identity_even_with_reused_pid(tmp_path
     reg = Registry(_seed(tmp_path))
     _open(reg)
     # explicit close_event_id takes precedence over any synthesized id (and over a reused pid).
+    # R2A-0.1: the explicit id is preferred but still needs a COMPLETE valid lifecycle
+    # (position_id + opened + closed) to start cooldown.
     snap = PositionSnapshot(status=PositionStatus.NO_POSITION, position_id="reused",
-                            close_event_id="explicit-1", closed_trading_date=date(2026, 6, 15))
+                            close_event_id="explicit-1", opened_trading_date=date(2026, 6, 12),
+                            closed_trading_date=date(2026, 6, 15))
     o, st = _run_day(reg, snap, "2026-06-15")
     assert o["new_state"] == State.COOLDOWN.value
     assert st["last_processed_position_event_id"] == "explicit-1"        # explicit id used verbatim

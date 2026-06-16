@@ -272,4 +272,38 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v4: Pre-Enable R2A-0 / R2A-0.1 (P3-R1-A reused explicit close-event id). Strictly
+        #        ADDITIVE. Persists the lifecycle-QUALIFIED close-event key alongside the raw
+        #        last_processed_position_event_id. A provider close_event_id MUST be globally
+        #        unique per close lifecycle; binding it to its full lifecycle (canonical id +
+        #        hashed position id + opened & closed trading dates) lets the evaluator detect the
+        #        SAME explicit id reused under a DIFFERENT lifecycle — a provider-contract
+        #        violation routed to POSITION_RECONCILIATION (entry blocked, no cooldown
+        #        manufactured), never a masked second close. Forward-only v4 — v1–v3 NOT edited.
+        #
+        #        R2A-0.1 FAIL-CLOSED BACK-FILL (independent-review Finding 3): a pre-v4 row may
+        #        carry a previously-processed event but a NULL qualified key (the column did not
+        #        exist before v4), so it cannot participate in the reuse-violation check. Rather
+        #        than infer a key from incomplete legacy data, the migration blocks such rows for
+        #        reconciliation (see the UPDATE below). This means v3→v4 fails closed for
+        #        imported / rehearsal / restored / future pre-v4 databases — not merely a fresh DB.
+        4,
+        [
+            "ALTER TABLE universe_state ADD COLUMN last_close_event_key TEXT",
+            # Fail-closed: a row with a processed event but no qualified key cannot be checked for
+            # explicit-id reuse → block it for authoritative reconciliation. We do NOT infer or
+            # reconstruct a qualified key from incomplete legacy data. On the next evaluation the
+            # row resolves to POSITION_RECONCILIATION (entry blocked); a fresh authoritative OPEN
+            # or a valid lifecycle-qualified close reconciles it (a proper key is then written).
+            # Atomic with the ADD COLUMN (single v4 BEGIN IMMEDIATE); idempotent (a rerun matches
+            # nothing new); no-op on a fresh v1→v4 DB; v1–v3 DDL unchanged.
+            """
+            UPDATE universe_state
+               SET position_reconciliation_required = 1
+             WHERE last_processed_position_event_id IS NOT NULL
+               AND last_close_event_key IS NULL
+            """,
+        ],
+    ),
 ]

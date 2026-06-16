@@ -109,9 +109,9 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | OPEN (R2) |
 | P3-8 | **mandatory** | provider removal can preserve stale open-position state | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1) |
 | P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1/R1.3); see residual P3-R1-A |
-| P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | OPEN — mandatory before runtime enablement |
-| P3-R1-B | **mandatory (pre-enable)** | legacy NULL transition-hash fallback skips some markers | OPEN — mandatory before runtime enablement |
-| P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | OPEN — mandatory before runtime enablement |
+| P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
+| P3-R1-B | **mandatory (pre-enable)** | legacy NULL transition-hash fallback skips some markers | IMPLEMENTED — awaiting independent review (R2A-0) |
+| P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
 | BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | OPEN (R2) |
 
 > "mandatory" = must be resolved + independently reviewed before the flag is enabled
@@ -208,8 +208,19 @@ Before enablement:
 - route that violation to POSITION_RECONCILIATION;
 - add a regression test.
 ```
-Status: **OPEN — mandatory before runtime enablement.** Touches P3-9's exactly-once cooldown
-property; the synthetic-id path is already collision-safe (R1.3 Finding 1).
+Status: **IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1).** R2A-0.1 (operator
+ruling) makes an explicit `close_event_id` PREFERRED but NOT sufficient alone: a close is
+processed only with a COMPLETE valid lifecycle — position_id (→ hash) + valid opened & closed
+dates (opened <= closed <= eval date, opened not future) — folded into a deterministic versioned
+qualified key (`close-key:v2:cid|pid|opened|closed|explicit`, persisted in
+`universe_state.last_close_event_key`). The same explicit id under ANY differing lifecycle
+component (opened/closed/pid), or any missing/malformed lifecycle field, routes to
+`POSITION_RECONCILIATION` (entry blocked, no cooldown, no processed marker, authoritative OPEN
+anchor retained). The v4 migration fails closed for pre-v4 processed-event rows
+(`position_reconciliation_required = 1` when the qualified key is NULL). Tests in
+`tests/universe/test_r2a0_pre_enable.py` and `tests/universe/test_r2a0_1_lifecycle.py`. NOT yet
+resolved — see `docs/dynamic_universe_pre_enable_r2a0_1_completion.md`. Touches P3-9's
+exactly-once cooldown property.
 
 #### P3-R1-B — legacy NULL transition hash
 ```text
@@ -225,9 +236,14 @@ Before enablement:
 - ensure every history-writing API computes the complete hash;
 - add a regression test.
 ```
-Status: **OPEN — mandatory before runtime enablement.** Unreachable via the runtime write path
-(`persist_transition_atomic` always stores the hash); the residual lives only on the
-`append_history`/raw-insert fallback. Tracked within P3-3's machinery; does not reopen P3-3.
+Status: **IMPLEMENTED — awaiting independent review (R2A-0).** Frozen policy: an ADVANCED
+replay of a NULL-`transition_snapshot_hash` row fails closed (`StateHistoryConsistencyError`) —
+incomplete immutable content is never trusted/inferred; the SAME-DATE path keeps the safe full
+comparison. Additionally `append_history` now writes the complete transition snapshot/hash, so no
+supported history-writing API creates a new NULL-hash row; legacy NULL rows are left in place (no
+guessed backfill). Tests in `tests/universe/test_r2a0_pre_enable.py`. NOT yet resolved — see
+`docs/dynamic_universe_pre_enable_r2a0_completion.md`. Tracked within P3-3's machinery; does not
+reopen P3-3.
 
 #### P3-R1-C — remaining test completeness
 ```text
@@ -236,8 +252,12 @@ Status: **OPEN — mandatory before runtime enablement.** Unreachable via the ru
 - explicit coverage of all transition-hash fields;
 - bare POSITION_EXITED ambiguity.
 ```
-Status: **OPEN — mandatory before runtime enablement.** Test-completeness only; the live code
-paths are correct by inspection/trace.
+Status: **IMPLEMENTED — awaiting independent review (R2A-0).** Added
+`tests/universe/test_r2a0_pre_enable.py` (9 tests): explicit `close_event_id` reuse across
+lifecycles (+ same-lifecycle replay guard), NULL-hash advanced replay fail-closed / same-date
+full comparison / `append_history` non-NULL hash, every transition-hash material field (incl.
+`last_close_event_key`), and bare `POSITION_EXITED` **and** `POSITION_EXITED_TODAY` ambiguity →
+reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_completion.md`.
 
 ### P3-1 — Documentation scope deviation (advisory; no code change)
 - **Risk:** none (inert documentation).

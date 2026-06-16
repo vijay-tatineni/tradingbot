@@ -98,18 +98,32 @@ class PositionSnapshot:
     close-event identity so a reused ``position_id`` across distinct lifecycles cannot mask a
     genuine second exit. That requires EITHER an explicit ``close_event_id`` (preferred,
     strongest), OR a lifecycle discriminator: ``opened_trading_date`` together with the close
-    date. A close that has neither (e.g. ``closed_trading_date`` alone, or ``explicitly_closed``
-    alone, or a bare ``POSITION_EXITED``/``POSITION_EXITED_TODAY`` with no open date) is
-    AMBIGUOUS → it does NOT start cooldown and instead requires authoritative reconciliation
-    (POSITION_RECONCILIATION). Providers SHOULD supply ``close_event_id`` (or both lifecycle
-    dates) for every close they want treated as a durable, cooldown-starting exit.
+    date.
+
+    R2A-0.1 STRICT LIFECYCLE EVIDENCE (operator ruling — supersedes the earlier R1.3 premise
+    that an explicit ``close_event_id`` ALONE may start cooldown): a close is processed (cooldown
+    started, event marked processed) ONLY when the evaluator can form a valid lifecycle-qualified
+    close key from a ``position_id`` (→ hash) AND a VALID ``opened_trading_date`` AND a VALID
+    ``closed_trading_date`` (with ``opened <= closed <= evaluation date`` and ``opened`` not in
+    the future), plus the ``close_event_id`` when supplied. The explicit id is PREFERRED but NOT
+    by itself sufficient. If ANY required lifecycle field is missing or malformed — or the SAME
+    explicit id is observed under a DIFFERENT lifecycle (different opened/closed date or position
+    hash) — the close is routed to POSITION_RECONCILIATION (entry blocked, no cooldown, no
+    processed-event marker, authoritative OPEN anchor retained). Safety does NOT rely solely on
+    the provider's uniqueness promise. Providers SHOULD supply ``close_event_id`` AND both
+    lifecycle dates AND ``position_id`` for every close they want treated as a durable,
+    cooldown-starting exit.
     """
     status: "PositionStatus"
     observed_at: Optional[datetime] = None
     position_id: Optional[str] = None
     opened_trading_date: Optional[date] = None
     closed_trading_date: Optional[date] = None
-    close_event_id: Optional[str] = None        # durable id of the close event (P3-9 dedup)
+    # durable id of the close event (P3-9 dedup). PROVIDER CONTRACT (P3-R1-A): MUST be globally
+    # unique per close lifecycle. R2A-0.1: PREFERRED but NOT sufficient alone — a full valid
+    # lifecycle (position_id + opened + closed dates) is required; reuse under a different
+    # lifecycle (or missing/malformed evidence) → POSITION_RECONCILIATION, never a masked close.
+    close_event_id: Optional[str] = None
     explicitly_closed: bool = False             # provider asserts the prior open is closed
     source_version: Optional[str] = None
 

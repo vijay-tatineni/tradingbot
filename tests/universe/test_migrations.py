@@ -25,8 +25,9 @@ def _tables(db):
 
 
 # Current schema head: v2 (R1: session-based cooldown, durable exit markers, append-only
-# history triggers) + v3 (R1.1: authoritative-continuity fields + reconciliation block).
-HEAD_VERSION = 3
+# history triggers) + v3 (R1.1: authoritative-continuity fields + reconciliation block)
+# + v4 (R2A-0 / P3-R1-A: discriminator-qualified close-event key).
+HEAD_VERSION = 4
 
 
 def test_migrate_creates_all_tables(tmp_path):
