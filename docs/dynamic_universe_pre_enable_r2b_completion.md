@@ -1,10 +1,13 @@
 # Dynamic Universe Pre-Enable R2B — Persisted Candidate-Source Integration
 
-**Status: IMPLEMENTED — awaiting independent review.**
-**P3-4 (candidate-source runtime integration): IMPLEMENTED — awaiting independent review.**
-Not marked resolved yet. R2C blockers remain open: **P3-5 (inherited/open-book portfolio
-heat)** and **BLOCKER-S (FX-normalized sizing)**. The feature remains **disabled**
-(`enable_dynamic_universe_shadow=False`), the candidate gate is **default-off**
+**Status: RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE.**
+**P3-4 (candidate-source runtime integration): RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE.**
+Independent frozen-scope review accepted: `R2B_APPROVED_FOR_DISABLED_MERGE` (P0/P1/P2 = 0;
+P3 = 4). Resolved only for merging while the feature remains default-off, un-wired and not
+migrated in production. Runtime enablement remains blocked by the four R2B pre-enable
+residuals recorded below (`R2B-P3-1..4`) and by the open R2C blockers **P3-5 (inherited/
+open-book portfolio heat)** and **BLOCKER-S (FX-normalized sizing)**. The feature remains
+**disabled** (`enable_dynamic_universe_shadow=False`), the candidate gate is **default-off**
 (`require_candidate_source=False`), and nothing is wired into `main.py` / `api_server.py`. No
 deployment, service restart, production migration, or broker call is part of this change.
 
@@ -67,17 +70,32 @@ replay of a submission key is a no-op; the same key with divergent immutable con
 `CandidateConflictError`.
 
 ## Audit
-Append-only `candidate_audit` records SUBMITTED / ACTIVATED / SUPPRESSED / SUPERSEDED /
-EXPIRED / DEACTIVATED / REJECTED / SELECTED_EFFECTIVE; UPDATE/DELETE are physically rejected by
-triggers.
+Append-only `candidate_audit` currently persists:
+
+* `SUBMITTED`
+* `ACTIVATED`
+* `REJECTED`
+* `SUPERSEDED`
+* `DEACTIVATED`
+* `EXPIRED`
+
+`SUPPRESSED` and `SELECTED_EFFECTIVE` are defined but are **not** currently persisted on the
+read/selection path (they are not recorded by any write path today — see residual
+**R2B-P3-3**). UPDATE/DELETE on `candidate_audit` are physically rejected by triggers.
 
 ## Fail-closed behavior
-Blocks selection (NEW entry only) for: missing store, DB error, malformed row, unknown
-source/status, unverified instrument/listing, ambiguous listing, conflicting active
-higher-precedence sources, stale effective date, invalid TTL state. Never forces liquidation;
-never calls a broker. Stable reason codes: `candidate_store_unavailable`,
+Blocks selection (NEW entry only) for: unverified instrument/listing, ambiguous listing,
+conflicting active higher-precedence sources, stale effective date, invalid TTL state. Never
+forces liquidation; never calls a broker. Reason codes emitted today on the selection path:
 `candidate_identity_unresolved`, `candidate_listing_unverified`, `candidate_listing_ambiguous`,
-`candidate_source_conflict`, `candidate_expired`, `candidate_inactive`, `candidate_malformed`.
+`candidate_source_conflict`, `candidate_expired`, `candidate_inactive`.
+
+`candidate_store_unavailable` and `candidate_malformed` reason codes are **defined** (and in
+`BLOCKING_REASONS`) but are **not yet emitted**: candidate-store/DB read failures and
+malformed/unknown persisted rows currently propagate as exceptions rather than a stable
+reason-coded block. Safety remains fail-closed (the failure occurs before contention and the
+TTL mutation, on a pure-read path, and no broker is reachable), but converting these to stable
+blocked results is a pre-enable residual — see **R2B-P3-1** and **R2B-P3-2**.
 
 ## Selection-store-only
 The evaluator consumes candidates ONLY via `effective_candidates(trading_date)`. Raw
@@ -87,14 +105,55 @@ still apply, and candidate expiry affects NEW entries only (open positions keep 
 
 ## Tests / baseline
 * `pytest tests/universe` — **354 passed** (308 baseline + 46 new).
-* `pytest tests` — **1686 passed**; the full suite introduced **no failure outside**
-  `tests/test_breakout_indicators.py`. Any failures inside that file are the repository's known
-  nondeterministic test-isolation/timing issue and are unrelated to R2B. (Compared against
-  `breakout-strategy @ 83a41d3`.)
+* `pytest tests` (compared against `breakout-strategy @ 83a41d3` in identical isolated
+  worktrees):
+  * Head: **1686 passed, 4 failed.**
+  * Base: **1640 passed, 4 failed.**
+
+  All failures are confined to `tests/test_breakout_indicators.py` and reproduce as
+  `pandas DatabaseError: no such table: ohlcv`. This is the repository's pre-existing
+  missing-fixture/environment issue and is unrelated to R2B. The delta of 46 passing tests is
+  exactly the new R2B universe suite; no new failure was introduced outside that file.
 
 ## Known limitations (NOT addressed here)
 R2C blockers remain open: P3-5 (inherited/open-book portfolio heat), BLOCKER-S (FX-normalized
 sizing). No runtime wiring, scheduler activation, shadow-mode/paper-trading enablement, or
-broker routing. `SELECTED_EFFECTIVE`/`SUPPRESSED` audit events are defined and recorded on
-submission/expiry paths; per-session selection auditing is left to the (default-off) evaluator
-integration and is not exercised in production (feature disabled).
+broker routing. `SELECTED_EFFECTIVE` and `SUPPRESSED` audit events are defined but are not
+currently persisted on any path; per-session selection auditing is left to the (default-off)
+evaluator integration and is not exercised in production (feature disabled) — see residual
+**R2B-P3-3**.
+
+## Independent review — accepted residuals (R2B pre-enable)
+The independent frozen-scope review returned `R2B_APPROVED_FOR_DISABLED_MERGE` with four P3
+findings. P3-4 is therefore **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE**: resolved only for
+merging while the feature remains default-off, un-wired and not migrated in production. Runtime
+enablement remains blocked by the residuals below, each **OPEN — mandatory before runtime
+enablement**.
+
+### R2B-P3-1 — candidate-store error observability
+`candidate_store_unavailable` and `candidate_malformed` reason codes exist, but candidate
+DB/read failures currently propagate as exceptions. Safety remains fail-closed because failure
+occurs before contention and TTL mutation, but a wired scheduler could crash rather than emit a
+stable blocked result. Before enablement: catch supported candidate-store/database read
+failures; convert them to `candidate_store_unavailable`; convert malformed/unknown persisted
+rows to `candidate_malformed`; block new entry without crashing the evaluation cycle; add
+regression tests.
+
+### R2B-P3-2 — unknown persisted source/status
+Supported write APIs reject unknown sources, but a raw/injected ACTIVE row with an unknown
+source is not defensively rejected by `effective_candidates`. Before enablement: add enum
+CHECK constraints where migration policy permits; and/or defensively reject unknown
+source/status as `candidate_malformed`; add a raw-row regression test.
+
+### R2B-P3-3 — selection audit completeness
+`SUPPRESSED` and `SELECTED_EFFECTIVE` are defined but not persisted. Before enablement, decide
+and implement one frozen policy: persist deterministic selection/suppression audit events
+without creating duplicate read-path noise; or explicitly remove those event types from the
+promised audit contract.
+
+### R2B-P3-4 — transaction consistency and TTL fault coverage
+`deactivate_candidate_atomic` currently uses a deferred transaction rather than
+`BEGIN IMMEDIATE`. Atomicity is preserved, but the lock is acquired later than the other
+multi-row lifecycle APIs. Before enablement: use explicit `BEGIN IMMEDIATE`; add a TTL-update
+fault-injection rollback test; verify concurrent deactivation/TTL operations fail or serialize
+safely.
