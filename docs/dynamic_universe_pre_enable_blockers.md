@@ -103,7 +103,7 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-1 | advisory (doc only) | three docs outside declared naming scope | acknowledged |
 | P3-2 | mandatory | `cooldown_until` stores a session count, not a date | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1) |
 | P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
-| P3-4 | mandatory | candidate-source table not consumed in selection | OPEN (R2) |
+| P3-4 | mandatory | candidate-source table not consumed in selection | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R2B); 4 OPEN pre-enable residuals R2B-P3-1..4 |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
 | P3-6 | mandatory | canonical-ID collision risk | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | IMPLEMENTED — awaiting independent review (R2A-1) |
@@ -345,7 +345,52 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   runtime source.
 - **Required test:** selection consumes only active AUTO/TTI/MANUAL candidates; expired /
   inactive candidates are excluded; dedup + source-merge + resubmission behave as specified.
-- **Owner/Status:** universe owner — **OPEN**.
+- **Resolution (R2B) — RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE:** schema **v6** adds a
+  dedicated `candidates` table (keyed by the R2A-1 verified `instrument_uid` + `listing_uid`,
+  never a ticker) plus an append-only `candidate_audit`. The new `bot.universe.candidate_store`
+  is the ONLY selection source: the evaluator consumes candidates exclusively via
+  `effective_candidates(trading_date)`. Frozen precedence MANUAL>TTI>AUTO (suppressed
+  candidates retained/auditable; an ACTIVE higher-precedence candidate that fails
+  identity/listing validation blocks with `candidate_source_conflict` — no silent
+  fall-through). Frozen TTL: MANUAL/TTI = 5 completed sessions (read-then-count; effective
+  E..E+4, expired E+5; idempotent per date), AUTO per-session/per-batch (atomic replacement).
+  Resubmission supersedes (old row retained, `superseded_by_candidate_id` set); identical
+  replay is a no-op; divergent replay raises `CandidateConflictError`. Identity-unresolved /
+  ambiguous / unverified candidates are REJECTED (auditable, fail-closed). Candidate presence
+  is necessary but NOT sufficient — all existing gates still apply, candidate expiry affects
+  NEW entries only, open positions keep being managed. Wired behind a **default-off**
+  `require_candidate_source` evaluator switch; feature stays disabled and un-wired. Legacy v1
+  `candidate_sources` rows (no verified identity) are never R2B-effective.
+- **Tests:** `tests/universe/test_r2b_{candidates,ttl,auto_batch,migration,selection}.py`.
+- **Owner/Status:** universe owner — **RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE**. Independent
+  frozen-scope review accepted: `R2B_APPROVED_FOR_DISABLED_MERGE` (P0/P1/P2 = 0; P3 = 4).
+  Resolved only for merging while the feature remains default-off, un-wired and not migrated in
+  production. Runtime enablement remains blocked by the four R2B pre-enable residuals below.
+  R2C blockers remain OPEN: P3-5 (inherited/open-book portfolio heat), BLOCKER-S (FX-normalized
+  sizing).
+- **R2B pre-enable residuals — OPEN — mandatory before runtime enablement:**
+  - **R2B-P3-1 — candidate-store error observability:** `candidate_store_unavailable` and
+    `candidate_malformed` reason codes exist, but candidate DB/read failures currently propagate
+    as exceptions. Safety remains fail-closed because failure occurs before contention and TTL
+    mutation, but a wired scheduler could crash rather than emit a stable blocked result. Before
+    enablement: catch supported candidate-store/database read failures; convert them to
+    `candidate_store_unavailable`; convert malformed/unknown persisted rows to
+    `candidate_malformed`; block new entry without crashing the evaluation cycle; add regression
+    tests.
+  - **R2B-P3-2 — unknown persisted source/status:** supported write APIs reject unknown sources,
+    but a raw/injected ACTIVE row with an unknown source is not defensively rejected by
+    `effective_candidates`. Before enablement: add enum CHECK constraints where migration policy
+    permits; and/or defensively reject unknown source/status as `candidate_malformed`; add a
+    raw-row regression test.
+  - **R2B-P3-3 — selection audit completeness:** `SUPPRESSED` and `SELECTED_EFFECTIVE` are
+    defined but not persisted. Before enablement, decide and implement one frozen policy:
+    persist deterministic selection/suppression audit events without creating duplicate
+    read-path noise; or explicitly remove those event types from the promised audit contract.
+  - **R2B-P3-4 — transaction consistency and TTL fault coverage:** `deactivate_candidate_atomic`
+    currently uses a deferred transaction rather than `BEGIN IMMEDIATE`. Atomicity is preserved,
+    but the lock is acquired later than the other multi-row lifecycle APIs. Before enablement:
+    use explicit `BEGIN IMMEDIATE`; add a TTL-update fault-injection rollback test; verify
+    concurrent deactivation/TTL operations fail or serialize safely.
 
 ### P3-5 — Portfolio heat ignores inherited/open-book exposure (mandatory)
 - **Risk:** the heat cap is not a true aggregate; with real inherited positions, new
@@ -509,7 +554,9 @@ Before `enable_dynamic_universe_shadow` is set true **anywhere outside isolated 
    this clears them for the inert merge ONLY, and is **not** an enablement authorization.
 2. The pre-enable residuals **P3-R1-A, P3-R1-B, P3-R1-C** remain **OPEN — mandatory before
    runtime enablement** (see their entries above).
-3. **Still OPEN for Phase R2:** P3-4 (candidate-source wiring), P3-5 (inherited/open-book
+3. **Phase R2:** P3-4 (candidate-source integration) is `RESOLVED FOR DEFAULT-OFF / UN-WIRED
+   MERGE` (R2B), with four OPEN pre-enable residuals **R2B-P3-1..4** — mandatory before runtime
+   enablement (see the P3-4 entry above). **Still OPEN for Phase R2:** P3-5 (inherited/open-book
    portfolio heat), P3-6 (canonical identity), P3-7 (IBKR verification status), BLOCKER-S
    (FX-normalized sizing).
 4. A separate runtime-wiring change (into `main.py`/scheduler) is proposed and reviewed on

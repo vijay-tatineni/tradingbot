@@ -55,7 +55,7 @@ def test_v1_to_v2_adds_fields_and_preserves_rows(tmp_path, monkeypatch):
             "cooldown_until) VALUES (?,?,?)", (CID, "COOLDOWN", "3"))
     # restore full migrations → upgrade to head.
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
-    assert migrate(db) == 5
+    assert migrate(db) == 6
     assert V2_COLUMNS.issubset(_state_columns(db))   # all v2 columns present
     with connect(db) as conn:
         row = dict(zip([d[0] for d in conn.execute(
@@ -68,23 +68,23 @@ def test_v1_to_v2_adds_fields_and_preserves_rows(tmp_path, monkeypatch):
 
 def test_migration_rerun_is_idempotent(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 5
-    assert migrate(db) == 5                           # rerun: no-op, no error
-    assert current_version(db) == 5
+    assert migrate(db) == 6
+    assert migrate(db) == 6                           # rerun: no-op, no error
+    assert current_version(db) == 6
 
 
 def test_migration_rolls_back_atomically_on_failure(tmp_path, monkeypatch):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 5                            # reach current head first
-    # craft a failing additive v6 to prove a later migration rolls back cleanly.
-    bad = list(MIGRATIONS) + [(6, [
+    assert migrate(db) == 6                            # reach current head first
+    # craft a failing additive v7 to prove a later migration rolls back cleanly.
+    bad = list(MIGRATIONS) + [(7, [
         "ALTER TABLE universe_state ADD COLUMN probe_col TEXT",
         "THIS IS NOT VALID SQL",
     ])]
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", bad)
     with pytest.raises(sqlite3.OperationalError):
         migrate(db)
-    assert current_version(db) == 5                   # not advanced
+    assert current_version(db) == 6                   # not advanced
     assert "probe_col" not in _state_columns(db)      # the partial column rolled back
 
 
@@ -103,7 +103,7 @@ def test_v3_backfills_reconciliation_for_unknown_only_rows(tmp_path, monkeypatch
             "INSERT INTO universe_state (canonical_instrument_id, current_state, "
             "last_observed_position_status) VALUES (?,?,?)", (CID, "EXIT_ONLY", "UNKNOWN"))
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
-    assert migrate(db) == 5
+    assert migrate(db) == 6
     with connect(db) as conn:
         recon = conn.execute(
             "SELECT position_reconciliation_required FROM universe_state "
@@ -130,7 +130,7 @@ def _v2_then_v3(tmp_path, monkeypatch, rows):
                 (r["cid"], r["current_state"], r.get("last_observed"),
                  r.get("pid_hash"), r.get("eval_date")))
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
-    assert migrate(db) == 5
+    assert migrate(db) == 6
     return db
 
 
@@ -222,7 +222,7 @@ def test_v3_backfill_rerun_is_idempotent(tmp_path, monkeypatch):
         {"cid": "UNK", "current_state": "EXIT_ONLY",
          "last_observed": "UNKNOWN", "eval_date": "2026-06-10"}])
     before = (_auth(db, "OPEN_OK"), _auth(db, "UNK"))
-    assert migrate(db) == 5                              # rerun: no-op
+    assert migrate(db) == 6                              # rerun: no-op
     assert (_auth(db, "OPEN_OK"), _auth(db, "UNK")) == before
 
 
@@ -299,7 +299,7 @@ V3_COLUMNS = {
 
 def test_v3_adds_all_authoritative_and_reconciliation_columns(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 5
+    assert migrate(db) == 6
     # every v3 column present — INCLUDING latest_observed_at (previously unasserted).
     assert V3_COLUMNS.issubset(_state_columns(db))
 
@@ -307,7 +307,7 @@ def test_v3_adds_all_authoritative_and_reconciliation_columns(tmp_path):
 def test_v3_adds_transition_snapshot_history_columns(tmp_path):
     # R1.3 (Finding 2): the append-only history table gains the complete-transition columns.
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 5
+    assert migrate(db) == 6
     with connect(db) as conn:
         cols = {c[1] for c in conn.execute(
             "PRAGMA table_info(universe_state_history)").fetchall()}

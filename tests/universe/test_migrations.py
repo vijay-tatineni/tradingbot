@@ -17,6 +17,8 @@ EXPECTED_TABLES = {
     # ── v5 (R2A-1: canonical identity + verified broker mappings) ──
     "instrument_identity", "instrument_listing", "ibkr_mapping", "ig_mapping",
     "identity_audit",
+    # ── v6 (R2B: persisted candidate-source integration) ──
+    "candidates", "candidate_audit",
 }
 
 
@@ -30,8 +32,9 @@ def _tables(db):
 # Current schema head: v2 (R1: session-based cooldown, durable exit markers, append-only
 # history triggers) + v3 (R1.1: authoritative-continuity fields + reconciliation block)
 # + v4 (R2A-0 / P3-R1-A: discriminator-qualified close-event key)
-# + v5 (R2A-1 / P3-6 / P3-7: canonical identity + listings + verified broker mappings).
-HEAD_VERSION = 5
+# + v5 (R2A-1 / P3-6 / P3-7: canonical identity + listings + verified broker mappings)
+# + v6 (R2B / P3-4: persisted candidate-source integration — candidates + candidate_audit).
+HEAD_VERSION = 6
 
 
 def test_migrate_creates_all_tables(tmp_path):
