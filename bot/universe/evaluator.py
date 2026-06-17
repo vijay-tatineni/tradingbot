@@ -37,8 +37,8 @@ from bot.universe import params
 from bot.universe.eligibility import structural_eligibility
 from bot.universe.fx import normalize_to_usd
 from bot.universe.models import (
-    AUTHORITATIVE_STATUSES, ELIGIBILITY_MODE_SHADOW, EXIT_SIGNAL_STATUSES, HypotheticalOrder,
-    PositionSnapshot, PositionStatus, Reason, State, StateOutcome,
+    AUTHORITATIVE_STATUSES, ELIGIBILITY_MODE_SHADOW, EligibilityResult, EXIT_SIGNAL_STATUSES,
+    HypotheticalOrder, PositionSnapshot, PositionStatus, Reason, State, StateOutcome,
 )
 from bot.universe.registry import Registry
 from bot.universe.state_machine import transition
@@ -103,7 +103,9 @@ class ShadowEvaluator:
                  equity: float = 100_000.0,
                  evaluator_version: Optional[str] = None,
                  position_provider=None,
-                 fx_provider=None):
+                 fx_provider=None,
+                 enforce_verified_identity: bool = False,
+                 identity_store=None):
         from bot.universe import EVALUATOR_VERSION
         self.registry = registry
         self.bars_provider = bars_provider   # callable(canonical_rec)->dict|None ; NO broker
@@ -121,6 +123,21 @@ class ShadowEvaluator:
         # the evaluator falls back to the legacy prior-state + trend-break derivation.
         # It is queried ONLY inside _evaluate_one, which the flag-off no-op never reaches.
         self.position_provider = position_provider
+        # ── R2A-1 canonical-identity / verified-mapping pre-entry gate (P3-6 / P3-7) ──
+        # DEFAULT-OFF: when False the evaluator behaves exactly as before (the gate is never
+        # consulted, no identity table is read). When True, an instrument with no verified
+        # identity / active verified listing / VERIFIED_REFERENCE_MATCH fresh IBKR mapping
+        # is BLOCKED from NEW entry (reason recorded); the gate never forces liquidation,
+        # alters a position, or calls a broker, and position reconciliation still dominates.
+        # The gate reads ONLY universe.db via an IdentityStore on the SAME db_path.
+        self.enforce_verified_identity = bool(enforce_verified_identity)
+        self._identity_store = identity_store
+
+    def _identity_gate_store(self):
+        if self._identity_store is None:
+            from bot.universe.identity_store import IdentityStore
+            self._identity_store = IdentityStore(self.registry.db_path)
+        return self._identity_store
 
     def is_enabled(self) -> bool:
         try:
@@ -245,6 +262,18 @@ class ShadowEvaluator:
         # Shadow eligibility policy: unknown corporate-action data WARNS (it does not
         # block); the paper/live hard-block policy is a separate, un-wired code path.
         elig = structural_eligibility(snap, mode=ELIGIBILITY_MODE_SHADOW)
+
+        # ── R2A-1 canonical-identity / verified-mapping gate (default-off; P3-6 / P3-7) ──
+        # Additive entry block: if enabled and the instrument lacks a verified identity /
+        # active verified listing / VERIFIED_REFERENCE_MATCH fresh IBKR mapping, its
+        # blocking reason codes are folded into eligibility (passes→False) so it cannot
+        # advance to ENTRY_ELIGIBLE. Position/reconciliation logic below is untouched.
+        if self.enforce_verified_identity:
+            gate = self._identity_gate_store().entry_identity_gate(rec, td_date)
+            if not gate.passes:
+                merged = [r for r in elig.reason_codes if r != Reason.ELIGIBLE]
+                merged += [r for r in gate.reason_codes if r not in merged]
+                elig = EligibilityResult(passes=False, reason_codes=merged)
 
         # ── 3. authoritative position snapshot (task §2 / P3-8) ───────
         # No provider / error / malformed → UNKNOWN (fail-safe). A stale prior state is

@@ -105,8 +105,8 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
 | P3-4 | mandatory | candidate-source table not consumed in selection | OPEN (R2) |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
-| P3-6 | mandatory | canonical-ID collision risk | OPEN (R2) |
-| P3-7 | **mandatory** | IBKR mapping check ignores verification status | OPEN (R2) |
+| P3-6 | mandatory | canonical-ID collision risk | IMPLEMENTED — awaiting independent review (R2A-1) |
+| P3-7 | **mandatory** | IBKR mapping check ignores verification status | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-8 | **mandatory** | provider removal can preserve stale open-position state | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1) |
 | P3-9 | **mandatory** | cooldown depends on observing `POSITION_EXITED_TODAY` | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1/R1.3); see residual P3-R1-A |
 | P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
@@ -377,7 +377,20 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   rows whose `name`/`exchange` differ.)
 - **Required test:** two distinct securities sharing symbol+currency+region do **not**
   merge; identity survives ticker change / listing migration fixtures.
-- **Owner/Status:** universe owner — **OPEN**.
+- **Resolution (R2A-1) — IMPLEMENTED, awaiting independent review:** schema **v5** adds a
+  four-concept canonical model — `instrument_uid` (opaque, immutable, ANCHOR-derived from a
+  verified ISIN/FIGI, **never** the ticker), `listing_uid` (one venue/currency listing),
+  verified broker mapping attributes, and `display_symbol`. Identity is created only through
+  the controlled `bot.universe.identity_store.resolve_identity_atomic` API. Same-ticker /
+  different-MIC / different-currency / different-anchor / share-class / ticker-reuse cases
+  never collapse (anchor-derived uids); a ticker rename retains `instrument_uid` (display
+  changes, audited); a listing migration creates a new `listing_uid` and retains the old row
+  (`valid_to` set). Conflicting anchors raise `IdentityConflictError` (never merge/overwrite).
+  Existing v4 rows become `identity_status='UNVERIFIED'` with NULL `instrument_uid` — no
+  ticker-derived backfill, fail-closed (entry blocked until provider-backed resolution). The
+  gate is **default-off and un-wired**; the feature remains disabled.
+- **Tests:** `tests/universe/test_r2a1_identity.py`, `test_r2a1_migration.py`.
+- **Owner/Status:** universe owner — **IMPLEMENTED — awaiting independent review (R2A-1)**.
 
 ### P3-7 — IBKR mapping check does not enforce verification status (**mandatory**)
 - **Risk:** an unverified (`CONFIG_DERIVED`, no `conId`) IBKR mapping currently satisfies
@@ -392,7 +405,19 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   before hypothetical or real routing eligibility is granted.
 - **Required test:** `CONFIG_DERIVED`/`UNVERIFIED` mapping → not routing-eligible;
   only the approved verified status → eligible.
-- **Owner/Status:** universe owner — **OPEN (mandatory)**.
+- **Resolution (R2A-1) — IMPLEMENTED, awaiting independent review:** the v5 `ibkr_mapping`
+  table carries an explicit `verification_status` over the frozen enum
+  (`VERIFIED_REFERENCE_MATCH`, `VERIFIED_CONFIGURED`, `UNVERIFIED`, `STALE`, `REJECTED`,
+  `AMBIGUOUS`). `bot.universe.identity.verify_ibkr_mapping` passes **only**
+  `VERIFIED_REFERENCE_MATCH` and additionally fails closed on a missing `conId`, a future
+  `verified_at`, an expired/absent `reverify_after_date` (default reverification interval **90
+  calendar days**), or a currency/MIC/exchange mismatch against the verified listing — each
+  with a stable reason code (`ibkr_mapping_*`). Mapping verification is independent of
+  canonical identity. IG mappings persist with `order_routing_blocked=1` and are never made
+  routing-eligible in this tranche. Wired into the evaluator behind a default-off
+  `enforce_verified_identity` gate; no routing path exists.
+- **Tests:** `tests/universe/test_r2a1_mappings.py`, `test_r2a1_isolation.py`.
+- **Owner/Status:** universe owner — **IMPLEMENTED — awaiting independent review (R2A-1)**.
 
 ### P3-8 — Provider removal can preserve stale open-position state (**mandatory**)
 - **Risk:** if a position provider was present and later becomes absent, the legacy

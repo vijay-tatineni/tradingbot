@@ -14,6 +14,9 @@ from bot.universe.db import current_version, migrate
 EXPECTED_TABLES = {
     "canonical_instruments", "gateway_map_ibkr", "gateway_map_ig",
     "candidate_sources", "universe_state", "universe_state_history",
+    # ── v5 (R2A-1: canonical identity + verified broker mappings) ──
+    "instrument_identity", "instrument_listing", "ibkr_mapping", "ig_mapping",
+    "identity_audit",
 }
 
 
@@ -26,8 +29,9 @@ def _tables(db):
 
 # Current schema head: v2 (R1: session-based cooldown, durable exit markers, append-only
 # history triggers) + v3 (R1.1: authoritative-continuity fields + reconciliation block)
-# + v4 (R2A-0 / P3-R1-A: discriminator-qualified close-event key).
-HEAD_VERSION = 4
+# + v4 (R2A-0 / P3-R1-A: discriminator-qualified close-event key)
+# + v5 (R2A-1 / P3-6 / P3-7: canonical identity + listings + verified broker mappings).
+HEAD_VERSION = 5
 
 
 def test_migrate_creates_all_tables(tmp_path):

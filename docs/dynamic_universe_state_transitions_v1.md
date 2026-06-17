@@ -222,3 +222,29 @@ Every transition records reason codes (e.g. `hard_disabled`, `insufficient_histo
 `corp_action_data_unavailable`, `position_status_unknown`, `slot_cap_reached`,
 `sector_cap_reached`, `portfolio_heat_exceeded`, `eligible`, `passed_entry_hysteresis`)
 into `universe_state.reason_codes` and the append-only `universe_state_history`.
+
+## R2A-1 pre-entry identity / mapping gate reason codes (P3-6 / P3-7)
+
+The default-off `enforce_verified_identity` gate adds deterministic, FAIL-CLOSED pre-entry
+checks (identity verified? active listing verified? IBKR mapping `VERIFIED_REFERENCE_MATCH`
+and fresh?). A failing gate folds its blocking reason code(s) into structural eligibility so
+the instrument cannot advance to `ENTRY_ELIGIBLE`. The gate **only blocks NEW entry** — it
+never forces liquidation, never alters an existing position, and never calls a broker; the
+`HARD_DISABLED` → `POSITION_RECONCILIATION` → `POSITION_STATUS_UNKNOWN` position-safety
+precedence still dominates the gate.
+
+Reason codes (all in `BLOCKING_REASONS`):
+
+| code | meaning |
+|------|---------|
+| `identity_unverified` | no verified ISIN/FIGI anchor / unresolved canonical row |
+| `identity_ambiguous` | provider returned an ambiguous/unclear match |
+| `identity_conflict` | asserted anchor conflicts with stored identity (never merged) |
+| `listing_unverified` | no active verified venue/currency listing |
+| `ibkr_mapping_unverified` | mapping status `UNVERIFIED` / missing |
+| `ibkr_mapping_not_reference_verified` | status `VERIFIED_CONFIGURED` (not reference-matched) |
+| `ibkr_mapping_stale` | reverify deadline passed, future `verified_at`, or no freshness window |
+| `ibkr_mapping_rejected` | status `REJECTED` |
+| `ibkr_mapping_ambiguous` | status `AMBIGUOUS` |
+| `ibkr_mapping_mismatch` | missing conId, or currency/MIC/exchange disagree with the listing |
+| `ig_order_routing_blocked` | IG routing is unconditionally blocked in this tranche |

@@ -121,6 +121,43 @@ class StubPositionProvider:
         return self.statuses.get(canonical_instrument_id, self._default)
 
 
+def iref(display_symbol="AAPL", isin="US0378331005", figi="BBG000B9XRY4", mic="XNAS",
+         currency="USD", conid="265598", epic=None, name="Apple Inc",
+         effective="2026-06-10", verified="2026-06-10T12:00:00", exchange="XNAS",
+         status="VERIFIED", price_unit=None):
+    """Build an IdentityReference for tests (broker-free; a fixture, not a provider call)."""
+    from datetime import date, datetime
+
+    from bot.universe.identity import IdentityReference, IdentityReferenceStatus
+    return IdentityReference(
+        status=IdentityReferenceStatus(status),
+        instrument_uid=None, listing_uid=None,
+        isin=isin, figi=figi, mic=mic, currency=currency, display_symbol=display_symbol,
+        source="secmaster_fixture",
+        effective_date=date.fromisoformat(effective),
+        verified_at=datetime.fromisoformat(verified),
+        ibkr_conid=conid, ig_epic=epic, instrument_name=name,
+        price_unit=price_unit, exchange=exchange)
+
+
+class StubIdentityProvider:
+    """Broker-free, INJECTED IdentityReferenceProvider stub (tests / rehearsal only).
+
+    Maps (display_symbol, mic, currency) -> IdentityReference, or raises a configured
+    exception, to exercise the resolver's fail-closed behaviour. Never imports/calls a
+    broker or data provider; the references are hard-coded fixtures."""
+    def __init__(self, by_coords=None, raises=None):
+        self.by_coords = dict(by_coords or {})
+        self.raises = raises
+        self.calls = []
+
+    def resolve(self, *, display_symbol, mic, currency, as_of):
+        self.calls.append((display_symbol, mic, currency, str(as_of)))
+        if self.raises is not None:
+            raise self.raises
+        return self.by_coords.get((display_symbol, mic, currency))
+
+
 def flat():
     """A fresh authoritative position provider reporting NO_POSITION for everything.
 
