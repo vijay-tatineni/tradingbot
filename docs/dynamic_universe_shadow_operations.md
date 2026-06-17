@@ -153,3 +153,22 @@ holds only research/shadow state — it is never the source of live execution st
 Historical validation of the shadow universe remains **BLOCKED** pending approved
 provider access — see `docs/dynamic_universe_provider_status.md`. The verdict
 `TRIAL ACCESS REQUIRED BEFORE DECISION` stands; no EODHD call or ingestion is performed.
+
+## R2A-1 canonical identity & verified broker mappings (P3-6 / P3-7) — default-off
+
+Identity resolution is an OFFLINE, controlled operation — NOT part of the per-cycle evaluator.
+An operator/tool resolves a verified reference (from a broker-free security-master provider
+implementing `IdentityReferenceProvider`) and persists it via
+`IdentityStore.resolve_identity_atomic(reference, trading_date, resolver_version,
+canonical_instrument_id=...)`. This is the ONLY way an opaque `instrument_uid`/`listing_uid`
+is created. The evaluator never calls a reference provider; it only READS persisted identity
+through the pre-entry gate, and only when `enforce_verified_identity=True`.
+
+Operational invariants in this tranche:
+* IG `order_routing_blocked` is frozen `1`; IG routing is never eligible; no IG broker call.
+* No IBKR/IG/EODHD call is made by the identity layer (broker-free; structurally asserted by
+  `tests/universe/test_r2a1_isolation.py`).
+* The feature stays disabled (`enable_dynamic_universe_shadow=False`) and the gate stays
+  default-off; un-wired into `main.py`/`api_server.py`.
+* A verified mapping must be re-verified within 90 calendar days (`reverify_after_date`); an
+  expired mapping is treated as `STALE` and blocks entry until re-resolved.

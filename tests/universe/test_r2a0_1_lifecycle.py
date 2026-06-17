@@ -217,7 +217,7 @@ def _build_v3_with_row(tmp_path, row_sql_cols, row_values):
                          f"VALUES ({','.join('?' for _ in row_values)})", row_values)
         dbmod.MIGRATIONS = orig
         migrate(db)                                            # → v4 + fail-closed back-fill
-        assert current_version(db) == 4
+        assert current_version(db) == 5
     finally:
         dbmod.MIGRATIONS = orig
     return db

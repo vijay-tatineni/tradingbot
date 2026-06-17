@@ -193,3 +193,56 @@ Enforced by the unique index `ux_history_idem` on
 `(canonical_instrument_id, trading_date, evaluator_version)`. The evaluator skips any
 instrument already having a history row for the `(instrument, trading_date, evaluator
 version)` triple — so a same-day rerun or a restart re-run performs no duplicate work.
+
+## Schema v5 — Canonical identity & verified broker mappings (R2A-1 / P3-6 / P3-7)
+
+Additive, forward-only (v1–v4 DDL unchanged). Introduces the four-concept canonical model on
+top of the legacy `canonical_instruments` row. Opaque ids are created ONLY by the controlled
+resolver (`bot.universe.identity_store`) and are derived from the VERIFIED ANCHOR
+(ISIN preferred, FIGI fallback) — never from the ticker.
+
+**`instrument_identity`** — the opaque economic-instrument record.
+`instrument_uid` (PK), `display_symbol`, `instrument_name`, `isin`, `figi`,
+`identity_status` (`VERIFIED`/`UNVERIFIED`/`AMBIGUOUS`), `identity_source`,
+`identity_verified_at`, `identity_effective_date`, `created_at`, `updated_at`.
+
+**`instrument_listing`** — one venue/currency listing of an instrument. A listing migration
+appends a NEW `listing_uid` and sets the old row's `valid_to`/`listing_status` (the historical
+row is RETAINED, never overwritten).
+`listing_uid` (PK), `instrument_uid` (FK), `display_symbol`, `mic`, `exchange`, `currency`,
+`price_unit`, `valid_from`, `valid_to`, `listing_status` (`ACTIVE`/`MIGRATED`/`DELISTED`),
+`created_at`, `updated_at`.
+
+**`ibkr_mapping`** — IBKR `conId` is a VERIFIED MAPPING ATTRIBUTE, never identity. Only
+`verification_status='VERIFIED_REFERENCE_MATCH'` (fresh + field-consistent with the listing)
+passes the gate.
+PK `(instrument_uid, listing_uid)`; `conid`, `exchange`, `currency`, `verification_status`,
+`verification_method`, `verified_at`, `reverify_after_date` (default reverify interval 90
+calendar days), `source_reference`, `mapping_version`, `created_at`, `updated_at`.
+
+**`ig_mapping`** — epic persisted for shadow/reference analysis ONLY; `order_routing_blocked`
+is FROZEN `1` regardless of state. No IG routing is ever made eligible.
+PK `(instrument_uid, listing_uid)`; `epic`, `verification_status`, `verified_at`,
+`reverify_after_date`, `order_routing_blocked`, `created_at`, `updated_at`.
+
+**`identity_audit`** — append-only (UPDATE/DELETE rejected by triggers
+`trg_identity_audit_no_update`/`_no_delete`). Immutable, NON-SENSITIVE record of every
+identity resolution, listing create/rename/migration, and mapping verification (never
+credentials/tokens/account ids/raw broker responses). Columns: `id` (PK), `instrument_uid`,
+`listing_uid`, `event_type`, `isin`, `figi`, `mic`, `currency`, `display_symbol`,
+`identity_source`, `effective_date`, `resolver_version`, `detail` (JSON), `created_at`.
+
+**Legacy link.** `canonical_instruments` gains additive `instrument_uid` (NULL until resolved
+— never ticker-derived) and `identity_status` (`DEFAULT 'UNVERIFIED'`). Every existing v4 row
+is therefore UNVERIFIED with a NULL `instrument_uid` on upgrade: no backfill, no auto-merge,
+fail-closed.
+
+**Atomic resolution.** `resolve_identity_atomic(reference, trading_date, resolver_version)`
+runs `BEGIN IMMEDIATE` → validate existing identity/listing (conflict → `IdentityConflictError`)
+→ persist identity → listing → broker mappings → append audit → `COMMIT` (ROLLBACK + re-raise
+on error). Identical replay is an idempotent no-op (anchor-derived uids); a conflicting anchor
+for the same opaque key raises `IdentityConflictError` and writes nothing.
+
+**Default-off.** The pre-entry gate (`IdentityStore.entry_identity_gate`) is wired into the
+evaluator behind `enforce_verified_identity` (default **False**) and the whole package stays
+gated by `enable_dynamic_universe_shadow` (default false). Un-wired into main.py/api_server.py.

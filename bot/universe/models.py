@@ -201,6 +201,22 @@ class Reason:
     # condition that requires authoritative reconciliation. Blocks new entry; never forces
     # liquidation; cleared only by an authoritative POSITION_OPEN or an evidence-bearing close.
     POSITION_RECONCILIATION_REQUIRED = "position_reconciliation_required"
+    # ── R2A-1 (P3-6 canonical identity / P3-7 verified broker mappings) ──
+    # Deterministic pre-entry gate reason codes. All FAIL CLOSED: a missing/unverified
+    # identity, listing, or IBKR reference-match blocks NEW entry only — it never forces
+    # liquidation, never alters an existing position, and never calls a broker. IG routing
+    # is blocked unconditionally in this tranche.
+    IDENTITY_UNVERIFIED = "identity_unverified"            # no verified ISIN/FIGI anchor
+    IDENTITY_AMBIGUOUS = "identity_ambiguous"              # provider returned >1 / unclear match
+    IDENTITY_CONFLICT = "identity_conflict"                # asserted anchor conflicts w/ stored
+    LISTING_UNVERIFIED = "listing_unverified"             # no active verified venue listing
+    IBKR_MAPPING_UNVERIFIED = "ibkr_mapping_unverified"
+    IBKR_MAPPING_NOT_REFERENCE_VERIFIED = "ibkr_mapping_not_reference_verified"  # VERIFIED_CONFIGURED
+    IBKR_MAPPING_STALE = "ibkr_mapping_stale"             # reverify expired / verified_at future
+    IBKR_MAPPING_REJECTED = "ibkr_mapping_rejected"
+    IBKR_MAPPING_AMBIGUOUS = "ibkr_mapping_ambiguous"
+    IBKR_MAPPING_MISMATCH = "ibkr_mapping_mismatch"        # conId/MIC/currency/listing disagree
+    IG_ORDER_ROUTING_BLOCKED = "ig_order_routing_blocked"
     # contention / routing (hypothetical)
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"
@@ -235,6 +251,18 @@ BLOCKING_REASONS = frozenset({
     Reason.GBX_GBP_UNIT_AMBIGUOUS,
     Reason.NORMALIZED_PRICE_INVALID,
     Reason.NORMALIZED_ADV20_INVALID,
+    # ── R2A-1 canonical-identity / verified-broker-mapping gate (all fail closed) ──
+    Reason.IDENTITY_UNVERIFIED,
+    Reason.IDENTITY_AMBIGUOUS,
+    Reason.IDENTITY_CONFLICT,
+    Reason.LISTING_UNVERIFIED,
+    Reason.IBKR_MAPPING_UNVERIFIED,
+    Reason.IBKR_MAPPING_NOT_REFERENCE_VERIFIED,
+    Reason.IBKR_MAPPING_STALE,
+    Reason.IBKR_MAPPING_REJECTED,
+    Reason.IBKR_MAPPING_AMBIGUOUS,
+    Reason.IBKR_MAPPING_MISMATCH,
+    Reason.IG_ORDER_ROUTING_BLOCKED,
 })
 
 

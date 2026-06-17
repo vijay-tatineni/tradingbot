@@ -306,4 +306,171 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v5: Pre-Enable R2A-1 (P3-6 canonical identity, P3-7 verified broker mappings).
+        #        Strictly ADDITIVE / forward-only — v1–v4 DDL is NOT edited. Introduces the
+        #        four-concept canonical model on TOP of the legacy canonical_instruments row:
+        #
+        #          instrument_uid  — opaque, immutable, NEVER ticker-derived; the economic
+        #                            security. Survives ticker renames, broker remaps, listing
+        #                            migrations. Created ONLY by the controlled identity-
+        #                            resolution store API (bot.universe.identity_store), never
+        #                            by this migration and never inferred from a symbol.
+        #          listing_uid     — opaque, immutable; one venue/currency listing. A listing
+        #                            migration creates a NEW listing_uid and never rewrites the
+        #                            historical listing row.
+        #          broker mapping  — IBKR conId / IG epic are VERIFIED MAPPING ATTRIBUTES only,
+        #                            never identity. Only VERIFIED_REFERENCE_MATCH passes shadow
+        #                            eligibility; every other state fails closed.
+        #          display_symbol  — human ticker; auditable but never an identity anchor.
+        #
+        #        Existing v4 canonical rows are marked identity UNVERIFIED with a NULL
+        #        instrument_uid: NO instrument_uid is fabricated, NO ticker-based backfill is
+        #        performed, NO rows are auto-merged on matching symbols. Entry stays blocked
+        #        (fail-closed) until provider-backed resolution succeeds. The migration is
+        #        additive, atomic (single BEGIN IMMEDIATE in db.migrate), idempotent, and
+        #        fail-closed. The feature remains default-off and un-wired.
+        5,
+        [
+            # ── instrument_identity: the opaque economic-instrument record ──────
+            # instrument_uid is an opaque token derived from the VERIFIED external anchor
+            # (ISIN preferred, FIGI fallback) by the resolver — never from the ticker.
+            """
+            CREATE TABLE IF NOT EXISTS instrument_identity (
+                instrument_uid           TEXT PRIMARY KEY,
+                display_symbol           TEXT,
+                instrument_name          TEXT,
+                isin                     TEXT,
+                figi                     TEXT,
+                identity_status          TEXT NOT NULL DEFAULT 'UNVERIFIED',
+                identity_source          TEXT,
+                identity_verified_at     TEXT,
+                identity_effective_date  TEXT,
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL
+            )
+            """,
+            # ── instrument_listing: one venue/currency listing of an instrument ──
+            # A listing migration appends a NEW listing_uid and sets the old row's valid_to /
+            # listing_status — the historical listing row is RETAINED, never overwritten.
+            """
+            CREATE TABLE IF NOT EXISTS instrument_listing (
+                listing_uid              TEXT PRIMARY KEY,
+                instrument_uid           TEXT NOT NULL
+                    REFERENCES instrument_identity(instrument_uid),
+                display_symbol           TEXT,
+                mic                      TEXT,
+                exchange                 TEXT,
+                currency                 TEXT,
+                price_unit               TEXT,
+                valid_from               TEXT,
+                valid_to                 TEXT,
+                listing_status           TEXT NOT NULL DEFAULT 'ACTIVE',
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL
+            )
+            """,
+            # ── ibkr_mapping: conId is a verified MAPPING ATTRIBUTE, never identity ──
+            # Only verification_status='VERIFIED_REFERENCE_MATCH' (and fresh, and field-
+            # consistent with the verified listing) passes; all else fails closed.
+            """
+            CREATE TABLE IF NOT EXISTS ibkr_mapping (
+                instrument_uid           TEXT NOT NULL
+                    REFERENCES instrument_identity(instrument_uid),
+                listing_uid              TEXT NOT NULL
+                    REFERENCES instrument_listing(listing_uid),
+                conid                    TEXT,
+                exchange                 TEXT,
+                currency                 TEXT,
+                verification_status      TEXT NOT NULL DEFAULT 'UNVERIFIED',
+                verification_method      TEXT,
+                verified_at              TEXT,
+                reverify_after_date      TEXT,
+                source_reference         TEXT,
+                mapping_version          TEXT,
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL,
+                PRIMARY KEY (instrument_uid, listing_uid)
+            )
+            """,
+            # ── ig_mapping: epic persisted for shadow/reference analysis ONLY ──
+            # order_routing_blocked is FROZEN true in this tranche regardless of state; IG
+            # routing is never made eligible. No IG broker call is ever made.
+            """
+            CREATE TABLE IF NOT EXISTS ig_mapping (
+                instrument_uid           TEXT NOT NULL
+                    REFERENCES instrument_identity(instrument_uid),
+                listing_uid              TEXT NOT NULL
+                    REFERENCES instrument_listing(listing_uid),
+                epic                     TEXT,
+                verification_status      TEXT NOT NULL DEFAULT 'UNVERIFIED',
+                verified_at              TEXT,
+                reverify_after_date      TEXT,
+                order_routing_blocked    INTEGER NOT NULL DEFAULT 1,
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL,
+                PRIMARY KEY (instrument_uid, listing_uid)
+            )
+            """,
+            # ── identity_audit: append-only verification/resolution history ──────
+            # Immutable record of every identity resolution, listing create/rename/migration,
+            # and mapping verification. Non-sensitive only (never credentials/tokens/account
+            # ids/raw broker responses). UPDATE/DELETE are physically rejected by triggers.
+            """
+            CREATE TABLE IF NOT EXISTS identity_audit (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                instrument_uid           TEXT,
+                listing_uid              TEXT,
+                event_type               TEXT NOT NULL,
+                isin                     TEXT,
+                figi                     TEXT,
+                mic                      TEXT,
+                currency                 TEXT,
+                display_symbol           TEXT,
+                identity_source          TEXT,
+                effective_date           TEXT,
+                resolver_version         TEXT,
+                detail                   TEXT,
+                created_at               TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_identity_audit_no_update
+            BEFORE UPDATE ON identity_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'identity_audit is append-only');
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_identity_audit_no_delete
+            BEFORE DELETE ON identity_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'identity_audit is append-only');
+            END
+            """,
+            # Coordinate lookup (collision / continuity reasoning): find the listing(s) for a
+            # (mic, currency, display_symbol) tuple and their lifecycle status.
+            """
+            CREATE INDEX IF NOT EXISTS ix_listing_coords
+            ON instrument_listing (mic, currency, display_symbol, listing_status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_listing_instrument
+            ON instrument_listing (instrument_uid)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_identity_isin ON instrument_identity (isin)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_identity_figi ON instrument_identity (figi)
+            """,
+            # ── link the legacy canonical row to the new identity model (additive) ──
+            # NULL instrument_uid + UNVERIFIED status for every existing v4 row: fail-closed,
+            # no ticker-derived backfill, no auto-merge. The resolver later writes a real
+            # instrument_uid (and flips identity_status) for rows it provider-verifies.
+            "ALTER TABLE canonical_instruments ADD COLUMN instrument_uid TEXT",
+            "ALTER TABLE canonical_instruments ADD COLUMN identity_status TEXT "
+            "NOT NULL DEFAULT 'UNVERIFIED'",
+        ],
+    ),
 ]
