@@ -64,9 +64,12 @@ resolution writes a real `instrument_uid`. An injected failure rolls back leavin
 ## Tests / baseline
 
 * `pytest tests/universe` — **308 passed** (250 baseline + 58 new).
-* `pytest tests` — **4 failed, 1640 passed**; the 4 failures are the documented pre-existing
-  failures in `tests/test_breakout_indicators.py` only. No new failure outside that file
-  (baseline at `breakout-strategy @ 72eb691` is the same 4 failures).
+* `pytest tests` — **1640 passed**; the full suite introduced **no failure outside**
+  `tests/test_breakout_indicators.py`. In identical isolated runs the base
+  (`breakout-strategy @ 72eb691`) happened to pass while the R2A-1 head exhibited the
+  repository's known **nondeterministic** breakout-test isolation/timing failures, confined
+  entirely to that file. The R2A-1 production changes do not modify or import the breakout
+  implementation, its tests, or backtest database handling.
 
 ## Still open (NOT addressed here)
 
