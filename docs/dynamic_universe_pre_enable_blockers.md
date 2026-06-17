@@ -103,7 +103,7 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-1 | advisory (doc only) | three docs outside declared naming scope | acknowledged |
 | P3-2 | mandatory | `cooldown_until` stores a session count, not a date | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1) |
 | P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
-| P3-4 | mandatory | candidate-source table not consumed in selection | OPEN (R2) |
+| P3-4 | mandatory | candidate-source table not consumed in selection | IMPLEMENTED — awaiting independent review (R2B) |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
 | P3-6 | mandatory | canonical-ID collision risk | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | IMPLEMENTED — awaiting independent review (R2A-1) |
@@ -345,7 +345,26 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   runtime source.
 - **Required test:** selection consumes only active AUTO/TTI/MANUAL candidates; expired /
   inactive candidates are excluded; dedup + source-merge + resubmission behave as specified.
-- **Owner/Status:** universe owner — **OPEN**.
+- **Resolution (R2B) — IMPLEMENTED, awaiting independent review:** schema **v6** adds a
+  dedicated `candidates` table (keyed by the R2A-1 verified `instrument_uid` + `listing_uid`,
+  never a ticker) plus an append-only `candidate_audit`. The new `bot.universe.candidate_store`
+  is the ONLY selection source: the evaluator consumes candidates exclusively via
+  `effective_candidates(trading_date)`. Frozen precedence MANUAL>TTI>AUTO (suppressed
+  candidates retained/auditable; an ACTIVE higher-precedence candidate that fails
+  identity/listing validation blocks with `candidate_source_conflict` — no silent
+  fall-through). Frozen TTL: MANUAL/TTI = 5 completed sessions (read-then-count; effective
+  E..E+4, expired E+5; idempotent per date), AUTO per-session/per-batch (atomic replacement).
+  Resubmission supersedes (old row retained, `superseded_by_candidate_id` set); identical
+  replay is a no-op; divergent replay raises `CandidateConflictError`. Identity-unresolved /
+  ambiguous / unverified candidates are REJECTED (auditable, fail-closed). Candidate presence
+  is necessary but NOT sufficient — all existing gates still apply, candidate expiry affects
+  NEW entries only, open positions keep being managed. Wired behind a **default-off**
+  `require_candidate_source` evaluator switch; feature stays disabled and un-wired. Legacy v1
+  `candidate_sources` rows (no verified identity) are never R2B-effective.
+- **Tests:** `tests/universe/test_r2b_{candidates,ttl,auto_batch,migration,selection}.py`.
+- **Owner/Status:** universe owner — **IMPLEMENTED — awaiting independent review (R2B)**.
+  R2C blockers remain OPEN: P3-5 (inherited/open-book portfolio heat), BLOCKER-S
+  (FX-normalized sizing).
 
 ### P3-5 — Portfolio heat ignores inherited/open-book exposure (mandatory)
 - **Risk:** the heat cap is not a true aggregate; with real inherited positions, new

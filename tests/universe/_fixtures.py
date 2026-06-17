@@ -158,6 +158,19 @@ class StubIdentityProvider:
         return self.by_coords.get((display_symbol, mic, currency))
 
 
+def resolve_instrument(db, symbol="AAPL", isin="US0378331005", figi=None, mic="XNAS",
+                       currency="USD", conid="265598", trading_date="2026-06-12",
+                       canonical_instrument_id=None):
+    """Resolve + persist a VERIFIED identity/listing (+ IBKR mapping) for a test instrument.
+    Returns the resolve result dict ({instrument_uid, listing_uid, ...})."""
+    from bot.universe.identity_store import IdentityStore
+    st = IdentityStore(db)
+    return st.resolve_identity_atomic(
+        iref(symbol, isin=isin, figi=figi, mic=mic, currency=currency, conid=conid,
+             exchange=mic, effective="2026-06-10", verified="2026-06-10T12:00:00"),
+        trading_date, "r2b_resolver_v1", canonical_instrument_id=canonical_instrument_id)
+
+
 def flat():
     """A fresh authoritative position provider reporting NO_POSITION for everything.
 

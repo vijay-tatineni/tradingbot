@@ -248,3 +248,26 @@ Reason codes (all in `BLOCKING_REASONS`):
 | `ibkr_mapping_ambiguous` | status `AMBIGUOUS` |
 | `ibkr_mapping_mismatch` | missing conId, or currency/MIC/exchange disagree with the listing |
 | `ig_order_routing_blocked` | IG routing is unconditionally blocked in this tranche |
+
+## R2B persisted candidate-source selection gate (P3-4)
+
+The default-off `require_candidate_source` gate restricts NEW-entry contention: an
+ENTRY_ELIGIBLE instrument with an entry signal is offered for selection ONLY if it has an
+effective candidate in the persisted store (`effective_candidates`, keyed by verified
+`instrument_uid`). Raw AUTO/TTI/MANUAL source output cannot bypass the store. The gate blocks
+NEW entries only — it never forces liquidation, never alters an existing position, and never
+calls a broker; open-position management is unaffected by candidate expiry/absence. Candidate
+presence is necessary but NOT sufficient (identity/mapping/eligibility/cooldown/reconciliation
+/contention gates all still apply). Fail-closed reason codes (all in `BLOCKING_REASONS`):
+
+| code | meaning |
+|------|---------|
+| `candidate_store_unavailable` | candidate store missing / DB error |
+| `candidate_identity_unresolved` | ticker-only / no verified instrument_uid |
+| `candidate_listing_unverified` | listing_uid unknown / not active / wrong instrument |
+| `candidate_listing_ambiguous` | instrument has >1 active listing, none chosen |
+| `candidate_source_conflict` | ACTIVE higher-precedence candidate fails validation (no fall-through) |
+| `candidate_expired` | TTL exhausted / stale AUTO session |
+| `candidate_inactive` | superseded / deactivated / no effective candidate |
+| `candidate_malformed` | unknown source / status / invalid TTL state |
+| `suppressed_by_higher_precedence_source` | lower-precedence candidate suppressed (audit) |

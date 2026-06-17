@@ -105,7 +105,9 @@ class ShadowEvaluator:
                  position_provider=None,
                  fx_provider=None,
                  enforce_verified_identity: bool = False,
-                 identity_store=None):
+                 identity_store=None,
+                 require_candidate_source: bool = False,
+                 candidate_store=None):
         from bot.universe import EVALUATOR_VERSION
         self.registry = registry
         self.bars_provider = bars_provider   # callable(canonical_rec)->dict|None ; NO broker
@@ -132,12 +134,29 @@ class ShadowEvaluator:
         # The gate reads ONLY universe.db via an IdentityStore on the SAME db_path.
         self.enforce_verified_identity = bool(enforce_verified_identity)
         self._identity_store = identity_store
+        # ── R2B persisted candidate-source selection gate (P3-4) ──
+        # DEFAULT-OFF: when False the evaluator selects exactly as before. When True, NEW-entry
+        # selection consumes candidates ONLY through the persisted effective-candidate store
+        # (CandidateStore.effective_candidates); an instrument with no effective candidate is
+        # excluded from contention (a fail-closed reason is recorded). Candidate presence is
+        # necessary but NOT sufficient — all other gates still apply. The gate affects NEW
+        # entries only: existing open-position management is unchanged, and it never forces
+        # liquidation or calls a broker. Reads ONLY universe.db via a CandidateStore on the
+        # SAME db_path.
+        self.require_candidate_source = bool(require_candidate_source)
+        self._candidate_store = candidate_store
 
     def _identity_gate_store(self):
         if self._identity_store is None:
             from bot.universe.identity_store import IdentityStore
             self._identity_store = IdentityStore(self.registry.db_path)
         return self._identity_store
+
+    def _candidate_gate_store(self):
+        if self._candidate_store is None:
+            from bot.universe.candidate_store import CandidateStore
+            self._candidate_store = CandidateStore(self.registry.db_path)
+        return self._candidate_store
 
     def is_enabled(self) -> bool:
         try:
@@ -164,7 +183,16 @@ class ShadowEvaluator:
                 continue
             outcomes.append(self._evaluate_one(rec, trading_date))
 
-        contention = self._apply_contention(outcomes)
+        # ── R2B: NEW-entry selection consumes the persisted effective-candidate store ONLY ──
+        # Read effective candidates FIRST (selection on current TTL), then count the completed
+        # session (read-then-count TTL). Default-off → effective_selection is None and
+        # contention behaves exactly as before.
+        effective_selection = None
+        if self.require_candidate_source:
+            effective_selection = self._candidate_gate_store().effective_candidates(trading_date)
+        contention = self._apply_contention(outcomes, effective_selection)
+        if self.require_candidate_source:
+            self._candidate_gate_store().tick_ttl_atomic(trading_date)
         logger.info("dynamic-universe shadow run %s: evaluated=%d expired_candidates=%d "
                     "selected=%d", trading_date,
                     sum(1 for o in outcomes if "skipped" not in o), expired,
@@ -395,6 +423,7 @@ class ShadowEvaluator:
 
         return {
             "canonical_instrument_id": cid,
+            "instrument_uid": rec.get("instrument_uid"),
             "new_state": outcome.new_state.value,
             "prior_state": prior_state,
             "reason_codes": outcome.reason_codes,
@@ -685,17 +714,38 @@ class ShadowEvaluator:
         }
 
     # ── hypothetical slot / sector / heat contention ──────────────────
-    def _apply_contention(self, outcomes: list) -> dict:
+    def _apply_contention(self, outcomes: list, effective_selection=None) -> dict:
         live = [o for o in outcomes if "skipped" not in o]
         # POSITION_RECONCILIATION conservatively counts as occupying a slot/sector: the
         # position MAY exist (ownership unresolved), so reserving its slot avoids
         # over-allocating new hypothetical entries. This preserves the pre-R1.2 behaviour
         # where the (overloaded) EXIT_ONLY uncertainty case reserved a slot (P2-C).
+        # NOTE: open-position states are derived from the per-instrument transition and are
+        # UNAFFECTED by candidate gating — candidate expiry/absence changes NEW-entry
+        # eligibility only; existing positions keep their slot and continue to be managed.
         open_now = [o for o in live if o["new_state"] in
                     (State.POSITION_OPEN.value, State.EXIT_ONLY.value,
                      State.POSITION_RECONCILIATION.value)]
         candidates = [o for o in live
                       if o["new_state"] == State.ENTRY_ELIGIBLE.value and o["entry_signal"]]
+        # ── R2B: gate NEW-entry candidates on the persisted effective-candidate store ──
+        # Candidate presence is necessary but NOT sufficient: an ENTRY_ELIGIBLE instrument with
+        # an entry signal is offered to contention ONLY if it has an effective candidate (keyed
+        # by its verified instrument_uid). Raw source output cannot bypass this store. An
+        # instrument blocked by the candidate gate is recorded with its fail-closed reason.
+        if effective_selection is not None:
+            gated, blocked_by_candidate = [], []
+            eff, blk = effective_selection.effective, effective_selection.blocked
+            for o in candidates:
+                iuid = o.get("instrument_uid")
+                if iuid and iuid in eff:
+                    gated.append(o)
+                else:
+                    reason = blk.get(iuid, Reason.CANDIDATE_INACTIVE)
+                    blocked_by_candidate.append({**o, "rejected_reason": reason})
+            candidates = gated
+        else:
+            blocked_by_candidate = []
         candidates.sort(key=params.candidate_sort_key)
 
         slots = params.MAX_OPEN_POSITIONS - len(open_now)
@@ -728,7 +778,7 @@ class ShadowEvaluator:
             selected.append({**c, "slot_rank": len(selected) + 1,
                              "hypothetical_order": order.__dict__})
 
-        return {"selected": selected, "rejected": rejected}
+        return {"selected": selected, "rejected": rejected + blocked_by_candidate}
 
     def _log_shadow_outputs(self, trading_date: str, contention: dict) -> None:
         """§9: store/log the hypothetical contention outputs (never PF/returns)."""

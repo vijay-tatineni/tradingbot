@@ -246,3 +246,45 @@ for the same opaque key raises `IdentityConflictError` and writes nothing.
 **Default-off.** The pre-entry gate (`IdentityStore.entry_identity_gate`) is wired into the
 evaluator behind `enforce_verified_identity` (default **False**) and the whole package stays
 gated by `enable_dynamic_universe_shadow` (default false). Un-wired into main.py/api_server.py.
+
+## Schema v6 — Persisted candidate-source integration (R2B / P3-4)
+
+Additive, forward-only (v1–v5 DDL unchanged). A dedicated `candidates` table keyed by the
+R2A-1 canonical identity (verified `instrument_uid` + `listing_uid`, NEVER a ticker), plus an
+append-only `candidate_audit`. The legacy v1 `candidate_sources` table is untouched; its rows
+carry no verified identity and are NEVER R2B-effective (identity is never inferred from a
+ticker). Only NON-SENSITIVE metadata + a deterministic `source_payload_hash` is stored.
+
+**`candidates`** — `candidate_id` (PK), `submission_key` (idempotency), `source`
+(MANUAL/TTI/AUTO), `source_candidate_key`, `instrument_uid`, `listing_uid`,
+`submitted_trading_date`, `effective_from_trading_date`, `status`
+(ACTIVE/EXPIRED/SUPERSEDED/DEACTIVATED/REJECTED), `ttl_sessions_remaining`,
+`last_counted_trading_date`, `superseded_by_candidate_id`, `deactivated_at`,
+`deactivation_reason`, `source_payload_hash`, `resolver_version`, `generation_trading_date`,
+`generation_batch_id` (AUTO), `created_at`, `updated_at`.
+
+**`candidate_audit`** — append-only (UPDATE/DELETE rejected by triggers
+`trg_candidate_audit_no_update`/`_no_delete`); records SUBMITTED / ACTIVATED / SUPPRESSED /
+SUPERSEDED / EXPIRED / DEACTIVATED / REJECTED / SELECTED_EFFECTIVE events with candidate_id,
+event_type, trading_date, source, instrument_uid, listing_uid, reason_code,
+source_payload_hash, resolver_version, created_at.
+
+**Indexes / uniqueness.** `ux_candidate_active` (partial UNIQUE on
+`(source, source_candidate_key, instrument_uid, listing_uid)` WHERE status='ACTIVE') — at most
+one ACTIVE candidate per coordinate; `ux_candidate_submission` (UNIQUE `submission_key`) —
+idempotency; `ix_candidate_instrument_status`; `ix_candidate_auto_batch`.
+
+**Store / selection.** `bot.universe.candidate_store.CandidateStore` provides
+`submit_candidate_atomic`, `submit_auto_batch_atomic`, `deactivate_candidate_atomic`,
+`tick_ttl_atomic`, `active_candidates`, and `effective_candidates` (the precedence/TTL/identity
+-validated selection input — the ONLY way candidates reach selection). All multi-row writes run
+in one `BEGIN IMMEDIATE` (candidate row(s) + supersession/deactivation + audit COMMIT or ROLL
+BACK together). Wired into the evaluator behind a **default-off** `require_candidate_source`;
+the package stays gated by `enable_dynamic_universe_shadow` (default false) and un-wired into
+main.py/api_server.py.
+
+**TTL (frozen, read-then-count).** The evaluator reads `effective_candidates` FIRST then calls
+`tick_ttl_atomic`. A MANUAL/TTI candidate effective at session E with TTL=5 is EFFECTIVE on
+E..E+4 and EXPIRED from E+5. The tick is idempotent per date (guarded by
+`last_counted_trading_date`): duplicate same-date runs, missing-bar/weekend/non-sessions, and
+pre-session outages never double-count.

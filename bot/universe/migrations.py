@@ -473,4 +473,107 @@ MIGRATIONS = [
             "NOT NULL DEFAULT 'UNVERIFIED'",
         ],
     ),
+    (
+        # ── v6: Pre-Enable R2B (P3-4 persisted candidate-source integration). Strictly
+        #        ADDITIVE / forward-only — v1–v5 DDL is NOT edited. Introduces a dedicated
+        #        `candidates` table keyed by the R2A-1 canonical identity (instrument_uid +
+        #        listing_uid), NOT by ticker, plus an append-only `candidate_audit`.
+        #
+        #        Why a NEW table rather than extending the legacy v1 `candidate_sources`: that
+        #        table requires canonical_instrument_id NOT NULL with an FK to
+        #        canonical_instruments and predates the R2A-1 identity model. R2B candidates
+        #        key on verified instrument_uid/listing_uid, so a new table is the clean,
+        #        additive home and leaves the legacy table (and its tests) untouched. Legacy
+        #        `candidate_sources` rows carry NO verified instrument_uid/listing_uid, so they
+        #        can NEVER be R2B-effective — satisfying the operator rule that existing legacy
+        #        candidate rows must not become active automatically and that identity is never
+        #        inferred from a ticker. (No production universe.db exists; this is additive
+        #        schema only — no production migration runs as part of this change.)
+        #
+        #        Frozen candidate model: precedence MANUAL > TTI > AUTO; at most one ACTIVE
+        #        candidate per (source, source_candidate_key, instrument_uid, listing_uid)
+        #        (unique partial index); resubmission supersedes; TTL counts completed sessions;
+        #        AUTO is per-session/per-batch. Status enum: ACTIVE / EXPIRED / SUPERSEDED /
+        #        DEACTIVATED / REJECTED. Additive, atomic, idempotent, fail-closed.
+        6,
+        [
+            """
+            CREATE TABLE IF NOT EXISTS candidates (
+                candidate_id                 TEXT PRIMARY KEY,
+                submission_key               TEXT,
+                source                       TEXT NOT NULL,
+                source_candidate_key         TEXT,
+                instrument_uid               TEXT,
+                listing_uid                  TEXT,
+                submitted_trading_date       TEXT,
+                effective_from_trading_date  TEXT,
+                status                       TEXT NOT NULL DEFAULT 'REJECTED',
+                ttl_sessions_remaining       INTEGER,
+                last_counted_trading_date    TEXT,
+                superseded_by_candidate_id   TEXT,
+                deactivated_at               TEXT,
+                deactivation_reason          TEXT,
+                source_payload_hash          TEXT,
+                resolver_version             TEXT,
+                generation_trading_date      TEXT,
+                generation_batch_id          TEXT,
+                created_at                   TEXT NOT NULL,
+                updated_at                   TEXT NOT NULL
+            )
+            """,
+            # ── append-only candidate audit (mirrors identity_audit policy) ──
+            """
+            CREATE TABLE IF NOT EXISTS candidate_audit (
+                id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id                 TEXT,
+                event_type                   TEXT NOT NULL,
+                trading_date                 TEXT,
+                source                       TEXT,
+                instrument_uid               TEXT,
+                listing_uid                  TEXT,
+                reason_code                  TEXT,
+                source_payload_hash          TEXT,
+                resolver_version             TEXT,
+                created_at                   TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_candidate_audit_no_update
+            BEFORE UPDATE ON candidate_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'candidate_audit is append-only');
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_candidate_audit_no_delete
+            BEFORE DELETE ON candidate_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'candidate_audit is append-only');
+            END
+            """,
+            # At most ONE ACTIVE candidate per (source, source_candidate_key, instrument_uid,
+            # listing_uid): a resubmission supersedes the prior ACTIVE row before inserting the
+            # new one, so this partial-unique index is the structural backstop against a
+            # duplicate active candidate (the exact double-selection failure mode).
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_candidate_active
+            ON candidates (source, source_candidate_key, instrument_uid, listing_uid)
+            WHERE status='ACTIVE'
+            """,
+            # Idempotency: one row per logical submission (source + key + submitted date).
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_candidate_submission
+            ON candidates (submission_key)
+            WHERE submission_key IS NOT NULL
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_candidate_instrument_status
+            ON candidates (instrument_uid, status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_candidate_auto_batch
+            ON candidates (source, generation_batch_id, status)
+            """,
+        ],
+    ),
 ]

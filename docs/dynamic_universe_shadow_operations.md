@@ -172,3 +172,24 @@ Operational invariants in this tranche:
   default-off; un-wired into `main.py`/`api_server.py`.
 * A verified mapping must be re-verified within 90 calendar days (`reverify_after_date`); an
   expired mapping is treated as `STALE` and blocks entry until re-resolved.
+
+## R2B persisted candidate sources (P3-4) — default-off
+
+Candidates (MANUAL/TTI/AUTO) must be PERSISTED via `CandidateStore` before they can affect
+selection; the evaluator consumes them only through `effective_candidates(trading_date)`.
+Submission is an offline/controlled operation (`submit_candidate_atomic` /
+`submit_auto_batch_atomic`) — the evaluator never generates candidates on the hot path. A
+candidate is usable only with a verified R2A-1 `instrument_uid` + `listing_uid` (never resolved
+from a ticker); unresolved/ambiguous/unverified submissions are persisted REJECTED and audited.
+
+Operational invariants in this tranche:
+* Precedence MANUAL>TTI>AUTO; suppressed candidates are retained/auditable; an ACTIVE
+  higher-precedence candidate that fails validation BLOCKS the instrument
+  (`candidate_source_conflict`) rather than falling through to a lower-precedence listing.
+* MANUAL/TTI TTL = 5 completed sessions (effective E..E+4, expired E+5); AUTO is per-session
+  and atomically replaced per batch. TTL counting is idempotent per date.
+* The candidate gate is **default-off** (`require_candidate_source=False`); the feature stays
+  disabled (`enable_dynamic_universe_shadow=False`) and un-wired into main.py/api_server.py.
+* Broker-free: no IBKR/IG/EODHD call; structurally asserted by
+  `tests/universe/test_r2b_selection.py`. Candidate expiry affects NEW entries only — open
+  positions continue to be managed.

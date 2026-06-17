@@ -217,6 +217,20 @@ class Reason:
     IBKR_MAPPING_AMBIGUOUS = "ibkr_mapping_ambiguous"
     IBKR_MAPPING_MISMATCH = "ibkr_mapping_mismatch"        # conId/MIC/currency/listing disagree
     IG_ORDER_ROUTING_BLOCKED = "ig_order_routing_blocked"
+    # ── R2B (P3-4 persisted candidate-source integration) ──
+    # Selection consumes candidates ONLY via the persisted effective-candidate store. All
+    # fail CLOSED: a missing/unresolved/ambiguous/conflicting/expired candidate blocks NEW
+    # entry only — never forces liquidation, never alters an existing position, never calls a
+    # broker. Candidate presence is necessary but NOT sufficient (all other gates still apply).
+    CANDIDATE_STORE_UNAVAILABLE = "candidate_store_unavailable"
+    CANDIDATE_IDENTITY_UNRESOLVED = "candidate_identity_unresolved"   # ticker-only / no verified uid
+    CANDIDATE_LISTING_UNVERIFIED = "candidate_listing_unverified"
+    CANDIDATE_LISTING_AMBIGUOUS = "candidate_listing_ambiguous"       # >1 active listing, none chosen
+    CANDIDATE_SOURCE_CONFLICT = "candidate_source_conflict"           # active higher-precedence invalid
+    CANDIDATE_EXPIRED = "candidate_expired"
+    CANDIDATE_INACTIVE = "candidate_inactive"                         # superseded / deactivated / none
+    CANDIDATE_MALFORMED = "candidate_malformed"
+    SUPPRESSED_BY_HIGHER_PRECEDENCE_SOURCE = "suppressed_by_higher_precedence_source"
     # contention / routing (hypothetical)
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"
@@ -263,6 +277,15 @@ BLOCKING_REASONS = frozenset({
     Reason.IBKR_MAPPING_AMBIGUOUS,
     Reason.IBKR_MAPPING_MISMATCH,
     Reason.IG_ORDER_ROUTING_BLOCKED,
+    # ── R2B persisted candidate-source gate (all fail closed) ──
+    Reason.CANDIDATE_STORE_UNAVAILABLE,
+    Reason.CANDIDATE_IDENTITY_UNRESOLVED,
+    Reason.CANDIDATE_LISTING_UNVERIFIED,
+    Reason.CANDIDATE_LISTING_AMBIGUOUS,
+    Reason.CANDIDATE_SOURCE_CONFLICT,
+    Reason.CANDIDATE_EXPIRED,
+    Reason.CANDIDATE_INACTIVE,
+    Reason.CANDIDATE_MALFORMED,
 })
 
 
