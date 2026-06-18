@@ -128,14 +128,20 @@ is created or migrated.
 
 ## Test results
 - Focused: `pytest tests/universe` → **415 passed** (was 354 at base; +61 R2C).
-- Full suite: `pytest tests` → **1747 passed, 4 failed**. The 4 failures are confined to
-  `tests/test_breakout_indicators.py` and reproduce identically at base
-  `breakout-strategy @ a971cbf` (R2C touches nothing under `backtest/` or that test file). In
-  this environment they surface as a pandas indexing `TypeError: Cannot index by location index
-  with a non-integer key` (and one order-dependent isolation failure), i.e. the repository's
-  pre-existing breakout-indicators environment/isolation issue — unrelated to R2C. (The accepted
-  register wording phrases this as a `pandas DatabaseError: no such table: ohlcv`; the underlying
-  pre-existing-fixture cause is the same.)
+- Full suite (deterministic order, `-p no:randomly`): `pytest tests` → **1748 passed, 3 failed**.
+  All 3 failures are confined to `tests/test_breakout_indicators.py::test_warmup_date_matches_
+  audit[...]`. Root cause (measured, not inferred): that test does
+  `sqlite3.connect("backtest.db")` (a relative path) and reads an `ohlcv` table. A fresh git
+  worktree does NOT contain the gitignored, locally-populated `backtest.db`, so the read raises
+  `pandas.errors.DatabaseError: ... no such table: ohlcv` — the repository's pre-existing
+  missing-fixture/environment issue (it surfaces in this test as a downstream
+  `TypeError: Cannot index by location index with a non-integer key` on the empty result).
+  Proof it is environmental and unrelated to R2C:
+  (a) R2C's diff touches NOTHING under `backtest/` or `tests/test_breakout_indicators.py`;
+  (b) at base `breakout-strategy @ a971cbf` (which has the populated `backtest.db`) the full
+  suite is **1690 passed, 0 failed** and the breakout file alone is **8 passed**;
+  (c) copying the populated `backtest.db` into the worktree makes the breakout file **8 passed**
+  there too. No new failure occurs OUTSIDE `tests/test_breakout_indicators.py`.
 
 ## Known limitations
 - Within-run heat accumulation across multiple candidates selected in the SAME shadow run is
