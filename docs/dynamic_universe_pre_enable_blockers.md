@@ -44,7 +44,11 @@ pre-existing `tests/test_breakout_indicators.py` isolation issue (identical at b
 
 This is **not** a claim that all pre-enable work is complete. Three P3 residuals
 (**P3-R1-A**, **P3-R1-B**, **P3-R1-C**, below) remain **OPEN — mandatory before runtime
-enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain open. See
+enablement**. The R2 blockers are at differing stages: P3-4 (R2B) and P3-5 / BLOCKER-S
+(R2C) are **implemented and approved for disabled merge**, and P3-6 / P3-7 (R2A-1) are
+implemented and awaiting independent review — but **none are resolved for runtime
+enablement**. Enablement remains blocked until R2C is merged/deployed and the remaining
+pre-enable residuals (the R2B residuals R2B-P3-1..4 and P3-R1-A/B/C) are closed. See
 `docs/dynamic_universe_pre_enable_r1_completion.md`,
 `…_r1_2_completion.md`, and `…_r1_3_completion.md`.
 
@@ -366,8 +370,9 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   frozen-scope review accepted: `R2B_APPROVED_FOR_DISABLED_MERGE` (P0/P1/P2 = 0; P3 = 4).
   Resolved only for merging while the feature remains default-off, un-wired and not migrated in
   production. Runtime enablement remains blocked by the four R2B pre-enable residuals below.
-  R2C blockers remain OPEN: P3-5 (inherited/open-book portfolio heat), BLOCKER-S (FX-normalized
-  sizing).
+  The R2C blockers P3-5 (inherited/open-book portfolio heat) and BLOCKER-S (FX-normalized
+  sizing) are implemented and approved for disabled merge (R2C), but remain NOT resolved for
+  runtime enablement until R2C is merged/deployed and the R2B residuals below are closed.
 - **R2B pre-enable residuals — OPEN — mandatory before runtime enablement:**
   - **R2B-P3-1 — candidate-store error observability:** `candidate_store_unavailable` and
     `candidate_malformed` reason codes exist, but candidate DB/read failures currently propagate
@@ -391,22 +396,6 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
     but the lock is acquired later than the other multi-row lifecycle APIs. Before enablement:
     use explicit `BEGIN IMMEDIATE`; add a TTL-update fault-injection rollback test; verify
     concurrent deactivation/TTL operations fail or serialize safely.
-
-### P3-5 — Portfolio heat ignores inherited/open-book exposure (mandatory)
-- **Risk:** the heat cap is not a true aggregate; with real inherited positions, new
-  selections could be approved that breach total portfolio heat.
-- **Current behavior:** `_apply_contention` seeds `heat_used = 0.0` and accumulates only
-  newly selected candidates' risk; open / `EXIT_ONLY` positions consume a slot but
-  contribute no risk to the heat sum. (Under the frozen `5×0.5%` params the slot cap binds
-  first, so heat is not currently the binding constraint.)
-- **Why the disabled merge is safe:** shadow-only; no real positions; figures are
-  hypothetical.
-- **Required correction before enablement:** receive a position/risk snapshot and seed
-  `heat_used` with existing planned-stop risk for **EXIT_ONLY**, **POSITION_OPEN**, and
-  pending accepted intents where applicable. No existing exposure may be ignored.
-- **Required test:** with an injected open-book risk snapshot, heat binds on the aggregate
-  (inherited + new) and rejects with `portfolio_heat_exceeded` when total exceeds the cap.
-- **Owner/Status:** universe owner — **OPEN**.
 
 ### P3-6 — Canonical-ID collision risk (mandatory)
 - **Risk:** `canonical_id = {US|LSE|EU}_{symbol}` (region from currency) can silently merge
