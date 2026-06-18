@@ -279,6 +279,24 @@ def test_record_selection_audit_requires_non_null_date(tmp_path):
         cs.record_selection_audit(None, cs.effective_candidates(TD))
 
 
+def test_evaluator_gate_on_persists_selected_effective_audit(tmp_path):
+    # End-to-end wiring: a healthy gate-ENABLED evaluator run must persist a SELECTED_EFFECTIVE
+    # audit row for the selected candidate (guards against the call being silently dropped from
+    # maybe_run — every other test would still pass without this assertion).
+    db = _seed_eligible(tmp_path)
+    reg = Registry(db)
+    cid = canonical_id("AAPL", "USD", "NASDAQ")
+    r = resolve_instrument(db, "AAPL", canonical_instrument_id=cid)
+    res = _submit_manual(db, r["instrument_uid"], r["listing_uid"])
+    candidate_id = res["candidate_id"]
+    ev = ShadowEvaluator(reg, SpyProvider({cid: _uptrend()}), ON, equity=100_000,
+                         position_provider=flat(), require_candidate_source=True)
+    ev.maybe_run("2026-06-10")
+    out = ev.maybe_run("2026-06-11")
+    assert cid in [s["canonical_instrument_id"] for s in out["selected"]]   # selected ...
+    assert _audit_count(db, candidate_id, EVENT_SELECTED_EFFECTIVE) >= 1    # ... and audited
+
+
 def test_record_selection_audit_appends_only(tmp_path):
     # The selection-audit path must never UPDATE/DELETE existing audit rows (append-only).
     db, iuid, luid = _setup(tmp_path)
