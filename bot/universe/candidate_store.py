@@ -29,7 +29,7 @@ only completed sessions; a same/earlier date is a no-op).
 import hashlib
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from bot.universe.db import connect, migrate
@@ -40,9 +40,36 @@ from bot.universe.params import CANDIDATE_TTL_SESSIONS
 PRECEDENCE = {"MANUAL": 0, "TTI": 1, "AUTO": 2}
 VALID_SOURCES = frozenset(PRECEDENCE)
 
+# Frozen candidate status enum (the only statuses a well-formed row may hold). Any other
+# status value is a corruption / raw-injection and is treated as malformed (fail-closed).
+VALID_STATUSES = frozenset({"ACTIVE", "EXPIRED", "SUPERSEDED", "DEACTIVATED", "REJECTED"})
+
+# Audit event types. The lifecycle events are emitted by the write APIs; the two SELECTION
+# events (R2B-P3-3) are emitted idempotently by record_selection_audit and are the only event
+# types covered by the v8 partial-unique idempotency index.
+EVENT_SELECTED_EFFECTIVE = "SELECTED_EFFECTIVE"
+EVENT_SUPPRESSED = "SUPPRESSED"
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_int(v) -> bool:
+    """True only for a genuine integer TTL value (never bool, float, str, or None)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _valid_date(v) -> bool:
+    """True if ``v`` is a non-empty ISO date string / date the store can compare. Used to
+    fail closed on a raw/injected row carrying a garbage effective/generation date."""
+    if v is None:
+        return False
+    try:
+        date.fromisoformat(str(v))
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 def _iso(v) -> Optional[str]:
@@ -78,16 +105,22 @@ class CandidateConflictError(Exception):
 @dataclass
 class EffectiveSelection:
     """Result of effective_candidates(): the single effective candidate per instrument_uid,
-    the blocked instruments (with a fail-closed reason), and the suppressed candidate ids."""
+    the blocked instruments (with a fail-closed reason), and the suppressed candidate ids.
+
+    ``store_unavailable`` (R2B-P3-1) is True when the candidate store / database could not be
+    read at all (locked DB, missing table, sqlite read error). It is a fail-closed signal: the
+    caller must block ALL new entries with ``candidate_store_unavailable`` and must NOT mutate
+    TTL — there is no per-instrument selection to trust."""
     effective: dict = field(default_factory=dict)     # instrument_uid -> candidate row
     blocked: dict = field(default_factory=dict)       # instrument_uid -> reason_code
     suppressed: list = field(default_factory=list)    # [candidate_id, ...]
+    store_unavailable: bool = False                   # R2B-P3-1: whole-store read failure
 
 
 class CandidateStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
-        migrate(db_path)   # idempotent; brings the DB to schema v6
+        migrate(db_path)   # idempotent; brings the DB to schema head (v7)
 
     # ── identity verification (inline; uses the R2A-1 identity tables) ──
     @staticmethod
@@ -113,6 +146,36 @@ class CandidateStore:
         if listing[1] != "ACTIVE" or listing[2] is not None:
             return False, Reason.CANDIDATE_LISTING_UNVERIFIED
         return True, None
+
+    @staticmethod
+    def _candidate_row_malformed(row):
+        """Return Reason.CANDIDATE_MALFORMED if an otherwise-ACTIVE candidate row is
+        STRUCTURALLY invalid, else None (R2B-P3-2). Defensive read-path validation for a
+        raw/injected row: the write APIs already reject an unknown source, but a row written
+        directly into the DB can carry an unknown source, a non-ACTIVE/unknown status, a
+        missing identity key, a non-integer TTL, or a garbage effective/generation date.
+        Such a row must FAIL CLOSED as malformed — never be selected and never be silently
+        dropped in a way that lets a lower-precedence candidate fall through (the caller runs
+        this on the highest-precedence candidate per instrument before selecting)."""
+        if row.get("source") not in VALID_SOURCES:
+            return Reason.CANDIDATE_MALFORMED
+        if row.get("status") != "ACTIVE":
+            return Reason.CANDIDATE_MALFORMED
+        if not row.get("instrument_uid") or not row.get("listing_uid"):
+            return Reason.CANDIDATE_MALFORMED
+        # A PRESENT-but-unparseable date or a PRESENT-but-non-integer TTL is corruption. A NULL
+        # value is NOT malformed here: the existing selection logic treats a missing
+        # generation date / TTL as a stale-or-expired (non-effective) candidate, not corruption.
+        ef = row.get("effective_from_trading_date")
+        if ef is not None and not _valid_date(ef):
+            return Reason.CANDIDATE_MALFORMED
+        gd = row.get("generation_trading_date")
+        if gd is not None and not _valid_date(gd):
+            return Reason.CANDIDATE_MALFORMED
+        ttl = row.get("ttl_sessions_remaining")
+        if ttl is not None and not _is_int(ttl):
+            return Reason.CANDIDATE_MALFORMED
+        return None
 
     @staticmethod
     def _audit(conn, candidate_id, event_type, trading_date, source, instrument_uid,
@@ -312,30 +375,71 @@ class CandidateStore:
 
     # ── deactivation ─────────────────────────────────────────────────
     def deactivate_candidate_atomic(self, candidate_id, trading_date,
-                                    reason=Reason.CANDIDATE_INACTIVE) -> None:
+                                    reason=Reason.CANDIDATE_INACTIVE, *, timeout=5.0,
+                                    _fault_hook=None) -> None:
+        """R2B-P3-4: deactivate one candidate atomically. Uses an explicit ``BEGIN IMMEDIATE``
+        (consistent with the other multi-row lifecycle writes) so the status UPDATE and the
+        append-only audit INSERT COMMIT together or ROLL BACK together — a fault between them
+        leaves the row and its audit consistent. ``BEGIN IMMEDIATE`` takes the write lock up
+        front, so a concurrent writer either serializes or fails cleanly (``OperationalError``)
+        within ``timeout`` with no partial data; the connection is discarded on rollback and a
+        retry uses a fresh connection. ``_fault_hook`` is a test seam only."""
         now = _utc_now_iso()
-        with connect(self.db_path) as conn:
-            row = _row(conn.execute(
-                "SELECT source, instrument_uid, listing_uid FROM candidates WHERE candidate_id=?",
-                (candidate_id,)))
-            conn.execute(
-                "UPDATE candidates SET status='DEACTIVATED', deactivated_at=?, "
-                "deactivation_reason=?, updated_at=? WHERE candidate_id=?",
-                (now, reason, now, candidate_id))
-            if row:
-                self._audit(conn, candidate_id, "DEACTIVATED", trading_date, row["source"],
-                            row["instrument_uid"], row["listing_uid"], reason, None, None)
+
+        def fault(seam):
+            if _fault_hook is not None:
+                _fault_hook(seam)
+
+        conn = sqlite3.connect(self.db_path, timeout=timeout)
+        conn.isolation_level = None
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = _row(conn.execute(
+                    "SELECT source, instrument_uid, listing_uid FROM candidates "
+                    "WHERE candidate_id=?", (candidate_id,)))
+                conn.execute(
+                    "UPDATE candidates SET status='DEACTIVATED', deactivated_at=?, "
+                    "deactivation_reason=?, updated_at=? WHERE candidate_id=?",
+                    (now, reason, now, candidate_id))
+                fault("after_update")
+                if row:
+                    self._audit(conn, candidate_id, "DEACTIVATED", trading_date, row["source"],
+                                row["instrument_uid"], row["listing_uid"], reason, None, None)
+                fault("after_audit")
+                fault("before_commit")
+                conn.execute("COMMIT")
+            except BaseException:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+        finally:
+            conn.close()
 
     # ── TTL session tick (read-then-count; idempotent per date) ───────
-    def tick_ttl_atomic(self, trading_date) -> dict:
+    def tick_ttl_atomic(self, trading_date, *, timeout=5.0, _fault_hook=None) -> dict:
         """Count one COMPLETED trading session against every ACTIVE MANUAL/TTI candidate, exactly
         once per date (guarded by last_counted_trading_date). Decrement TTL; at zero mark EXPIRED.
         AUTO candidates are session-scoped (not TTL-counted). Caller passes only completed
-        sessions; a duplicate/earlier date is a no-op (no double decrement)."""
+        sessions; a duplicate/earlier date is a no-op (no double decrement).
+
+        R2B-P3-4: the whole tick (every TTL decrement, every expiry status flip, and every
+        EXPIRED audit insert) runs inside ONE explicit ``BEGIN IMMEDIATE`` transaction — a fault
+        AFTER any TTL update, expiry update, or audit insert rolls the WHOLE batch back (no
+        partial decrement, no orphan audit). A concurrent writer serializes or fails cleanly
+        within ``timeout`` with no partial data. ``_fault_hook`` is a test seam only."""
         td = _iso(trading_date)
         now = _utc_now_iso()
         counted, expired = 0, 0
-        conn = sqlite3.connect(self.db_path, timeout=5.0)
+
+        def fault(seam):
+            if _fault_hook is not None:
+                _fault_hook(seam)
+
+        conn = sqlite3.connect(self.db_path, timeout=timeout)
         conn.isolation_level = None
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -355,16 +459,20 @@ class CandidateStore:
                             "last_counted_trading_date=?, deactivated_at=?, "
                             "deactivation_reason=?, updated_at=? WHERE candidate_id=?",
                             (td, now, Reason.CANDIDATE_EXPIRED, now, c["candidate_id"]))
+                        fault("after_expiry_update")
                         self._audit(conn, c["candidate_id"], "EXPIRED", trading_date,
                                     c["source"], c["instrument_uid"], c["listing_uid"],
                                     Reason.CANDIDATE_EXPIRED, None, None)
+                        fault("after_expiry_audit")
                         expired += 1
                     else:
                         conn.execute(
                             "UPDATE candidates SET ttl_sessions_remaining=?, "
                             "last_counted_trading_date=?, updated_at=? WHERE candidate_id=?",
                             (new_ttl, td, now, c["candidate_id"]))
+                        fault("after_ttl_update")
                     counted += 1
+                fault("before_commit")
                 conn.execute("COMMIT")
                 return {"counted": counted, "expired": expired}
             except BaseException:
@@ -401,34 +509,147 @@ class CandidateStore:
 
     def effective_candidates(self, trading_date) -> EffectiveSelection:
         """The single effective candidate per instrument_uid for ``trading_date``, applying
-        frozen precedence (MANUAL>TTI>AUTO), identity/listing re-validation, and TTL/session
-        validity — fail closed. The ONLY selection-input API. Pure read (no writes)."""
+        frozen precedence (MANUAL>TTI>AUTO), structural validation, identity/listing
+        re-validation, and TTL/session validity — fail closed. The ONLY selection-input API.
+        Pure read (no writes).
+
+        R2B-P3-1 (error observability): a whole-store read failure (locked DB, missing table,
+        any sqlite error) does NOT propagate — it returns ``store_unavailable=True`` so the
+        caller blocks every new entry with ``candidate_store_unavailable`` (no crash, no TTL
+        mutation).
+
+        R2B-P3-2 (unknown source/status): a raw/injected ACTIVE row with an unknown source,
+        non-integer TTL, or garbage effective/generation date is validated on the
+        HIGHEST-precedence candidate per instrument and blocks that instrument with
+        ``candidate_malformed`` — never falling through to a lower-precedence candidate. A row
+        carrying a literal unknown (non-enum) status is caught by a separate defensive pass."""
         td = _iso(trading_date)
         sel = EffectiveSelection()
-        with connect(self.db_path) as conn:
-            active = [r for r in _rows(conn.execute(
-                "SELECT * FROM candidates WHERE status='ACTIVE'"))
-                if r["effective_from_trading_date"] is None
-                or str(r["effective_from_trading_date"]) <= td]
-            groups = {}
-            for r in active:
-                groups.setdefault(r["instrument_uid"], []).append(r)
-            for iuid, cands in groups.items():
-                cands.sort(key=lambda c: (PRECEDENCE.get(c["source"], 99), c["candidate_id"]))
-                top = cands[0]
-                # §4 conservative rule: an ACTIVE higher-precedence candidate that fails
-                # identity/listing re-validation BLOCKS the instrument — never fall through.
-                ok, _reason = self._verify_identity(conn, iuid, top["listing_uid"])
-                if not ok:
-                    sel.blocked[iuid] = Reason.CANDIDATE_SOURCE_CONFLICT
-                    continue
-                if top["source"] == "AUTO":
-                    if str(top["generation_trading_date"]) != td:
-                        sel.blocked[iuid] = Reason.CANDIDATE_EXPIRED   # stale AUTO session
+        try:
+            with connect(self.db_path) as conn:
+                rows = _rows(conn.execute(
+                    "SELECT * FROM candidates WHERE status='ACTIVE'"))
+                # ── R2B-P3-2: a row with a literal unknown (non-enum) status is corruption.
+                # Surface it as malformed for its instrument WITHOUT pulling it into the
+                # precedence/suppression path (so it never produces a spurious SUPPRESSED audit).
+                placeholders = ",".join("?" * len(VALID_STATUSES))
+                for r in _rows(conn.execute(
+                        "SELECT DISTINCT instrument_uid FROM candidates "
+                        f"WHERE status NOT IN ({placeholders}) "
+                        "AND instrument_uid IS NOT NULL", tuple(sorted(VALID_STATUSES)))):
+                    sel.blocked.setdefault(r["instrument_uid"], Reason.CANDIDATE_MALFORMED)
+                # Group ACTIVE rows by instrument. A validly future-dated row is not yet
+                # effective and is skipped; a row with an INVALID effective date is NOT
+                # silently dropped — it stays in contention so a malformed higher-precedence
+                # candidate cannot be hidden (the no-fall-through guarantee).
+                groups = {}
+                for r in rows:
+                    ef = r["effective_from_trading_date"]
+                    if ef is not None and _valid_date(ef) and str(ef) > td:
                         continue
-                elif int(top["ttl_sessions_remaining"] or 0) < 1:
-                    sel.blocked[iuid] = Reason.CANDIDATE_EXPIRED
-                    continue
-                sel.effective[iuid] = top
-                sel.suppressed.extend(c["candidate_id"] for c in cands[1:])
+                    groups.setdefault(r["instrument_uid"], []).append(r)
+                for iuid, cands in groups.items():
+                    cands.sort(
+                        key=lambda c: (PRECEDENCE.get(c["source"], 99), c["candidate_id"]))
+                    top = cands[0]
+                    # §4 conservative rule, extended: an ACTIVE higher-precedence candidate that
+                    # is structurally malformed OR fails identity/listing re-validation BLOCKS
+                    # the instrument — never fall through to a lower-precedence candidate.
+                    mal = self._candidate_row_malformed(top)
+                    if mal is not None:
+                        sel.blocked[iuid] = mal
+                        continue
+                    ok, _reason = self._verify_identity(conn, iuid, top["listing_uid"])
+                    if not ok:
+                        sel.blocked[iuid] = Reason.CANDIDATE_SOURCE_CONFLICT
+                        continue
+                    if top["source"] == "AUTO":
+                        if str(top["generation_trading_date"]) != td:
+                            sel.blocked[iuid] = Reason.CANDIDATE_EXPIRED   # stale AUTO session
+                            continue
+                    elif int(top["ttl_sessions_remaining"] or 0) < 1:
+                        sel.blocked[iuid] = Reason.CANDIDATE_EXPIRED
+                        continue
+                    sel.effective[iuid] = top
+                    # Only well-formed siblings are recorded as suppressed (a malformed sibling
+                    # must not generate a SUPPRESSED audit for a corrupt row).
+                    sel.suppressed.extend(
+                        c["candidate_id"] for c in cands[1:]
+                        if self._candidate_row_malformed(c) is None)
+        except sqlite3.Error:
+            # R2B-P3-1: fail closed on any candidate-store/database read failure.
+            return EffectiveSelection(store_unavailable=True)
         return sel
+
+    def record_selection_audit(self, trading_date, selection) -> dict:
+        """R2B-P3-3: persist deterministic, idempotent selection-audit events for ONE
+        evaluation — SELECTED_EFFECTIVE for each effective candidate and SUPPRESSED for each
+        suppressed candidate. Called only on the gate-enabled path; the default-off path never
+        invokes it (zero candidate audit writes).
+
+        Idempotent per (candidate_id, trading_date, event_type) via a check-then-insert guarded
+        by the ``BEGIN IMMEDIATE`` write lock (concurrent same-date evaluations serialize on the
+        lock, so the second sees the first's committed rows and writes nothing) — a duplicate
+        same-date evaluation creates no new rows. NO schema change is required (see the R2B
+        residuals completion doc, "No schema v8 required"). Append-only is preserved: only
+        INSERTs occur — existing audit rows are never updated or deleted. All inserts run inside
+        ONE explicit ``BEGIN IMMEDIATE`` transaction (atomic; a fault rolls back the whole
+        batch). Writes NOTHING when there is nothing to record."""
+        td = _iso(trading_date)
+        # trading_date MUST be non-null: it is part of the idempotency key, and SQLite treats
+        # NULLs as distinct in a unique index (a NULL date would defeat de-duplication).
+        if td is None:
+            raise ValueError("record_selection_audit requires a non-null trading_date")
+        now = _utc_now_iso()
+        eff_rows = [(c["candidate_id"], c.get("source"), c.get("instrument_uid"),
+                     c.get("listing_uid")) for c in selection.effective.values()]
+        sup_ids = list(selection.suppressed)
+        if not eff_rows and not sup_ids:
+            return {"selected": 0, "suppressed": 0}
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.isolation_level = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for cid, src, iuid, luid in eff_rows:
+                    self._audit_idempotent(conn, cid, EVENT_SELECTED_EFFECTIVE, td, src,
+                                           iuid, luid, None)
+                for cid in sup_ids:
+                    r = _row(conn.execute(
+                        "SELECT source, instrument_uid, listing_uid FROM candidates "
+                        "WHERE candidate_id=?", (cid,)))
+                    src = r["source"] if r else None
+                    iuid = r["instrument_uid"] if r else None
+                    luid = r["listing_uid"] if r else None
+                    self._audit_idempotent(conn, cid, EVENT_SUPPRESSED, td, src, iuid, luid,
+                                           Reason.SUPPRESSED_BY_HIGHER_PRECEDENCE_SOURCE)
+                conn.execute("COMMIT")
+                return {"selected": len(eff_rows), "suppressed": len(sup_ids)}
+            except BaseException:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _audit_idempotent(conn, candidate_id, event_type, trading_date, source,
+                          instrument_uid, listing_uid, reason_code):
+        """Append a selection-audit row at most once per (candidate_id, trading_date,
+        event_type). Check-then-insert under the caller's BEGIN IMMEDIATE write lock: a row
+        already present (from an earlier same-date evaluation) is a no-op; otherwise one row is
+        appended. No UPDATE/DELETE ever occurs (append-only preserved)."""
+        td = _iso(trading_date)
+        exists = conn.execute(
+            "SELECT 1 FROM candidate_audit WHERE candidate_id=? AND trading_date=? "
+            "AND event_type=? LIMIT 1", (candidate_id, td, event_type)).fetchone()
+        if exists:
+            return
+        conn.execute(
+            "INSERT INTO candidate_audit (candidate_id, event_type, trading_date, "
+            "source, instrument_uid, listing_uid, reason_code, source_payload_hash, "
+            "resolver_version, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (candidate_id, event_type, td, source, instrument_uid,
+             listing_uid, reason_code, None, None, _utc_now_iso()))

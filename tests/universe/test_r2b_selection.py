@@ -113,6 +113,9 @@ class _ExplodingCandidateStore:
     def tick_ttl_atomic(self, *a, **k):
         raise AssertionError("candidate TTL ticked while require_candidate_source=False")
 
+    def record_selection_audit(self, *a, **k):
+        raise AssertionError("selection audit written while require_candidate_source=False")
+
 
 def test_default_off_never_consults_candidate_store(tmp_path):
     db = _seed(tmp_path)

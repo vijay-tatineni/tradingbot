@@ -320,3 +320,21 @@ never 1.0-defaulted for cross-currency). Heat is
 INHERITED book (existing positions + open orders). Accumulation across multiple candidates
 selected within the SAME shadow run is still handled by the legacy within-run accumulator;
 re-fetched snapshots within a run reflect the inherited book, not earlier same-run selections.
+
+## R2B residuals — candidate-gate fail-closed behaviour (new-entry eligibility only)
+
+When `require_candidate_source` is enabled, the candidate gate is **fail-closed** and affects
+NEW-entry eligibility only — it never forces liquidation, never alters an existing position,
+and open positions keep being managed:
+
+| Reason | Condition |
+|--------|-----------|
+| `candidate_store_unavailable` | the candidate store / database could not be read (locked DB, missing table, any `sqlite3.Error`). ALL new entries are blocked; NO TTL mutation and NO selection audit occur; the cycle never crashes. |
+| `candidate_malformed` | the highest-precedence candidate for an instrument is structurally invalid (unknown source, present-but-non-integer TTL, present-but-unparseable effective/generation date), or a row carries a literal unknown (non-enum) status. A malformed higher-precedence candidate **blocks the instrument** — it never falls through to a valid lower-precedence candidate. |
+| `candidate_source_conflict` | the highest-precedence candidate fails identity/listing re-validation. |
+| `candidate_expired` | the effective candidate is a stale AUTO session or a TTL-exhausted MANUAL/TTI. |
+| `candidate_inactive` | no effective candidate for the instrument. |
+
+**Selection audit:** on the gate-enabled path, `SELECTED_EFFECTIVE` / `SUPPRESSED` audit events
+are persisted idempotently per `(candidate_id, trading_date, event_type)` (a duplicate same-date
+evaluation adds no rows). On a `candidate_store_unavailable` read failure, no audit is written.
