@@ -53,7 +53,7 @@ def _seed_v4_canonical(db, symbols):
 
 def test_fresh_v1_to_v5_builds_full_schema(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 6
+    assert migrate(db) == 7
     assert V5_TABLES.issubset(_tables(db))
     # legacy canonical table gained the additive identity columns
     assert {"instrument_uid", "identity_status"}.issubset(_columns(db, "canonical_instruments"))
@@ -65,7 +65,7 @@ def test_v4_to_v5_existing_rows_become_unverified_no_backfill(tmp_path, monkeypa
     _seed_v4_canonical(db, ["AAPL", "MSFT", "BARC"])
     assert current_version(db) == 4
 
-    assert migrate(db) == 6      # v4 → v5
+    assert migrate(db) == 7      # v4 → v5
     con = sqlite3.connect(db)
     rows = con.execute(
         "SELECT instrument_uid, identity_status FROM canonical_instruments").fetchall()
@@ -80,10 +80,10 @@ def test_v4_to_v5_existing_rows_become_unverified_no_backfill(tmp_path, monkeypa
 
 def test_v5_rerun_is_idempotent(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 6
-    assert migrate(db) == 6
-    assert migrate(db) == 6
-    assert current_version(db) == 6
+    assert migrate(db) == 7
+    assert migrate(db) == 7
+    assert migrate(db) == 7
+    assert current_version(db) == 7
     assert V5_TABLES.issubset(_tables(db))
 
 
@@ -128,4 +128,4 @@ def test_v1_v4_migration_definitions_unedited():
     # Guard: the released v1–v4 migration tuples must remain byte-for-byte unchanged; R2A-1 is
     # forward-only (a new v5 entry). We assert the version sequence and that v5 is the head.
     versions = [m[0] for m in MIGRATIONS]
-    assert versions == [1, 2, 3, 4, 5, 6]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]

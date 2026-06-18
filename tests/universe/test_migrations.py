@@ -19,6 +19,8 @@ EXPECTED_TABLES = {
     "identity_audit",
     # ── v6 (R2B: persisted candidate-source integration) ──
     "candidates", "candidate_audit",
+    # ── v7 (R2C: FX-normalized sizing + open-book heat evidence) ──
+    "risk_evaluation", "risk_evaluation_audit",
 }
 
 
@@ -34,7 +36,7 @@ def _tables(db):
 # + v4 (R2A-0 / P3-R1-A: discriminator-qualified close-event key)
 # + v5 (R2A-1 / P3-6 / P3-7: canonical identity + listings + verified broker mappings)
 # + v6 (R2B / P3-4: persisted candidate-source integration — candidates + candidate_audit).
-HEAD_VERSION = 6
+HEAD_VERSION = 7
 
 
 def test_migrate_creates_all_tables(tmp_path):

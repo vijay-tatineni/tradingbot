@@ -193,3 +193,24 @@ Operational invariants in this tranche:
 * Broker-free: no IBKR/IG/EODHD call; structurally asserted by
   `tests/universe/test_r2b_selection.py`. Candidate expiry affects NEW entries only — open
   positions continue to be managed.
+
+## R2C FX-normalized sizing + open-book heat (default-off; BLOCKER-S / P3-5)
+
+`ShadowEvaluator` accepts (all default-off / un-wired):
+`enforce_portfolio_heat=False`, `base_currency=None`, `base_fx_provider=None`,
+`portfolio_risk_provider=None`, `risk_evaluation_time=None`. With the gate off, contention is
+unchanged and NEITHER provider is consulted (zero FX/portfolio calls). When enabled in an
+ISOLATED test/shadow context, each NEW-entry candidate must pass FX-normalized sizing (into
+`base_currency`, deterministic `Decimal`, fresh-or-same-currency FX) AND inherited/open-book
+post-trade heat (existing positions + open orders + proposed risk vs `MAX_PORTFOLIO_HEAT ×
+equity`) before slot/sector contention. Providers are **broker-free, injected** seams
+(`bot.universe.sizing.BaseFxRateProvider`, `bot.universe.portfolio_heat.PortfolioRiskProvider`)
+— they MUST NOT call IBKR/IG/EODHD or read a live broker session. `risk_evaluation_time` is the
+INJECTED order-intent time used for FX / snapshot / equity freshness (the layer never reads the
+wall clock for a gate decision).
+
+Optional evidence: `bot.universe.risk_store.RiskEvaluationStore.record_evaluation_atomic`
+persists a schema-v7 `risk_evaluation` row + append-only audit event (one `BEGIN IMMEDIATE`).
+The default contention path writes nothing; recording is opt-in. No production `universe.db` is
+created or migrated by R2C. **Enabling this gate does not authorize runtime wiring, scheduler
+activation, shadow soak, or paper/live trading.**

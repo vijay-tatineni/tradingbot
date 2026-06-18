@@ -288,3 +288,35 @@ main.py/api_server.py.
 E..E+4 and EXPIRED from E+5. The tick is idempotent per date (guarded by
 `last_counted_trading_date`): duplicate same-date runs, missing-bar/weekend/non-sessions, and
 pre-session outages never double-count.
+
+## Schema v7 (R2C — FX-normalized sizing + open-book heat evidence)
+
+Strictly **additive / forward-only** (v1–v6 DDL unchanged). Persists the deterministic
+EVIDENCE of an FX-normalized sizing + inherited/open-book-heat NEW-entry decision. Only
+NON-SENSITIVE data is stored — a deterministic `fx_rate_id` / `portfolio_snapshot_hash` and
+base-currency money values as **canonical Decimal strings** (TEXT, never floats); never
+credentials, account ids, tokens, or raw broker/provider payloads.
+
+**`risk_evaluation`** — one row per distinct (content-addressed) decision:
+`risk_evaluation_id` (PK; hash of the full decision content → identical evidence is an
+idempotent no-op, any change is a new row), `trading_date`, `evaluation_time`,
+`canonical_instrument_id`, `instrument_uid`, `listing_uid`, `base_currency`,
+`instrument_currency`, `fx_pair`, `fx_rate`, `fx_rate_id`, `fx_rate_source`,
+`portfolio_snapshot_hash`, `proposed_qty`, `proposed_risk_base`, `proposed_notional_base`,
+`existing_heat_base`, `post_trade_heat_base`, `limit_base`, `decision` (ALLOW/BLOCK),
+`reason_code`, `evaluator_version`, `created_at`.
+
+**`risk_evaluation_audit`** — append-only (UPDATE/DELETE rejected by triggers
+`trg_risk_eval_audit_no_update`/`_no_delete`); records the EVALUATED event with
+`risk_evaluation_id`, `event_type`, `trading_date`, `decision`, `reason_code`,
+`portfolio_snapshot_hash`, `fx_rate_id`, `created_at`.
+
+**Index.** `ix_risk_eval_instrument_date` on `(instrument_uid, trading_date)`.
+
+**Store.** `bot.universe.risk_store.RiskEvaluationStore.record_evaluation_atomic` writes the
+`risk_evaluation` row + its audit event in one `BEGIN IMMEDIATE` (both COMMIT or both ROLL
+BACK; a fault at any seam — `after_risk_evaluation_insert` / `after_audit_insert` /
+`before_commit` — rolls both back). **Default-off:** the evaluator's default contention path
+writes nothing here; the store is an explicit, opt-in evidence trail exercised by tests
+(`tests/universe/test_r2c_persistence.py`). No production `universe.db` is created or migrated
+by R2C.

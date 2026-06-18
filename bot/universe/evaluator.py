@@ -36,6 +36,8 @@ from backtest.breakout_strategy import compute_indicators
 from bot.universe import params
 from bot.universe.eligibility import structural_eligibility
 from bot.universe.fx import normalize_to_usd
+from bot.universe.risk_gate import evaluate_entry_risk
+from bot.universe.sizing import SizingInputs
 from bot.universe.models import (
     AUTHORITATIVE_STATUSES, ELIGIBILITY_MODE_SHADOW, EligibilityResult, EXIT_SIGNAL_STATUSES,
     HypotheticalOrder, PositionSnapshot, PositionStatus, Reason, State, StateOutcome,
@@ -107,7 +109,12 @@ class ShadowEvaluator:
                  enforce_verified_identity: bool = False,
                  identity_store=None,
                  require_candidate_source: bool = False,
-                 candidate_store=None):
+                 candidate_store=None,
+                 enforce_portfolio_heat: bool = False,
+                 base_currency=None,
+                 base_fx_provider=None,
+                 portfolio_risk_provider=None,
+                 risk_evaluation_time=None):
         from bot.universe import EVALUATOR_VERSION
         self.registry = registry
         self.bars_provider = bars_provider   # callable(canonical_rec)->dict|None ; NO broker
@@ -145,6 +152,25 @@ class ShadowEvaluator:
         # SAME db_path.
         self.require_candidate_source = bool(require_candidate_source)
         self._candidate_store = candidate_store
+        # ── R2C FX-normalized sizing + inherited/open-book portfolio heat gate
+        #    (BLOCKER-S / P3-5) ──
+        # DEFAULT-OFF: when False the contention path behaves EXACTLY as before — the two new
+        # broker-free seams are NEVER consulted (zero FX-provider / portfolio-provider calls)
+        # and selection is bit-identical. When True, each NEW-entry candidate must additionally
+        # pass FX-normalized sizing (into the account base currency, deterministic Decimal, never
+        # USD-assumed) AND inherited/open-book post-trade heat (existing open positions + open
+        # orders/pending intents + the proposed trade) against the base-currency limit — else it
+        # is rejected with a fail-closed reason code. The gate affects NEW entries only: existing
+        # open-position management is untouched, it never forces liquidation, and it never calls
+        # a broker. base_currency is REQUIRED when enabled (never defaulted to USD); self.equity
+        # is treated as base-currency equity. risk_evaluation_time is the INJECTED order-intent
+        # time used for FX / snapshot / equity freshness (the layer never reads the wall clock).
+        self.enforce_portfolio_heat = bool(enforce_portfolio_heat)
+        self.base_currency = base_currency
+        self.base_fx_provider = base_fx_provider
+        self.portfolio_risk_provider = portfolio_risk_provider
+        self.risk_evaluation_time = risk_evaluation_time
+        self._run_trading_date = None        # set per run in maybe_run (R2C snapshot date-match)
 
     def _identity_gate_store(self):
         if self._identity_store is None:
@@ -190,6 +216,9 @@ class ShadowEvaluator:
         effective_selection = None
         if self.require_candidate_source:
             effective_selection = self._candidate_gate_store().effective_candidates(trading_date)
+        # R2C gate needs the evaluation trading date (snapshot date-match). Stored here so the
+        # contention helper keeps its existing signature; only read when enforce_portfolio_heat.
+        self._run_trading_date = trading_date
         contention = self._apply_contention(outcomes, effective_selection)
         if self.require_candidate_source:
             self._candidate_gate_store().tick_ttl_atomic(trading_date)
@@ -432,6 +461,10 @@ class ShadowEvaluator:
             "sector": snap.get("sector"),
             "spread": src.get("spread"),
             "primary_gateway": rec.get("primary_gateway"),
+            # R2C: the LISTING/instrument currency (not USD-normalised) carried for
+            # FX-normalized sizing into the account base currency (default-off gate).
+            "instrument_currency": snap.get("currency"),
+            "listing_uid": rec.get("listing_uid"),
         }
 
     # ── cooldown legacy resolution (P3-2) ─────────────────────────────
@@ -761,6 +794,17 @@ class ShadowEvaluator:
             if not atr or not price or atr <= 0:
                 rejected.append({**c, "rejected_reason": Reason.INDICATORS_UNAVAILABLE})
                 continue
+            # ── R2C FX-normalized sizing + inherited/open-book heat gate (default-off) ──
+            # Sizing+heat are checked BEFORE slot/sector contention (task §5 ordering). When the
+            # gate is off this branch is never entered → bit-identical selection, zero provider
+            # calls. The inherited-book heat snapshot is authoritative for EXISTING positions /
+            # open orders; within-run accumulation across newly-selected candidates is still
+            # handled by the legacy float accumulator below (documented limitation).
+            if self.enforce_portfolio_heat:
+                rd = self._r2c_entry_gate(c, atr, price)
+                if rd is not None and not rd.ok:
+                    rejected.append({**c, "rejected_reason": rd.reason})
+                    continue
             if len(selected) >= max(slots, 0):
                 rejected.append({**c, "rejected_reason": Reason.SLOT_CAP_REACHED})
                 continue
@@ -794,6 +838,33 @@ class ShadowEvaluator:
             logger.info("shadow %s REJECT %s reason=%s sector=%s adv20=%s",
                         trading_date, r["canonical_instrument_id"],
                         r.get("rejected_reason"), r.get("sector"), r.get("adv20"))
+
+    def _r2c_entry_gate(self, c: dict, atr: float, price: float):
+        """R2C FX-normalized sizing + inherited/open-book heat decision for one NEW-entry
+        candidate (BLOCKER-S / P3-5). Returns a RiskDecision (ok True/False) or None when the
+        gate is disabled. Broker-free: consults ONLY the two injected providers. ``price``/ATR
+        are in the LISTING/instrument currency; risk is normalized into the account base
+        currency. A failed gate blocks the NEW entry only (recorded reason); it never alters or
+        liquidates an existing position."""
+        stop_distance = params.INITIAL_STOP_ATR_MULT * float(atr)
+        inputs = SizingInputs(
+            base_currency=self.base_currency,
+            instrument_currency=c.get("instrument_currency"),
+            entry_price=price,
+            stop_distance=stop_distance,
+            equity_base=self.equity,
+            risk_per_trade_pct=params.RISK_PER_TRADE,
+            max_notional_pct=params.MAX_NOTIONAL_PCT,
+            canonical_instrument_id=c.get("canonical_instrument_id"),
+            instrument_uid=c.get("instrument_uid"),
+            listing_uid=c.get("listing_uid"))
+        return evaluate_entry_risk(
+            inputs,
+            evaluation_time=self.risk_evaluation_time,
+            evaluation_date=self._run_trading_date,
+            fx_provider=self.base_fx_provider,
+            portfolio_provider=self.portfolio_risk_provider,
+            max_portfolio_heat_pct=params.MAX_PORTFOLIO_HEAT)
 
     def _hypothetical_order(self, c: dict, atr: float, price: float) -> HypotheticalOrder:
         stop_distance = params.INITIAL_STOP_ATR_MULT * atr
