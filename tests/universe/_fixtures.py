@@ -178,3 +178,77 @@ def flat():
     provider is injected, so tests that intend ordinary flat→eligible behaviour must inject
     an explicit flat provider. A fresh instance per call keeps `.calls` isolated."""
     return StubPositionProvider()
+
+
+# ── R2C broker-free test doubles (BLOCKER-S / P3-5) ────────────────────
+class SpyBaseFxRateProvider:
+    """Broker-free, deterministic to-BASE FxRate provider stub (tests / rehearsal only).
+
+    Returns a fixed rate (BASE per 1 instrument unit) per (instrument_currency, base_currency),
+    effective at the evaluation_time (fresh) unless an explicit ``as_of`` is configured. Records
+    every call (``.calls``) so a test can prove the off-path NEVER consults it. Never imports or
+    calls a broker / EODHD / external FX API; rates are hard-coded fixtures."""
+    def __init__(self, rates=None, as_of=None, raises=None, mismatch=False, bad_rate=None):
+        # rates: {(INST, BASE): rate}; defaults USD->EUR=0.9, GBP->USD=1.25. An explicitly
+        # EMPTY dict means "no rates" (provider returns None) — only None requests the defaults.
+        _r = rates if rates is not None else {("USD", "EUR"): "0.90", ("GBP", "USD"): "1.25"}
+        self.rates = {(str(k[0]).upper(), str(k[1]).upper()): v for k, v in _r.items()}
+        self.as_of = as_of
+        self.raises = raises
+        self.mismatch = mismatch        # return a rate whose currencies disagree with the request
+        self.bad_rate = bad_rate        # force this (e.g. 0/negative) rate value
+        self.calls = []
+
+    def get_rate(self, *, instrument_currency, base_currency, evaluation_time):
+        from decimal import Decimal
+
+        from bot.universe.sizing import FxRate
+        self.calls.append((instrument_currency, base_currency, _date_iso(evaluation_time)))
+        if self.raises is not None:
+            raise self.raises
+        key = (str(instrument_currency).upper(), str(base_currency).upper())
+        if self.bad_rate is not None:
+            rate = Decimal(str(self.bad_rate))
+        elif key in self.rates:
+            rate = Decimal(str(self.rates[key]))
+        else:
+            return None
+        as_of = self.as_of if self.as_of is not None else evaluation_time
+        if self.mismatch:
+            return FxRate("ZZZ", base_currency, rate, as_of, "spy_fx")
+        return FxRate(instrument_currency, base_currency, rate, as_of, "spy_fx")
+
+
+class SpyPortfolioRiskProvider:
+    """Broker-free, read-only PortfolioRiskProvider stub (tests / rehearsal only). Returns a
+    fixed snapshot and records every call (``.calls``) so a test can prove the off-path never
+    consults it. Never imports or calls a broker."""
+    def __init__(self, snapshot=None, raises=None):
+        self._snapshot = snapshot
+        self.raises = raises
+        self.calls = []
+
+    def snapshot(self, *, evaluation_time):
+        self.calls.append(_date_iso(evaluation_time))
+        if self.raises is not None:
+            raise self.raises
+        return self._snapshot
+
+
+def fresh_snapshot(*, base_currency="USD", evaluation_time, trading_date,
+                   positions=(), orders=(), equity="1000000", equity_as_of=None):
+    """Build a fresh PortfolioRiskSnapshot for tests (date == trading_date, timestamp ==
+    evaluation_time → zero age). positions/orders are PositionRisk tuples."""
+    from bot.universe.portfolio_heat import PortfolioRiskSnapshot
+    return PortfolioRiskSnapshot(
+        base_currency=base_currency, open_positions=tuple(positions),
+        open_orders=tuple(orders), equity_base=equity,
+        equity_as_of=equity_as_of if equity_as_of is not None else evaluation_time,
+        snapshot_date=trading_date, snapshot_timestamp=evaluation_time, source="spy")
+
+
+def pos_risk(risk_base, *, currency="USD", instrument_uid="iuid-1", observed_at=None):
+    """Build one PositionRisk contributing ``risk_base`` normalized risk (tests)."""
+    from bot.universe.portfolio_heat import PositionRisk
+    return PositionRisk(currency=currency, normalized_risk_base=risk_base,
+                        instrument_uid=instrument_uid, observed_at=observed_at)

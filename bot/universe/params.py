@@ -47,6 +47,18 @@ MAX_PORTFOLIO_HEAT = 0.025      # 2.50% aggregate initial-stop risk
 INITIAL_STOP_ATR_MULT = 2.0
 TRAIL_ATR_MULT = 3.0
 
+# ── R2C freshness windows (BLOCKER-S / P3-5) ──────────────────────────
+# Additive — these do NOT alter the FROZEN risk constants above (a test asserts the
+# mirrored RISK_PER_TRADE / MAX_NOTIONAL_PCT / MAX_PORTFOLIO_HEAT have not drifted).
+# Entry-time / order-intent freshness is wall-clock-SECONDS based (sizing & open-book heat
+# are evaluated at order-intent time), distinct from the calendar-day FX staleness used by
+# the USD ELIGIBILITY normalization (bot.universe.fx). All compared against an INJECTED
+# evaluation_time — the universe layer never reads the wall clock for a gate decision.
+MAX_FX_RATE_AGE_SECONDS = 300            # an FX rate older than 5 min is stale at order-intent
+MAX_PORTFOLIO_SNAPSHOT_AGE_SECONDS = 900  # entry-time portfolio snapshot freshness (15 min)
+MAX_OPEN_ORDER_SNAPSHOT_AGE_SECONDS = 900  # open-order / pending-intent freshness (15 min)
+MAX_EQUITY_AGE_SECONDS = 900             # account-equity observation freshness (15 min)
+
 # ── Candidate priority when slots are scarce (deterministic) ─────────
 # 1. ADV20 descending  2. estimated spread ascending  3. stable canonical id asc
 def candidate_sort_key(row: dict):

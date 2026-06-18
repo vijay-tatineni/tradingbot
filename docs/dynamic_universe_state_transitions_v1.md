@@ -271,3 +271,52 @@ presence is necessary but NOT sufficient (identity/mapping/eligibility/cooldown/
 | `candidate_inactive` | superseded / deactivated / no effective candidate |
 | `candidate_malformed` | unknown source / status / invalid TTL state |
 | `suppressed_by_higher_precedence_source` | lower-precedence candidate suppressed (audit) |
+
+## R2C FX-normalized sizing + inherited/open-book heat gate (BLOCKER-S / P3-5)
+
+The default-off `enforce_portfolio_heat` gate adds a NEW-entry admissibility check to
+contention. It is a **contention-level** gate (recorded as a `rejected_reason`), NOT structural
+eligibility — its reason codes are deliberately **not** in `BLOCKING_REASONS` (mirroring
+`portfolio_heat_exceeded`). When off, contention is bit-identical and the two broker-free seams
+(`base_fx_provider`, `portfolio_risk_provider`) are never consulted.
+
+**New-entry gate ordering** (each fail-closed; first failure blocks the entry):
+identity/listing verified → broker mapping verified → candidate effective → existing
+state/cooldown/reconciliation gates pass → **FX-normalized sizing passes** → **portfolio/
+open-book heat passes** → contention (slot/sector) resolves → entry may be proposed. Any failed
+R2C gate blocks the NEW entry only — existing open positions are still managed (counted in
+`open_now`, kept in their state); the gate never forces liquidation and never calls a broker.
+
+Sizing normalizes into the **account base currency** (deterministic `Decimal`; never USD-assumed,
+never 1.0-defaulted for cross-currency). Heat is
+`existing_open_position_risk + open_order/pending_intent_risk + proposed_risk` vs
+`MAX_PORTFOLIO_HEAT × base-currency equity`. Fail-closed reason codes (contention-level):
+
+| code | meaning |
+|------|---------|
+| `fx_rate_missing` | provider returned no to-base rate |
+| `fx_rate_stale` | rate older than `MAX_FX_RATE_AGE_SECONDS` |
+| `fx_rate_invalid` | rate ≤ 0 / NaN / inf / future / no timestamp |
+| `fx_currency_mismatch` | returned rate's currencies disagree with the request |
+| `fx_provider_unavailable` | no provider / provider raised (cross-currency) |
+| `sizing_currency_unresolved` | base or instrument currency unknown (no USD default) |
+| `sizing_price_missing` | entry price absent / ≤ 0 |
+| `sizing_stop_missing` | stop price/distance absent or ≤ 0 |
+| `sizing_input_missing` | equity / risk%/notional% absent or ≤ 0 |
+| `sizing_risk_exceeds_limit` | even 1 share breaches the per-trade base risk limit |
+| `sizing_notional_exceeds_limit` | even 1 share breaches the base notional cap |
+| `sizing_quantity_invalid` | resolved quantity not a positive integer |
+| `portfolio_snapshot_missing` | no snapshot / provider raised |
+| `portfolio_snapshot_stale` | snapshot timestamp missing/future/> 15 min |
+| `portfolio_snapshot_date_mismatch` | daily snapshot date ≠ evaluation trading date |
+| `portfolio_open_order_snapshot_stale` | an open-order observation > 15 min old |
+| `portfolio_currency_unresolved` | base mismatch / a contributing item lacks resolvable base risk |
+| `portfolio_identity_unresolved` | a risk-contributing item carries no instrument identity |
+| `portfolio_equity_missing` / `_invalid` / `_stale` | equity absent / ≤ 0 / > 15 min old (when a %-limit needs it) |
+| `open_book_heat_exceeded` | inherited book (positions + open orders) already over the limit |
+| `portfolio_heat_exceeded` | adding the proposed trade crosses the limit |
+
+**Within-run note (documented limitation):** the heat snapshot is authoritative for the
+INHERITED book (existing positions + open orders). Accumulation across multiple candidates
+selected within the SAME shadow run is still handled by the legacy within-run accumulator;
+re-fetched snapshots within a run reflect the inherited book, not earlier same-run selections.

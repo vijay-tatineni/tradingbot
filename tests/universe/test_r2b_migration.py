@@ -25,7 +25,7 @@ def _tables(db):
 
 def test_fresh_migrate_builds_v6(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 6
+    assert migrate(db) == 7
     assert V6_TABLES.issubset(_tables(db))
 
 
@@ -36,7 +36,7 @@ def test_v5_to_v6_is_additive(tmp_path, monkeypatch):
     assert migrate(db) == 5
     assert not (V6_TABLES & _tables(db))           # no v6 tables yet
     monkeypatch.setattr("bot.universe.db.MIGRATIONS", MIGRATIONS)
-    assert migrate(db) == 6                         # additive upgrade
+    assert migrate(db) == 7                         # additive upgrade
     assert V6_TABLES.issubset(_tables(db))
     # v5 identity tables still present
     assert {"instrument_identity", "instrument_listing"}.issubset(_tables(db))
@@ -44,9 +44,9 @@ def test_v5_to_v6_is_additive(tmp_path, monkeypatch):
 
 def test_v6_rerun_idempotent(tmp_path):
     db = str(tmp_path / "universe.db")
-    assert migrate(db) == 6
-    assert migrate(db) == 6
-    assert current_version(db) == 6
+    assert migrate(db) == 7
+    assert migrate(db) == 7
+    assert current_version(db) == 7
 
 
 def test_v6_rolls_back_atomically(tmp_path, monkeypatch):
@@ -63,7 +63,7 @@ def test_v6_rolls_back_atomically(tmp_path, monkeypatch):
 
 
 def test_v1_v5_migration_definitions_unedited():
-    assert [m[0] for m in MIGRATIONS] == [1, 2, 3, 4, 5, 6]
+    assert [m[0] for m in MIGRATIONS] == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_legacy_candidate_sources_row_never_r2b_effective(tmp_path):

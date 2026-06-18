@@ -576,4 +576,82 @@ MIGRATIONS = [
             """,
         ],
     ),
+    (
+        # ── v7: Pre-Enable R2C (BLOCKER-S FX-normalized sizing, P3-5 inherited/open-book heat).
+        #        Strictly ADDITIVE / forward-only — v1–v6 DDL is NOT edited. Persists the
+        #        deterministic EVIDENCE of each FX-normalized sizing + open-book-heat NEW-entry
+        #        decision (a `risk_evaluation` row) plus an append-only `risk_evaluation_audit`
+        #        trail. NON-SENSITIVE only: a deterministic fx_rate_id / portfolio_snapshot_hash
+        #        and base-currency money values — never credentials, account ids, tokens, or raw
+        #        broker/provider payloads. All money is stored as TEXT (canonical Decimal string)
+        #        so no float drift enters the audit. The feature remains default-off and un-wired:
+        #        the default contention path writes NOTHING here; the store is exercised by tests
+        #        and is available for an explicit, opt-in shadow evidence trail only.
+        #
+        #        Atomic (single BEGIN IMMEDIATE in db.migrate), idempotent (CREATE IF NOT EXISTS;
+        #        a rerun is a no-op), fail-closed. No production universe.db is created or migrated
+        #        by this change.
+        7,
+        [
+            """
+            CREATE TABLE IF NOT EXISTS risk_evaluation (
+                risk_evaluation_id        TEXT PRIMARY KEY,
+                trading_date              TEXT NOT NULL,
+                evaluation_time           TEXT,
+                canonical_instrument_id   TEXT,
+                instrument_uid            TEXT,
+                listing_uid               TEXT,
+                base_currency             TEXT,
+                instrument_currency       TEXT,
+                fx_pair                   TEXT,
+                fx_rate                   TEXT,
+                fx_rate_id                TEXT,
+                fx_rate_source            TEXT,
+                portfolio_snapshot_hash   TEXT,
+                proposed_qty              INTEGER,
+                proposed_risk_base        TEXT,
+                proposed_notional_base    TEXT,
+                existing_heat_base        TEXT,
+                post_trade_heat_base      TEXT,
+                limit_base                TEXT,
+                decision                  TEXT NOT NULL,
+                reason_code               TEXT,
+                evaluator_version         TEXT,
+                created_at                TEXT NOT NULL
+            )
+            """,
+            # ── append-only risk_evaluation_audit (mirrors identity/candidate audit policy) ──
+            """
+            CREATE TABLE IF NOT EXISTS risk_evaluation_audit (
+                id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                risk_evaluation_id        TEXT,
+                event_type                TEXT NOT NULL,
+                trading_date              TEXT,
+                decision                  TEXT,
+                reason_code               TEXT,
+                portfolio_snapshot_hash   TEXT,
+                fx_rate_id                TEXT,
+                created_at                TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_risk_eval_audit_no_update
+            BEFORE UPDATE ON risk_evaluation_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'risk_evaluation_audit is append-only');
+            END
+            """,
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_risk_eval_audit_no_delete
+            BEFORE DELETE ON risk_evaluation_audit
+            BEGIN
+                SELECT RAISE(ABORT, 'risk_evaluation_audit is append-only');
+            END
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_risk_eval_instrument_date
+            ON risk_evaluation (instrument_uid, trading_date)
+            """,
+        ],
+    ),
 ]

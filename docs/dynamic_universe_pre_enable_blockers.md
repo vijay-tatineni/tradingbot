@@ -44,7 +44,11 @@ pre-existing `tests/test_breakout_indicators.py` isolation issue (identical at b
 
 This is **not** a claim that all pre-enable work is complete. Three P3 residuals
 (**P3-R1-A**, **P3-R1-B**, **P3-R1-C**, below) remain **OPEN — mandatory before runtime
-enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain open. See
+enablement**. The R2 blockers are at differing stages: P3-4 (R2B) and P3-5 / BLOCKER-S
+(R2C) are **implemented and approved for disabled merge**, and P3-6 / P3-7 (R2A-1) are
+implemented and awaiting independent review — but **none are resolved for runtime
+enablement**. Enablement remains blocked until R2C is merged/deployed and the remaining
+pre-enable residuals (the R2B residuals R2B-P3-1..4 and P3-R1-A/B/C) are closed. See
 `docs/dynamic_universe_pre_enable_r1_completion.md`,
 `…_r1_2_completion.md`, and `…_r1_3_completion.md`.
 
@@ -104,7 +108,7 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-2 | mandatory | `cooldown_until` stores a session count, not a date | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1) |
 | P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
 | P3-4 | mandatory | candidate-source table not consumed in selection | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R2B); 4 OPEN pre-enable residuals R2B-P3-1..4 |
-| P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | OPEN (R2) |
+| P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | IMPLEMENTED — awaiting independent review (R2C) |
 | P3-6 | mandatory | canonical-ID collision risk | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-8 | **mandatory** | provider removal can preserve stale open-position state | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1.1) |
@@ -112,7 +116,7 @@ enablement**, and the R2 blockers (P3-4, P3-5, P3-6, P3-7, BLOCKER-S) remain ope
 | P3-R1-A | **mandatory (pre-enable)** | reused explicit provider `close_event_id` can mask a second close | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
 | P3-R1-B | **mandatory (pre-enable)** | legacy NULL transition-hash fallback skips some markers | IMPLEMENTED — awaiting independent review (R2A-0) |
 | P3-R1-C | **mandatory (pre-enable)** | remaining test-completeness items | IMPLEMENTED — awaiting independent review (R2A-0 + R2A-0.1) |
-| BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | OPEN (R2) |
+| BLOCKER-S | mandatory | hypothetical sizing not FX-normalized (from P2-2) | IMPLEMENTED — awaiting independent review (R2C) |
 
 > "mandatory" = must be resolved + independently reviewed before the flag is enabled
 > outside isolated tests. P3-2/P3-3/P3-8/P3-9 are now `RESOLVED FOR DEFAULT-OFF / UN-WIRED
@@ -366,8 +370,9 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   frozen-scope review accepted: `R2B_APPROVED_FOR_DISABLED_MERGE` (P0/P1/P2 = 0; P3 = 4).
   Resolved only for merging while the feature remains default-off, un-wired and not migrated in
   production. Runtime enablement remains blocked by the four R2B pre-enable residuals below.
-  R2C blockers remain OPEN: P3-5 (inherited/open-book portfolio heat), BLOCKER-S (FX-normalized
-  sizing).
+  The R2C blockers P3-5 (inherited/open-book portfolio heat) and BLOCKER-S (FX-normalized
+  sizing) are implemented and approved for disabled merge (R2C), but remain NOT resolved for
+  runtime enablement until R2C is merged/deployed and the R2B residuals below are closed.
 - **R2B pre-enable residuals — OPEN — mandatory before runtime enablement:**
   - **R2B-P3-1 — candidate-store error observability:** `candidate_store_unavailable` and
     `candidate_malformed` reason codes exist, but candidate DB/read failures currently propagate
@@ -391,22 +396,6 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
     but the lock is acquired later than the other multi-row lifecycle APIs. Before enablement:
     use explicit `BEGIN IMMEDIATE`; add a TTL-update fault-injection rollback test; verify
     concurrent deactivation/TTL operations fail or serialize safely.
-
-### P3-5 — Portfolio heat ignores inherited/open-book exposure (mandatory)
-- **Risk:** the heat cap is not a true aggregate; with real inherited positions, new
-  selections could be approved that breach total portfolio heat.
-- **Current behavior:** `_apply_contention` seeds `heat_used = 0.0` and accumulates only
-  newly selected candidates' risk; open / `EXIT_ONLY` positions consume a slot but
-  contribute no risk to the heat sum. (Under the frozen `5×0.5%` params the slot cap binds
-  first, so heat is not currently the binding constraint.)
-- **Why the disabled merge is safe:** shadow-only; no real positions; figures are
-  hypothetical.
-- **Required correction before enablement:** receive a position/risk snapshot and seed
-  `heat_used` with existing planned-stop risk for **EXIT_ONLY**, **POSITION_OPEN**, and
-  pending accepted intents where applicable. No existing exposure may be ignored.
-- **Required test:** with an injected open-book risk snapshot, heat binds on the aggregate
-  (inherited + new) and rejects with `portfolio_heat_exceeded` when total exceeds the cap.
-- **Owner/Status:** universe owner — **OPEN**.
 
 ### P3-6 — Canonical-ID collision risk (mandatory)
 - **Risk:** `canonical_id = {US|LSE|EU}_{symbol}` (region from currency) can silently merge
@@ -542,7 +531,45 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   ATR) consistently, recording FX source/date, before any real or paper sizing is used.
 - **Required test:** a GBP/GBX instrument's hypothetical risk_usd/notional_usd equal the
   USD-normalized expectation; USD unchanged.
-- **Owner/Status:** universe owner — **OPEN**.
+- **Correction (R2C):** new `bot/universe/sizing.py` sizes into the **account base currency**
+  via an INJECTED, broker-free `BaseFxRateProvider` (rate = BASE per 1 instrument unit), in
+  deterministic `Decimal` arithmetic. same-currency → rate 1 (no provider call); cross-currency
+  → a fresh (≤ `MAX_FX_RATE_AGE_SECONDS`), valid, currency-matched rate or FAIL CLOSED
+  (`fx_rate_missing`/`fx_rate_stale`/`fx_rate_invalid`/`fx_currency_mismatch`/
+  `fx_provider_unavailable`/`sizing_currency_unresolved`). USD is NEVER assumed and 1.0 is
+  NEVER substituted for a cross-currency pair. Quantity is floored (ROUND_DOWN); a candidate
+  that cannot be sized within the base-currency per-trade risk limit / notional cap is blocked
+  (`sizing_*`). Surfaced through the **default-off** evaluator gate `enforce_portfolio_heat`
+  (the FX-normalized sizing is the prerequisite step of that gate). Tests:
+  `tests/universe/test_r2c_sizing.py`.
+- **Owner/Status:** universe owner — **IMPLEMENTED — awaiting independent review (R2C)**.
+  Not resolved; the implementation session did not run the independent review.
+
+### P3-5 — Portfolio heat ignores inherited/open-book exposure (mandatory)
+- **Risk:** the pre-R2C contention check accumulated heat only WITHIN a single shadow run; an
+  inherited book (existing open positions + open orders / pending intents) could already be at
+  or over the limit and a new entry would still be admitted.
+- **Current behavior (pre-R2C):** `_apply_contention` summed only the run's own hypothetical
+  orders against `MAX_PORTFOLIO_HEAT`.
+- **Why the disabled merge is safe:** contention output is hypothetical and unused; no orders.
+- **Correction (R2C):** new `bot/universe/portfolio_heat.py` computes
+  `post_trade_heat = existing_open_position_risk + open_order/pending_intent_risk +
+  proposed_risk` (all normalized to base currency) from an INJECTED, broker-free
+  `PortfolioRiskProvider` snapshot, compared against `MAX_PORTFOLIO_HEAT × base-currency
+  equity` (or an explicit absolute base limit). FAIL CLOSED on a missing/stale/date-mismatched/
+  currency-incomplete/identity-incomplete snapshot or missing/stale/invalid equity
+  (`portfolio_snapshot_missing`/`_stale`/`_date_mismatch`, `portfolio_open_order_snapshot_stale`,
+  `portfolio_currency_unresolved`, `portfolio_identity_unresolved`, `portfolio_equity_missing`/
+  `_stale`/`_invalid`); an inherited book already over the limit → `open_book_heat_exceeded`, a
+  proposed entry crossing it → `portfolio_heat_exceeded`. Freshness is enforced against an
+  INJECTED `evaluation_time` (daily snapshot date == evaluation trading date; entry-time /
+  open-order age ≤ 15 min). Heat gates NEW entries only — never forces liquidation, never alters
+  an existing position. Surfaced through the **default-off** evaluator gate
+  `enforce_portfolio_heat`. Optional schema-v7 `risk_evaluation` (+ append-only
+  `risk_evaluation_audit`) records the decision evidence. Tests:
+  `tests/universe/test_r2c_heat.py`, `test_r2c_gate.py`, `test_r2c_persistence.py`.
+- **Owner/Status:** universe owner — **IMPLEMENTED — awaiting independent review (R2C)**.
+  Not resolved; the implementation session did not run the independent review.
 
 ---
 
@@ -556,9 +583,11 @@ Before `enable_dynamic_universe_shadow` is set true **anywhere outside isolated 
    runtime enablement** (see their entries above).
 3. **Phase R2:** P3-4 (candidate-source integration) is `RESOLVED FOR DEFAULT-OFF / UN-WIRED
    MERGE` (R2B), with four OPEN pre-enable residuals **R2B-P3-1..4** — mandatory before runtime
-   enablement (see the P3-4 entry above). **Still OPEN for Phase R2:** P3-5 (inherited/open-book
-   portfolio heat), P3-6 (canonical identity), P3-7 (IBKR verification status), BLOCKER-S
-   (FX-normalized sizing).
+   enablement (see the P3-4 entry above). P3-6 (canonical identity) and P3-7 (IBKR verification
+   status) are `IMPLEMENTED — awaiting independent review` (R2A-1). **BLOCKER-S (FX-normalized
+   sizing)** and **P3-5 (inherited/open-book portfolio heat)** are now `IMPLEMENTED — awaiting
+   independent review` (R2C) — NOT resolved; a separate frozen-scope independent review is
+   required, and the R2B residuals **R2B-P3-1..4** remain mandatory before runtime enablement.
 4. A separate runtime-wiring change (into `main.py`/scheduler) is proposed and reviewed on
    its own — it is explicitly **out of scope** here.
 

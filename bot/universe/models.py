@@ -235,6 +235,38 @@ class Reason:
     SLOT_CAP_REACHED = "slot_cap_reached"
     SECTOR_CAP_REACHED = "sector_cap_reached"
     PORTFOLIO_HEAT_EXCEEDED = "portfolio_heat_exceeded"
+    # ── R2C (BLOCKER-S FX-normalized sizing / P3-5 inherited/open-book heat) ──
+    # CONTENTION-LEVEL new-entry blocks (recorded as a rejected_reason), NOT structural
+    # eligibility failures — deliberately NOT in BLOCKING_REASONS (mirrors PORTFOLIO_HEAT_EXCEEDED
+    # above). All FAIL CLOSED: any missing/stale/invalid/mismatched FX, sizing, snapshot,
+    # equity, or heat input blocks the NEW entry only — it never forces liquidation, never
+    # alters an existing position, and never calls a broker. base currency is NEVER defaulted
+    # to USD and FX is NEVER defaulted to 1.0 for a cross-currency instrument.
+    #   FX normalization into the account/base currency (distinct from the USD-eligibility
+    #   normalization above — the fx_rate_stale / fx_rate_invalid string values are shared):
+    FX_RATE_MISSING = "fx_rate_missing"                        # provider returned no rate
+    FX_PROVIDER_UNAVAILABLE = "fx_provider_unavailable"        # no provider / provider error
+    FX_CURRENCY_MISMATCH = "fx_currency_mismatch"              # listing/mapping/snapshot disagree
+    SIZING_CURRENCY_UNRESOLVED = "sizing_currency_unresolved"  # base/instrument currency unknown
+    #   Position sizing in base currency:
+    SIZING_INPUT_MISSING = "sizing_input_missing"
+    SIZING_PRICE_MISSING = "sizing_price_missing"
+    SIZING_STOP_MISSING = "sizing_stop_missing"
+    SIZING_QUANTITY_INVALID = "sizing_quantity_invalid"
+    SIZING_RISK_EXCEEDS_LIMIT = "sizing_risk_exceeds_limit"
+    SIZING_NOTIONAL_EXCEEDS_LIMIT = "sizing_notional_exceeds_limit"
+    SIZING_FX_UNAVAILABLE = "sizing_fx_unavailable"
+    #   Inherited / open-book portfolio heat:
+    PORTFOLIO_SNAPSHOT_MISSING = "portfolio_snapshot_missing"
+    PORTFOLIO_SNAPSHOT_STALE = "portfolio_snapshot_stale"
+    PORTFOLIO_SNAPSHOT_DATE_MISMATCH = "portfolio_snapshot_date_mismatch"
+    PORTFOLIO_OPEN_ORDER_SNAPSHOT_STALE = "portfolio_open_order_snapshot_stale"
+    PORTFOLIO_CURRENCY_UNRESOLVED = "portfolio_currency_unresolved"
+    PORTFOLIO_IDENTITY_UNRESOLVED = "portfolio_identity_unresolved"
+    OPEN_BOOK_HEAT_EXCEEDED = "open_book_heat_exceeded"
+    PORTFOLIO_EQUITY_MISSING = "portfolio_equity_missing"
+    PORTFOLIO_EQUITY_STALE = "portfolio_equity_stale"
+    PORTFOLIO_EQUITY_INVALID = "portfolio_equity_invalid"
     ELIGIBLE = "eligible"
     PASSED_HYSTERESIS = "passed_entry_hysteresis"
 
