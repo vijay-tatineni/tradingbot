@@ -320,3 +320,20 @@ BACK; a fault at any seam — `after_risk_evaluation_insert` / `after_audit_inse
 writes nothing here; the store is an explicit, opt-in evidence trail exercised by tests
 (`tests/universe/test_r2c_persistence.py`). No production `universe.db` is created or migrated
 by R2C.
+
+## R2B residuals — candidate selection audit (no schema change)
+
+**No schema v8 required.** The R2B residual cleanup adds NO table, column, index, or trigger;
+the schema head remains **v7**. The two new `candidate_audit` event types —
+`SELECTED_EFFECTIVE` (one per effective candidate) and `SUPPRESSED` (one per
+higher-precedence-suppressed candidate, `reason_code = suppressed_by_higher_precedence_source`)
+— are written by `bot.universe.candidate_store.CandidateStore.record_selection_audit`
+idempotently via a **check-then-insert under the existing `BEGIN IMMEDIATE` write lock**: a row
+is appended only if `(candidate_id, trading_date, event_type)` is not already present, so a
+duplicate same-date evaluation creates no new rows. This relies only on the existing v6
+`candidate_audit` table and preserves its append-only contract (INSERT-only; the
+BEFORE-UPDATE / BEFORE-DELETE triggers are never fired). A structural partial-unique index was
+considered and rejected for this tranche because the write-lock-guarded check-then-insert is
+sufficient for the single-writer-per-cycle usage and avoids a schema bump (and the consequent
+churn of the version-pinned migration tests). Selection audit is written ONLY on the
+gate-enabled (`require_candidate_source=True`) path; the default-off path writes nothing.

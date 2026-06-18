@@ -107,7 +107,7 @@ pre-enable residuals (the R2B residuals R2B-P3-1..4 and P3-R1-A/B/C) are closed.
 | P3-1 | advisory (doc only) | three docs outside declared naming scope | acknowledged |
 | P3-2 | mandatory | `cooldown_until` stores a session count, not a date | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1) |
 | P3-3 | **mandatory** | state + history writes not atomic together | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R1 atomic + R1.1/R1.3 runtime replay integrity); see residual P3-R1-B |
-| P3-4 | mandatory | candidate-source table not consumed in selection | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R2B); 4 OPEN pre-enable residuals R2B-P3-1..4 |
+| P3-4 | mandatory | candidate-source table not consumed in selection | RESOLVED FOR DEFAULT-OFF / UN-WIRED MERGE (R2B); 4 pre-enable residuals R2B-P3-1..4 IMPLEMENTED — awaiting independent review (still mandatory before enablement) |
 | P3-5 | mandatory | portfolio heat ignores inherited/open-book exposure | IMPLEMENTED — awaiting independent review (R2C) |
 | P3-6 | mandatory | canonical-ID collision risk | IMPLEMENTED — awaiting independent review (R2A-1) |
 | P3-7 | **mandatory** | IBKR mapping check ignores verification status | IMPLEMENTED — awaiting independent review (R2A-1) |
@@ -373,7 +373,8 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
   The R2C blockers P3-5 (inherited/open-book portfolio heat) and BLOCKER-S (FX-normalized
   sizing) are implemented and approved for disabled merge (R2C), but remain NOT resolved for
   runtime enablement until R2C is merged/deployed and the R2B residuals below are closed.
-- **R2B pre-enable residuals — OPEN — mandatory before runtime enablement:**
+- **R2B pre-enable residuals — IMPLEMENTED — awaiting independent review (R2B residuals
+  tranche); NOT yet resolved — mandatory before runtime enablement:**
   - **R2B-P3-1 — candidate-store error observability:** `candidate_store_unavailable` and
     `candidate_malformed` reason codes exist, but candidate DB/read failures currently propagate
     as exceptions. Safety remains fail-closed because failure occurs before contention and TTL
@@ -382,20 +383,53 @@ reconciliation. NOT yet resolved — see `docs/dynamic_universe_pre_enable_r2a0_
     `candidate_store_unavailable`; convert malformed/unknown persisted rows to
     `candidate_malformed`; block new entry without crashing the evaluation cycle; add regression
     tests.
+    - **Resolution (R2B residuals) — IMPLEMENTED, awaiting independent review:**
+      `effective_candidates` now catches any `sqlite3.Error` and returns
+      `EffectiveSelection(store_unavailable=True)`; the evaluator additionally guards store
+      construction. On a read failure the evaluator blocks EVERY new entry with
+      `candidate_store_unavailable`, records NO selection audit, and does NOT tick TTL (no
+      mutation); the cycle never crashes and open positions keep being managed. Tests:
+      `tests/universe/test_r2b_residuals.py` (missing-table / corrupt-DB → `store_unavailable`;
+      evaluator block-all; open-position management).
   - **R2B-P3-2 — unknown persisted source/status:** supported write APIs reject unknown sources,
     but a raw/injected ACTIVE row with an unknown source is not defensively rejected by
     `effective_candidates`. Before enablement: add enum CHECK constraints where migration policy
     permits; and/or defensively reject unknown source/status as `candidate_malformed`; add a
     raw-row regression test.
+    - **Resolution (R2B residuals) — IMPLEMENTED, awaiting independent review:** defensive
+      read-path validation on the HIGHEST-precedence candidate per instrument rejects an unknown
+      source, a present-but-non-integer TTL, or a present-but-unparseable effective/generation
+      date as `candidate_malformed`, and a literal unknown (non-enum) status is caught by a
+      separate pass — all fail closed. A malformed higher-precedence candidate BLOCKS the
+      instrument and never falls through to a lower-precedence one. Tests cover unknown source,
+      unknown status, invalid TTL, invalid effective date, and the no-fall-through guarantee.
   - **R2B-P3-3 — selection audit completeness:** `SUPPRESSED` and `SELECTED_EFFECTIVE` are
     defined but not persisted. Before enablement, decide and implement one frozen policy:
     persist deterministic selection/suppression audit events without creating duplicate
     read-path noise; or explicitly remove those event types from the promised audit contract.
+    - **Resolution (R2B residuals) — IMPLEMENTED, awaiting independent review:** new
+      `CandidateStore.record_selection_audit` persists `SELECTED_EFFECTIVE` (per effective
+      candidate) and `SUPPRESSED` (per suppressed candidate, reason
+      `suppressed_by_higher_precedence_source`) idempotently — at most once per
+      `(candidate_id, trading_date, event_type)` via a check-then-insert under the
+      `BEGIN IMMEDIATE` write lock, so a duplicate same-date evaluation adds no rows. It is
+      called ONLY on the gate-enabled path (feature-off writes nothing) and preserves
+      append-only (INSERT-only; no UPDATE/DELETE). **No schema v8 required** (see the schema
+      doc). Tests cover once-per-date persistence, duplicate-evaluation idempotency, and
+      append-only preservation.
   - **R2B-P3-4 — transaction consistency and TTL fault coverage:** `deactivate_candidate_atomic`
     currently uses a deferred transaction rather than `BEGIN IMMEDIATE`. Atomicity is preserved,
     but the lock is acquired later than the other multi-row lifecycle APIs. Before enablement:
     use explicit `BEGIN IMMEDIATE`; add a TTL-update fault-injection rollback test; verify
     concurrent deactivation/TTL operations fail or serialize safely.
+    - **Resolution (R2B residuals) — IMPLEMENTED, awaiting independent review:**
+      `deactivate_candidate_atomic` now uses an explicit `BEGIN IMMEDIATE` (status UPDATE +
+      append-only audit COMMIT/ROLL BACK together), consistent with the other lifecycle writes.
+      `tick_ttl_atomic` gained fault-injection seams; tests prove a fault AFTER a TTL decrement,
+      AFTER an expiry status flip, or AFTER an EXPIRED audit insert rolls the whole batch back
+      (no partial decrement / orphan audit), the connection is discarded and a retry succeeds
+      cleanly, and a concurrent writer either fails cleanly (`OperationalError`, no partial
+      data) or serializes after the lock releases.
 
 ### P3-6 — Canonical-ID collision risk (mandatory)
 - **Risk:** `canonical_id = {US|LSE|EU}_{symbol}` (region from currency) can silently merge
@@ -582,8 +616,10 @@ Before `enable_dynamic_universe_shadow` is set true **anywhere outside isolated 
 2. The pre-enable residuals **P3-R1-A, P3-R1-B, P3-R1-C** remain **OPEN — mandatory before
    runtime enablement** (see their entries above).
 3. **Phase R2:** P3-4 (candidate-source integration) is `RESOLVED FOR DEFAULT-OFF / UN-WIRED
-   MERGE` (R2B), with four OPEN pre-enable residuals **R2B-P3-1..4** — mandatory before runtime
-   enablement (see the P3-4 entry above). P3-6 (canonical identity) and P3-7 (IBKR verification
+   MERGE` (R2B); its four pre-enable residuals **R2B-P3-1..4** are now `IMPLEMENTED — awaiting
+   independent review` (R2B residuals tranche) and remain **mandatory before runtime
+   enablement** until that review resolves them (see the P3-4 entry above). P3-6 (canonical
+   identity) and P3-7 (IBKR verification
    status) are `IMPLEMENTED — awaiting independent review` (R2A-1). **BLOCKER-S (FX-normalized
    sizing)** and **P3-5 (inherited/open-book portfolio heat)** are now `IMPLEMENTED — awaiting
    independent review` (R2C) — NOT resolved; a separate frozen-scope independent review is

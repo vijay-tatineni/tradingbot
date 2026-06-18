@@ -28,6 +28,7 @@ These are hypothetical figures only — never orders.
 import hashlib
 import json
 import logging
+import sqlite3
 from typing import Callable, Optional
 
 from datetime import date, datetime
@@ -213,15 +214,48 @@ class ShadowEvaluator:
         # Read effective candidates FIRST (selection on current TTL), then count the completed
         # session (read-then-count TTL). Default-off → effective_selection is None and
         # contention behaves exactly as before.
+        #
+        # R2B-P3-1 (error observability): a candidate-store/database read failure must NOT crash
+        # the cycle. effective_candidates() returns a fail-closed result (store_unavailable=True
+        # or an internally-caught error); construction (migrate) is additionally guarded here.
+        # On failure: block ALL new entries (candidate_store_unavailable in _apply_contention),
+        # record NO selection audit, and DO NOT tick TTL (no mutation). Existing open positions
+        # are derived per-instrument and are unaffected — they keep being managed.
         effective_selection = None
+        candidate_store_failed = False
         if self.require_candidate_source:
-            effective_selection = self._candidate_gate_store().effective_candidates(trading_date)
+            try:
+                effective_selection = self._candidate_gate_store().effective_candidates(
+                    trading_date)
+                candidate_store_failed = bool(
+                    getattr(effective_selection, "store_unavailable", False))
+            except sqlite3.Error:
+                candidate_store_failed = True
+            if candidate_store_failed:
+                from bot.universe.candidate_store import EffectiveSelection
+                effective_selection = EffectiveSelection(store_unavailable=True)
+                logger.warning("dynamic-universe shadow run %s: candidate store unavailable — "
+                               "blocking all new entries (fail-closed), TTL not ticked",
+                               trading_date)
         # R2C gate needs the evaluation trading date (snapshot date-match). Stored here so the
         # contention helper keeps its existing signature; only read when enforce_portfolio_heat.
         self._run_trading_date = trading_date
         contention = self._apply_contention(outcomes, effective_selection)
-        if self.require_candidate_source:
-            self._candidate_gate_store().tick_ttl_atomic(trading_date)
+        if self.require_candidate_source and not candidate_store_failed:
+            # R2B-P3-3: persist idempotent SELECTED_EFFECTIVE / SUPPRESSED audit (best-effort —
+            # a write failure is logged but never crashes the cycle). Then count the completed
+            # session. Both are skipped when the store read failed (no audit, no TTL mutation).
+            try:
+                self._candidate_gate_store().record_selection_audit(
+                    trading_date, effective_selection)
+            except sqlite3.Error:
+                logger.warning("dynamic-universe shadow run %s: selection audit write failed",
+                               trading_date)
+            try:
+                self._candidate_gate_store().tick_ttl_atomic(trading_date)
+            except sqlite3.Error:
+                logger.warning("dynamic-universe shadow run %s: TTL tick failed (will retry "
+                               "next session; idempotent per date)", trading_date)
         logger.info("dynamic-universe shadow run %s: evaluated=%d expired_candidates=%d "
                     "selected=%d", trading_date,
                     sum(1 for o in outcomes if "skipped" not in o), expired,
@@ -767,16 +801,25 @@ class ShadowEvaluator:
         # by its verified instrument_uid). Raw source output cannot bypass this store. An
         # instrument blocked by the candidate gate is recorded with its fail-closed reason.
         if effective_selection is not None:
-            gated, blocked_by_candidate = [], []
-            eff, blk = effective_selection.effective, effective_selection.blocked
-            for o in candidates:
-                iuid = o.get("instrument_uid")
-                if iuid and iuid in eff:
-                    gated.append(o)
-                else:
-                    reason = blk.get(iuid, Reason.CANDIDATE_INACTIVE)
-                    blocked_by_candidate.append({**o, "rejected_reason": reason})
-            candidates = gated
+            if getattr(effective_selection, "store_unavailable", False):
+                # R2B-P3-1: candidate-store read failure → fail closed. Block EVERY new-entry
+                # candidate with candidate_store_unavailable; none enters contention. Open
+                # positions (open_now) are untouched and keep being managed.
+                blocked_by_candidate = [
+                    {**o, "rejected_reason": Reason.CANDIDATE_STORE_UNAVAILABLE}
+                    for o in candidates]
+                candidates = []
+            else:
+                gated, blocked_by_candidate = [], []
+                eff, blk = effective_selection.effective, effective_selection.blocked
+                for o in candidates:
+                    iuid = o.get("instrument_uid")
+                    if iuid and iuid in eff:
+                        gated.append(o)
+                    else:
+                        reason = blk.get(iuid, Reason.CANDIDATE_INACTIVE)
+                        blocked_by_candidate.append({**o, "rejected_reason": reason})
+                candidates = gated
         else:
             blocked_by_candidate = []
         candidates.sort(key=params.candidate_sort_key)

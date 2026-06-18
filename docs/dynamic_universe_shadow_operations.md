@@ -214,3 +214,21 @@ persists a schema-v7 `risk_evaluation` row + append-only audit event (one `BEGIN
 The default contention path writes nothing; recording is opt-in. No production `universe.db` is
 created or migrated by R2C. **Enabling this gate does not authorize runtime wiring, scheduler
 activation, shadow soak, or paper/live trading.**
+
+## R2B residuals — candidate-store error observability & atomicity (operations)
+
+- **Store-read failure is non-fatal.** A candidate-store/database read failure during a
+  gate-enabled run (`require_candidate_source=True`) no longer crashes the evaluation cycle:
+  `effective_candidates` returns a fail-closed `store_unavailable` result, the evaluator blocks
+  every new entry with `candidate_store_unavailable`, **does not tick TTL** (no mutation), and
+  **writes no selection audit**. The TTL tick and selection-audit writes are individually
+  wrapped so a transient write failure is logged (and retried next session — TTL counting is
+  idempotent per date) rather than aborting the cycle. Existing open positions keep being
+  managed throughout.
+- **Lifecycle writes are atomic.** `deactivate_candidate_atomic` now uses an explicit
+  `BEGIN IMMEDIATE` (status UPDATE + append-only audit COMMIT/ROLL BACK together), matching the
+  other multi-row lifecycle writes; `tick_ttl_atomic` has fault-injection seams proving a fault
+  after any TTL decrement / expiry flip / EXPIRED-audit insert rolls the whole batch back. A
+  concurrent writer either fails cleanly (`OperationalError`, no partial data) or serializes
+  after the lock releases. These remain shadow-only, broker-free, and default-off; the feature
+  stays un-wired and no production `universe.db` is created or migrated.
