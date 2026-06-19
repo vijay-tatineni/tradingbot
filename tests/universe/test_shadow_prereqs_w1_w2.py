@@ -229,12 +229,21 @@ def test_shadow_path_modules_import_no_broker_and_no_fetch_bars():
 
 
 def test_w1_w2_modules_import_no_broker_at_import_time():
-    # importing the new modules must have no side effects and pull in no broker.
-    import importlib
+    # In a FRESH interpreter, importing the two new modules must pull in NO broker module
+    # (proves import has no broker side effect — not merely that *this* process lacks it).
+    import subprocess
     import sys
-    for name in ("bot.universe.bar_provider", "bot.universe.shadow_runtime"):
-        importlib.import_module(name)
-    assert "ib_insync" not in sys.modules or True   # not forced-loaded by our modules
-    # the modules expose only pure boundary symbols
+    code = (
+        "import sys\n"
+        "import bot.universe.bar_provider, bot.universe.shadow_runtime\n"
+        "bad = [m for m in sys.modules if m == 'ib_insync' or m.startswith('ib_insync.')\n"
+        "       or m == 'trading_ig' or m.startswith('trading_ig.')\n"
+        "       or m.startswith('bot.brokers')]\n"
+        "sys.exit(1 if bad else 0)\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(REPO),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"a broker module was imported at import time: {r.stderr}"
+    # the modules expose the intended pure boundary symbols
     assert hasattr(bp, "CompletedBarProvider") and hasattr(bp, "safe_completed_bar")
     assert hasattr(sr, "validate_shadow_config") and hasattr(sr, "build_shadow_scheduler")
