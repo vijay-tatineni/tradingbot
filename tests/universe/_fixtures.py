@@ -252,3 +252,48 @@ def pos_risk(risk_base, *, currency="USD", instrument_uid="iuid-1", observed_at=
     from bot.universe.portfolio_heat import PositionRisk
     return PositionRisk(currency=currency, normalized_risk_base=risk_base,
                         instrument_uid=instrument_uid, observed_at=observed_at)
+
+
+# ── W1 broker-free completed-bar provider stub (BLOCKER-W1) ────────────
+class StubCompletedBarProvider:
+    """Broker-free, INJECTED completed-bar availability stub (tests only). Records every call
+    (``.calls``) so a test can prove the off/invalid path never consults it. Never imports or
+    calls a broker / IBKR / IG / EODHD / live data API — it returns hard-coded fixtures.
+
+    Modes:
+      available (default) → a complete, fresh snapshot covering the requested trading_date.
+      raises=<exc>        → raise (exercise fail-closed on provider exception).
+      mode='unavailable'  → available=False (e.g. holiday / late bar).
+      mode='incomplete'   → available=True but missing source/version proof.
+      mode='stale'        → available=True but bar_end_time on a DIFFERENT date.
+      is_live=True        → declares a live integration (must be rejected by validation).
+    """
+    def __init__(self, mode="available", raises=None, is_live=False, source="stub_bars",
+                 version="v1"):
+        self.mode = mode
+        self.raises = raises
+        self.is_live = bool(is_live)
+        self.source = source
+        self.version = version
+        self.calls = []
+
+    def completed_bar(self, *, record, trading_date, timeframe):
+        from bot.universe.bar_provider import CompletedBarSnapshot
+        self.calls.append((record.get("instrument_uid") or record.get("canonical_instrument_id"),
+                           _date_iso(trading_date), timeframe))
+        if self.raises is not None:
+            raise self.raises
+        td = _date_iso(trading_date)
+        base = dict(trading_date=td, timeframe=timeframe,
+                    instrument_uid=record.get("instrument_uid"),
+                    listing_uid=record.get("listing_uid"))
+        if self.mode == "unavailable":
+            return CompletedBarSnapshot(available=False, reason="bar_unavailable", **base)
+        if self.mode == "incomplete":
+            return CompletedBarSnapshot(available=True, bar_end_time=f"{td}T21:00:00Z",
+                                        source=None, version=None, **base)
+        if self.mode == "stale":
+            return CompletedBarSnapshot(available=True, bar_end_time="2000-01-01T21:00:00Z",
+                                        source=self.source, version=self.version, **base)
+        return CompletedBarSnapshot(available=True, bar_end_time=f"{td}T21:00:00Z",
+                                    source=self.source, version=self.version, **base)

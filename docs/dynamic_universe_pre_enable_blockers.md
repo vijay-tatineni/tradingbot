@@ -631,3 +631,48 @@ Neither the R1–R1.3 work nor this register changes the posture: the foundation
 default-off and un-wired. Marking these items resolved-for-disabled-merge does **not**
 authorize enablement, scheduler wiring, production migration, shadow soak, paper/live trading,
 or Phase R2.
+
+---
+
+## Shadow-wiring prerequisites (Gate C) — BLOCKER-W1 / BLOCKER-W2
+
+These two prerequisites were raised by the shadow-readiness design packet
+(`/root/deployment_records/dynamic_universe_shadow_readiness_design.md`, §11) as **mandatory
+before runtime wiring**. They are implemented as inert boundary code ONLY — no runtime startup
+is wired, no DB is created, no provider is called, and the feature stays default-off.
+
+- **BLOCKER-W1 — broker-free completed-bar provider boundary — IMPLEMENTED — awaiting
+  independent review.** The only existing daily-bar fetcher (`main.py:_regime_bars_fetcher` →
+  `broker.fetch_bars`) is a broker call and must not be used by the shadow path. New
+  `bot/universe/bar_provider.py` defines an INJECTED, broker-free `CompletedBarProvider`
+  protocol + an immutable `CompletedBarSnapshot` (identity, trading_date, timeframe,
+  `bar_end_time`, `source`, `version`, availability) and a fail-closed `safe_completed_bar` /
+  `as_bar_available_fn` adapter (the scheduler's `bar_available_fn` seam). A missing provider, a
+  provider exception, a malformed/mismatched result, an unavailable bar, or a stale/incomplete
+  bar ALL resolve to `available=False` with a stable reason; the boundary never raises, never
+  reports available without full proof, imports no broker, and fetches no live data.
+- **BLOCKER-W2 — lazy, flag-gated, side-effect-free construction — IMPLEMENTED — awaiting
+  independent review.** Constructing `Registry`/`CandidateStore`/`IdentityStore` (or
+  `seed_registry`) runs `migrate()` → `sqlite3.connect()`, creating the DB file even with the
+  flag off. New `bot/universe/shadow_runtime.py` adds `validate_shadow_config` (PURE — no stat/
+  open/connect/migrate) and a lazy `build_shadow_scheduler` factory that validates FIRST and
+  constructs the Registry/evaluator/scheduler ONLY when the flag is on and the config is fully
+  valid. Flag off / missing-or-unsafe DB path / missing provider / live-provider-without-approval
+  → fail closed with a stable reason and ZERO construction (no Registry/store/provider, no
+  `sqlite3.connect`, no `migrate`, no DB file, no provider call). The shadow DB path is validated
+  (no filesystem touch) against the production DB basenames (`positions.db`/`regime.db`/
+  `backtest.db`/`learning_loop.db`/… and `universe.db`).
+- **NOT runtime activation.** No `main.py`/`api_server.py` wiring, scheduler startup, shadow
+  enablement, service restart, production `universe.db`/`universe_shadow.db`, migration, or
+  broker/provider call is part of this tranche. Tests:
+  `tests/universe/test_shadow_prereqs_w1_w2.py`.
+
+### Shadow-wiring prereq note — realpath/symlink preflight (W1W2-2)
+
+`bot/universe/shadow_runtime.validate_shadow_config` validates the shadow DB path by **basename
+only** (pure, no filesystem resolution), so it cannot catch a path that *resolves* through a
+symlink to a production DB. Before Gate E/F shadow enablement or a service restart, the operator
+must run a **realpath preflight** confirming the approved shadow DB path does not resolve to any
+production DB; if realpath cannot be resolved safely, shadow enablement must stop. This is an
+operator obligation documented in `docs/dynamic_universe_shadow_operations.md` and is **not** an
+authorization of runtime activation.
