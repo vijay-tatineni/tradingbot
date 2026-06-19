@@ -95,7 +95,8 @@ def test_enabled_missing_db_path_fails_closed(tmp_path):
 
 
 @pytest.mark.parametrize("dbname", ["positions.db", "regime.db", "backtest.db",
-                                    "learning_loop.db", "universe.db"])
+                                    "learning_loop.db", "universe.db", "tradingbot.db",
+                                    "orders.db", "executions.db", "fills.db"])
 def test_enabled_unsafe_db_path_fails_closed(tmp_path, dbname):
     reg = _SpyRegistryFactory()
     bars, cbars = SpyProvider({}), StubCompletedBarProvider()
@@ -106,6 +107,21 @@ def test_enabled_unsafe_db_path_fails_closed(tmp_path, dbname):
     # never constructed, never called a provider, never created a file
     assert reg.calls == [] and bars.calls == [] and cbars.calls == []
     assert _no_db_files(tmp_path)
+
+
+def test_unsafe_db_path_detected_after_normalization():
+    # A non-normalized path whose NORMALIZED basename is a production DB is rejected (pure
+    # string normalization via os.path.normpath/basename — no filesystem resolution).
+    cfg = sr.validate_shadow_config(
+        flags=ON, db_path="/root/trading/sub/../orders.db", bars_provider=SpyProvider({}),
+        completed_bar_provider=StubCompletedBarProvider())
+    assert cfg.ok is False and cfg.reason == sr.REASON_DB_PATH_UNSAFE
+    # a dedicated shadow basename (absolute or relative) is accepted by validation
+    for path in ("/root/trading/universe_shadow.db", "data/universe_shadow.db"):
+        ok = sr.validate_shadow_config(
+            flags=ON, db_path=path, bars_provider=SpyProvider({}),
+            completed_bar_provider=StubCompletedBarProvider())
+        assert ok.ok is True and ok.db_path == path
 
 
 def test_enabled_missing_bars_provider_fails_closed(tmp_path):

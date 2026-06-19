@@ -666,3 +666,13 @@ is wired, no DB is created, no provider is called, and the feature stays default
   enablement, service restart, production `universe.db`/`universe_shadow.db`, migration, or
   broker/provider call is part of this tranche. Tests:
   `tests/universe/test_shadow_prereqs_w1_w2.py`.
+
+### Shadow-wiring prereq note — realpath/symlink preflight (W1W2-2)
+
+`bot/universe/shadow_runtime.validate_shadow_config` validates the shadow DB path by **basename
+only** (pure, no filesystem resolution), so it cannot catch a path that *resolves* through a
+symlink to a production DB. Before Gate E/F shadow enablement or a service restart, the operator
+must run a **realpath preflight** confirming the approved shadow DB path does not resolve to any
+production DB; if realpath cannot be resolved safely, shadow enablement must stop. This is an
+operator obligation documented in `docs/dynamic_universe_shadow_operations.md` and is **not** an
+authorization of runtime activation.

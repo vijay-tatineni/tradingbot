@@ -249,3 +249,18 @@ activation, shadow soak, or paper/live trading.**
   universe package, or runs with the flag off, never creates/migrates a universe DB. The shadow
   DB must be a dedicated path (e.g. `universe_shadow.db`), validated against the production DB
   names; production `universe.db` stays absent. No DB is created by this tranche.
+
+### Realpath / symlink preflight (operator obligation before Gate E/F)
+
+`validate_shadow_config` (W2) intentionally performs **pure basename validation** and does
+**NOT** resolve symlinks or touch the filesystem — it is a side-effect-free decision, by design.
+Pure validation therefore cannot detect a shadow DB path that *resolves* (via a symlink or a
+bind/relative indirection) to a production DB.
+
+Therefore, **before Gate E/F shadow enablement or any service restart, the operator MUST perform
+a realpath check** confirming the approved shadow DB path does not resolve to any production DB
+path (e.g. `realpath <shadow_db_path>` and confirm it is not `positions.db` / `regime.db` /
+`backtest.db` / `learning_loop.db` / `universe.db` / `tradingbot.db` / `orders.db` /
+`executions.db` / `fills.db` or any other production store). **If realpath cannot be resolved
+safely, shadow enablement must STOP.** This preflight is an operational gate, not part of the
+pure in-process validation, and it does not authorize runtime activation.

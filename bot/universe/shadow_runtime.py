@@ -28,12 +28,16 @@ logger = logging.getLogger("universe.shadow_runtime")
 
 FLAG = "enable_dynamic_universe_shadow"
 
-# Production DB basenames the shadow path must NEVER open/create/collide with. ``universe.db`` is
-# included so the production research DB stays ABSENT — the shadow path must use a dedicated file
-# (e.g. ``universe_shadow.db``). Compared by basename only (a pure string op; no filesystem stat).
+# Production / common-dangerous DB basenames the shadow path must NEVER open/create/collide with.
+# ``universe.db`` is included so the production research DB stays ABSENT — the shadow path must
+# use a dedicated file (e.g. ``universe_shadow.db``). The trading/order/execution names guard
+# against ever opening an order-or-execution store from the shadow path. Compared by basename
+# only (a pure string op; NO filesystem stat — symlink/realpath resolution is an operator
+# preflight obligation before enablement, see docs, not part of this pure validation).
 PRODUCTION_DB_BASENAMES = frozenset({
     "positions.db", "regime.db", "backtest.db", "learning_loop.db", "layer3_silver.db",
     "advisor.db", "news.db", "trades.db", "trading.db", "universe.db",
+    "tradingbot.db", "orders.db", "executions.db", "fills.db",
 })
 
 # Stable fail-closed reason codes.
