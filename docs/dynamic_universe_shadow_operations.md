@@ -264,3 +264,32 @@ path (e.g. `realpath <shadow_db_path>` and confirm it is not `positions.db` / `r
 `executions.db` / `fills.db` or any other production store). **If realpath cannot be resolved
 safely, shadow enablement must STOP.** This preflight is an operational gate, not part of the
 pure in-process validation, and it does not authorize runtime activation.
+
+## Runtime wiring (Gate C) — startup decision & evidence (default-off, fail-closed)
+
+`main.py` now contains the **default-off, fail-closed** runtime wiring (`init_shadow_runtime` +
+`TradingBot._maybe_run_shadow_cycle`). It is **wiring, not activation**: in production the master
+flag is off and no providers are injected, so nothing constructs and the per-cycle seam is a
+guarded no-op. **This tranche does not enable the feature or start shadow mode.**
+
+At `TradingBot.__init__` the wiring logs exactly one startup-decision event (non-secret):
+
+| Event | When |
+|---|---|
+| `shadow_runtime_disabled`         | master flag absent/false (the production default) — nothing imported/constructed |
+| `shadow_runtime_db_path_unsafe`   | flag on, shadow DB path missing/unsafe (collides with a production DB basename) |
+| `shadow_runtime_provider_missing` | flag on, bars or completed-bar provider not injected |
+| `shadow_runtime_config_invalid`   | flag on, live-provider-without-approval / builder exception / boundary import failure |
+| `shadow_runtime_not_started`      | emitted alongside any flag-on-but-blocked reason above |
+| `shadow_runtime_ready`            | flag on AND shadow config fully valid AND non-live providers → shadow-only scheduler constructed |
+
+Events carry only stable reason codes — never credentials, tokens, account IDs, or raw
+broker/provider payloads.
+
+**To later ENABLE (a SEPARATE, independently-approved tranche — NOT authorized here):** the
+operator must (1) run the realpath preflight above; (2) add an explicit
+`settings.dynamic_universe_shadow.shadow_db_path` pointing at a dedicated non-production DB;
+(3) inject an approved broker-free bars provider + completed-bar provider into
+`TradingBot._resolve_shadow_runtime_config` (no live default exists); (4) set
+`enable_dynamic_universe_shadow=true`; (5) restart `cogniflowai-bot.service` and confirm a
+`shadow_runtime_ready` line. Until all hold, the wiring stays inert (`shadow_runtime_disabled`).

@@ -676,3 +676,43 @@ must run a **realpath preflight** confirming the approved shadow DB path does no
 production DB; if realpath cannot be resolved safely, shadow enablement must stop. This is an
 operator obligation documented in `docs/dynamic_universe_shadow_operations.md` and is **not** an
 authorization of runtime activation.
+
+## Gate C runtime wiring — IMPLEMENTED — awaiting independent review
+
+Builds on W1/W2 (which must be merged/deployed first). Wires the **default-off, fail-closed**
+runtime path in `main.py` only — the path that can LATER start the shadow scheduler when
+explicitly enabled and validly configured. **This is wiring, not activation.** The feature stays
+disabled (`enable_dynamic_universe_shadow=False` default), no DB/migration/provider/broker/order/
+service-restart is part of this tranche, and `api_server.py` is **untouched** (strictly enforced
+by `tests/universe/test_no_live_integration.py`).
+
+- **`main.py` wiring (lazy, default-off).** New module-level `init_shadow_runtime(flags, …)` and a
+  `TradingBot._maybe_run_shadow_cycle` per-cycle seam (called once after the regime scheduler).
+  The master flag is checked FIRST: when absent/false (production default) `init_shadow_runtime`
+  imports NOTHING from `bot.universe`, constructs nothing (no `sqlite3.connect`, no `migrate()`,
+  no DB file, no provider, no scheduler), and logs a single `shadow_runtime_disabled` line. There
+  is **no top-level `bot.universe` import** in `main.py`; the W1/W2 boundary is imported lazily,
+  inside `init_shadow_runtime`, and only after the flag is true (AST-asserted by tests).
+- **Enabled path fails closed unless fully configured.** When the flag is true, the wiring calls
+  the W2 `build_shadow_scheduler` (which `validate_shadow_config` FIRST). Missing/unsafe shadow DB
+  path, missing bars/completed-bar provider, a live provider without approval, or any
+  builder/provider exception → fail closed: no scheduler, no DB touch, no provider call, no crash,
+  and a stable non-secret reason logged.
+- **No live provider default (policy).** `TradingBot._resolve_shadow_runtime_config` supplies a
+  provider-injection seam but **no live default** — providers are `None`, and the shadow DB path
+  is read from an EXPLICIT config block (`settings.dynamic_universe_shadow.shadow_db_path`) only,
+  never the production default. So in production the build always fails closed at
+  `bars_provider_missing` and `shadow_runtime.scheduler` stays `None`; the per-cycle seam is a
+  guarded no-op. Candidate ingestion is NOT wired — the seam feeds the scheduler an empty
+  (placeholder) record set.
+- **Scheduler lifecycle.** A scheduler is constructed only on the fully-valid, non-live-provider
+  path (reachable only with injected stub providers in tests/rehearsal). It is shadow-only: it
+  submits/modifies/cancels no orders, opens/closes no positions, calls no broker, and writes only
+  to its dedicated shadow DB. Runtime scheduling stays disabled unless the flag is explicitly true
+  AND the config is fully valid.
+- Tests: `tests/universe/test_shadow_runtime_wiring.py` (flag-off no-op + no-import + no-connect;
+  enabled fail-closed for missing/unsafe path, missing/live provider, build exception; ready path
+  with stub builder; per-cycle seam no-op vs inert empty-records run; broker-free / order-safety /
+  `api_server.py` untouched). The pre-existing `test_no_live_integration.py` guard was updated so
+  `main.py` is the one allowed **lazy** integration point while `api_server.py` and every other
+  live module remain at **zero** `bot.universe` references.
