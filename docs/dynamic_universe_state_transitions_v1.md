@@ -338,3 +338,27 @@ and open positions keep being managed:
 **Selection audit:** on the gate-enabled path, `SELECTED_EFFECTIVE` / `SUPPRESSED` audit events
 are persisted idempotently per `(candidate_id, trading_date, event_type)` (a duplicate same-date
 evaluation adds no rows). On a `candidate_store_unavailable` read failure, no audit is written.
+
+## Shadow-wiring prerequisites W1/W2 — fail-closed reason codes (boundary only)
+
+Completed-bar availability boundary (`bot/universe/bar_provider.py`, W1) and shadow-config
+validation (`bot/universe/shadow_runtime.py`, W2) are fail-closed: an unproven/invalid condition
+never starts shadow work.
+
+| Reason | Condition (W1 completed-bar) |
+|--------|------------------------------|
+| `bar_provider_missing` | no completed-bar provider injected |
+| `bar_provider_error` | the injected provider raised |
+| `bar_provider_malformed` | provider returned a non-`CompletedBarSnapshot` |
+| `bar_date_mismatch` / `bar_timeframe_mismatch` | snapshot is for a different date/timeframe |
+| `bar_unavailable` | provider reports the bar not available (holiday/late bar) |
+| `bar_incomplete` | available but missing `bar_end_time`/`source`/`version` proof |
+| `bar_stale` | `bar_end_time` does not cover the requested trading_date |
+
+| Reason | Condition (W2 shadow-config) |
+|--------|------------------------------|
+| `flag_off` | `enable_dynamic_universe_shadow` not true (normal disabled posture; constructs nothing) |
+| `shadow_db_path_missing` | flag on but no shadow DB path configured |
+| `shadow_db_path_unsafe` | configured path collides with a production DB basename |
+| `bars_provider_missing` / `completed_bar_provider_missing` | a required provider is absent |
+| `live_provider_requires_approval` | a provider declares `is_live=True` (separate approval) |

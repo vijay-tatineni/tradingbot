@@ -232,3 +232,20 @@ activation, shadow soak, or paper/live trading.**
   concurrent writer either fails cleanly (`OperationalError`, no partial data) or serializes
   after the lock releases. These remain shadow-only, broker-free, and default-off; the feature
   stays un-wired and no production `universe.db` is created or migrated.
+
+## Shadow-wiring prerequisites W1/W2 (boundary code only — not wired)
+
+- **Completed-bar provider (W1).** The shadow path NEVER calls `broker.fetch_bars`. Completed-bar
+  availability is answered only through an INJECTED, broker-free `CompletedBarProvider`
+  (`bot/universe/bar_provider.py`); the concrete cached/offline implementation is a separate,
+  explicitly-approved tranche. `safe_completed_bar` is fail-closed: missing provider / exception /
+  malformed / date-or-timeframe mismatch / unavailable / stale / incomplete → not available, with
+  a stable reason. The scheduler consumes it via `as_bar_available_fn` (its existing
+  `bar_available_fn` seam) — never a broker client.
+- **Lazy flag-gated construction (W2).** Runtime wiring (a later tranche) MUST build the shadow
+  scheduler/stores via `bot/universe/shadow_runtime.build_shadow_scheduler`, which validates the
+  master flag + shadow DB path + providers BEFORE constructing anything. With the flag off or the
+  config invalid it constructs nothing and touches no filesystem — so a process that imports the
+  universe package, or runs with the flag off, never creates/migrates a universe DB. The shadow
+  DB must be a dedicated path (e.g. `universe_shadow.db`), validated against the production DB
+  names; production `universe.db` stays absent. No DB is created by this tranche.
