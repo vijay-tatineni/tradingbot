@@ -701,10 +701,12 @@ by `tests/universe/test_no_live_integration.py`).
 - **No live provider default (policy).** `TradingBot._resolve_shadow_runtime_config` supplies a
   provider-injection seam but **no live default** — providers are `None`, and the shadow DB path
   is read from an EXPLICIT config block (`settings.dynamic_universe_shadow.shadow_db_path`) only,
-  never the production default. So in production the build always fails closed at
-  `bars_provider_missing` and `shadow_runtime.scheduler` stays `None`; the per-cycle seam is a
-  guarded no-op. Candidate ingestion is NOT wired — the seam feeds the scheduler an empty
-  (placeholder) record set.
+  never the production default. So the production posture is `flag_off` (disabled); and the
+  fail-closed chain stops at the FIRST unmet gate — were the flag flipped on with no config it
+  fails at `shadow_db_path_missing`, and with a path but no injected provider at
+  `bars_provider_missing`. Either way `shadow_runtime.scheduler` stays `None` and the per-cycle
+  seam is a guarded no-op. Candidate ingestion is NOT wired — the seam feeds the scheduler an
+  empty (placeholder) record set.
 - **Scheduler lifecycle.** A scheduler is constructed only on the fully-valid, non-live-provider
   path (reachable only with injected stub providers in tests/rehearsal). It is shadow-only: it
   submits/modifies/cancels no orders, opens/closes no positions, calls no broker, and writes only

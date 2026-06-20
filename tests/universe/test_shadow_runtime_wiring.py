@@ -202,14 +202,13 @@ def test_enabled_missing_completed_bar_provider_fails_closed(tmp_path):
     assert rt.scheduler is None and not db.exists()
 
 
-def test_enabled_production_default_no_providers_fails_closed(tmp_path):
-    """The actual production wiring shape: flag ON but no providers injected (no live default)
-    → fail closed at bars_provider_missing, scheduler None, no DB."""
-    db = tmp_path / SAFE_DB
-    rt = main.init_shadow_runtime(ON, db_path=str(db), bars_provider=None,
+def test_enabled_production_default_config_fails_closed():
+    """The ACTUAL production wiring shape (no dynamic_universe_shadow config block): db_path None
+    AND providers None. Fail-closed stops at the FIRST unmet gate — the missing shadow DB path —
+    so the reason is shadow_db_path_missing (not provider). Scheduler None; nothing constructed."""
+    rt = main.init_shadow_runtime(ON, db_path=None, bars_provider=None,
                                   completed_bar_provider=None)
-    assert rt.ready is False and rt.reason == "bars_provider_missing"
-    assert rt.scheduler is None and not db.exists()
+    assert rt.ready is False and rt.reason == "shadow_db_path_missing" and rt.scheduler is None
 
 
 def test_enabled_live_provider_without_approval_fails_closed(tmp_path):

@@ -39,8 +39,10 @@ calls, paper trading, order submission, or deployment.
   and stores `self.shadow_runtime`. **`_resolve_shadow_runtime_config`** is the provider/path
   injection seam with **no live default**: providers are `None`, and `db_path` is read from an
   EXPLICIT `settings.dynamic_universe_shadow.shadow_db_path` only (never the production default).
-  So in production the build fails closed at `bars_provider_missing` and `self.shadow_runtime.
-  scheduler` is `None`.
+  So the production posture is `flag_off`; the fail-closed chain stops at the FIRST unmet gate —
+  `shadow_db_path_missing` if the flag were flipped on with no config, `bars_provider_missing`
+  once a path is set but no provider is injected — and `self.shadow_runtime.scheduler` is always
+  `None` in production.
 - **`TradingBot._maybe_run_shadow_cycle`** is the per-cycle seam, called once in the main loop
   immediately after `RegimeClassificationScheduler.maybe_run(...)`. It is a guarded no-op when
   `self.shadow_runtime.scheduler is None` (always, in production). When a scheduler exists (only
