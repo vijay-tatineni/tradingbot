@@ -29,6 +29,8 @@ import sqlite3
 import datetime
 import argparse
 import time
+from dataclasses import dataclass
+from typing import Optional
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -70,6 +72,121 @@ from bot.llm                   import create_llm
 # ── Future plugins (uncomment to activate) ────────────────────
 # from bot.plugins.macro_filter import MacroFilter
 # from bot.plugins.ml_override  import MLOverride
+
+
+# ── Dynamic Universe shadow runtime wiring (Gate C) ───────────────────────────
+# Default-off, fail-closed wiring that can LATER start the Dynamic Universe shadow
+# scheduler — but ONLY when the master flag is explicitly true AND a valid, broker-free
+# shadow configuration (a dedicated shadow DB path + injected non-live providers) is
+# supplied. This tranche WIRES the path (so it is reviewable) but does not ACTIVATE it.
+#
+# Inertness contract (verified by tests/universe/test_shadow_runtime_wiring.py):
+#   * No top-level ``bot.universe`` import in main.py — the W1/W2 boundary is imported
+#     LAZILY inside ``init_shadow_runtime`` and ONLY after the master flag is confirmed true.
+#   * Flag absent/false (the production default) → ``init_shadow_runtime`` returns immediately:
+#     nothing imported from bot.universe, nothing constructed, no ``sqlite3.connect``, no
+#     ``migrate()``, no DB file, no provider construction/call, no scheduler.
+#   * Flag true but config/provider invalid → ``build_shadow_scheduler`` (W2) fails closed —
+#     it validates first and constructs nothing / touches no filesystem — and a stable,
+#     non-secret reason is logged. No DB, no provider call, no scheduler.
+#   * No live provider default (policy, design §5): in production NO providers are injected,
+#     so the build always fails closed at ``bars_provider_missing`` and the scheduler stays
+#     None → the per-cycle seam (``TradingBot._maybe_run_shadow_cycle``) is a guarded no-op.
+#   * A constructed scheduler (reachable only with injected non-live stub providers, i.e.
+#     tests/rehearsal) is shadow-only: it submits/modifies/cancels no orders, opens/closes no
+#     positions, calls no broker, and writes only to its dedicated shadow DB.
+
+SHADOW_RUNTIME_DISABLED         = "shadow_runtime_disabled"
+SHADOW_RUNTIME_CONFIG_INVALID   = "shadow_runtime_config_invalid"
+SHADOW_RUNTIME_PROVIDER_MISSING = "shadow_runtime_provider_missing"
+SHADOW_RUNTIME_DB_PATH_UNSAFE   = "shadow_runtime_db_path_unsafe"
+SHADOW_RUNTIME_READY            = "shadow_runtime_ready"
+SHADOW_RUNTIME_NOT_STARTED      = "shadow_runtime_not_started"
+
+_SHADOW_MASTER_FLAG = "enable_dynamic_universe_shadow"
+
+# Map the W1/W2 validator's fail-closed reason codes → stable startup-evidence events.
+_SHADOW_REASON_EVENT = {
+    "flag_off":                        SHADOW_RUNTIME_DISABLED,
+    "shadow_db_path_missing":          SHADOW_RUNTIME_CONFIG_INVALID,
+    "shadow_db_path_unsafe":           SHADOW_RUNTIME_DB_PATH_UNSAFE,
+    "bars_provider_missing":           SHADOW_RUNTIME_PROVIDER_MISSING,
+    "completed_bar_provider_missing":  SHADOW_RUNTIME_PROVIDER_MISSING,
+    "live_provider_requires_approval": SHADOW_RUNTIME_CONFIG_INVALID,
+}
+
+
+@dataclass(frozen=True)
+class ShadowRuntimeStartup:
+    """Outcome of the startup wiring decision (no side effects unless flag on AND valid).
+
+    ``ready`` is True only when the master flag is on, the broker-free shadow config fully
+    validated, and a shadow scheduler was constructed — reachable only with injected non-live
+    providers (tests/rehearsal), never in production. ``scheduler`` is that shadow-only
+    scheduler when ready, else None. ``reason`` carries the stable fail-closed code otherwise."""
+    ready: bool
+    reason: Optional[str] = None
+    scheduler: object = None
+
+
+def _shadow_master_flag_on(flags) -> bool:
+    """Read the master flag fail-closed (any error → treated as off)."""
+    try:
+        return bool(flags.get(_SHADOW_MASTER_FLAG))
+    except Exception:
+        return False
+
+
+def _default_shadow_emit(code: str, reason: Optional[str] = None) -> None:
+    log(f"[UniverseShadow] {code}" + (f" (reason={reason})" if reason else ""), "INFO")
+
+
+def init_shadow_runtime(flags, *, db_path=None, bars_provider=None,
+                        completed_bar_provider=None,
+                        builder=None, emit=None) -> ShadowRuntimeStartup:
+    """Decide, fail-closed, whether to construct the Dynamic Universe shadow scheduler.
+
+    Master-flag gate FIRST: when the flag is absent/false this returns immediately having
+    imported NOTHING from ``bot.universe`` and constructed NOTHING (no DB, no provider, no
+    scheduler) — only a single ``shadow_runtime_disabled`` evidence line is logged. Only when
+    the flag is true does it LAZILY import the W1/W2 boundary and call ``build_shadow_scheduler``,
+    which validates first and constructs nothing unless the shadow config is fully valid and the
+    providers are non-live. Every flag-on-but-blocked outcome logs a stable, non-secret reason
+    plus ``shadow_runtime_not_started`` and returns ``ready=False`` with no scheduler. Never
+    raises; never starts runtime scheduling (the caller's per-cycle seam does that, and only
+    when a scheduler exists)."""
+    emit = emit or _default_shadow_emit
+
+    if not _shadow_master_flag_on(flags):
+        # Normal production posture: flag off → no import, no construction, no DB, no provider.
+        emit(SHADOW_RUNTIME_DISABLED, reason="flag_off")
+        return ShadowRuntimeStartup(ready=False, reason="flag_off", scheduler=None)
+
+    def _blocked(reason: str) -> ShadowRuntimeStartup:
+        emit(_SHADOW_REASON_EVENT.get(reason, SHADOW_RUNTIME_CONFIG_INVALID), reason=reason)
+        emit(SHADOW_RUNTIME_NOT_STARTED, reason=reason)
+        return ShadowRuntimeStartup(ready=False, reason=reason, scheduler=None)
+
+    # Flag ON — import the boundary LAZILY (never at module top); fail closed on import error.
+    try:
+        from bot.universe.shadow_runtime import build_shadow_scheduler
+    except Exception:
+        return _blocked("boundary_import_failed")
+
+    build = builder or build_shadow_scheduler
+    try:
+        result = build(flags=flags, db_path=db_path, bars_provider=bars_provider,
+                       completed_bar_provider=completed_bar_provider)
+    except Exception:
+        # A provider/factory/builder exception must fail closed — no start, no DB, no crash.
+        return _blocked("build_exception")
+
+    if not getattr(result, "ok", False):
+        return _blocked(getattr(result, "reason", None) or "config_invalid")
+
+    # Flag on + fully valid config + non-live providers → a shadow-only scheduler was built.
+    emit(SHADOW_RUNTIME_READY)
+    return ShadowRuntimeStartup(ready=True, reason=None, scheduler=result.scheduler)
 
 
 class TradingBot:
@@ -141,6 +258,15 @@ class TradingBot:
         flag_config = self.cfg._raw.get('settings', {}).get('feature_flags', {})
         self.flags = FeatureFlags(flag_config)
 
+        # ── Dynamic Universe shadow scheduler wiring (Gate C; default-off, fail-closed) ──
+        # Owned by the TradingBot runtime path. ``init_shadow_runtime`` checks the master flag
+        # FIRST: in production (flag absent/false) it imports no bot.universe module and
+        # constructs nothing, so this line is a pure no-op beyond one startup log. No live
+        # providers are injected (policy: no live default), so even with the flag on the build
+        # fails closed at provider validation and ``self.shadow_runtime.scheduler`` stays None.
+        self.shadow_runtime = init_shadow_runtime(
+            self.flags, **self._resolve_shadow_runtime_config(settings))
+
         regime_db = str(BASE_DIR / 'regime.db')
         init_overlay_registry(regime_db)
         self.pause_registry = InstrumentPauseRegistry(regime_db)
@@ -204,6 +330,44 @@ class TradingBot:
         """Register a plugin. Plugins run in registration order."""
         self.plugins.append(plugin)
         log(f"Plugin registered: {plugin.name}")
+
+    def _resolve_shadow_runtime_config(self, settings) -> dict:
+        """Provider/path injection seam for the Dynamic Universe shadow scheduler.
+
+        Returns the kwargs for ``init_shadow_runtime`` (``db_path`` / ``bars_provider`` /
+        ``completed_bar_provider``). By policy (design §5) this supplies NO live default: the
+        providers are ``None`` unless a future, separately-approved tranche injects a
+        broker-free provider here. ``db_path`` is read from an EXPLICIT config block only
+        (``settings.dynamic_universe_shadow.shadow_db_path``) — never the production default —
+        so production (no such block) yields ``None`` and the wiring fails closed."""
+        shadow_cfg = (settings or {}).get('dynamic_universe_shadow', {}) or {}
+        return {
+            "db_path": shadow_cfg.get('shadow_db_path'),  # explicit only; absent → None → fail closed
+            "bars_provider": None,                        # no live default (injection seam)
+            "completed_bar_provider": None,               # no live default (injection seam)
+        }
+
+    def _shadow_canonical_records(self) -> list:
+        """Canonical-records source for the shadow scheduler. Candidate ingestion is a SEPARATE,
+        not-yet-approved tranche; this returns an empty list (a documented placeholder) so the
+        wired call site introduces no ingestion and no provider/broker call."""
+        fn = getattr(self, '_shadow_records_fn', None)
+        return list(fn()) if fn is not None else []
+
+    def _maybe_run_shadow_cycle(self) -> None:
+        """Per-cycle seam for the Dynamic Universe shadow scheduler — a guarded no-op unless a
+        shadow scheduler was constructed at startup (master flag on + valid broker-free config +
+        injected non-live providers). In production no providers are injected, so
+        ``self.shadow_runtime.scheduler`` is None and this returns immediately: no provider call,
+        no DB open, no broker call. The scheduler, when present, is shadow-only — it submits,
+        modifies, or cancels no orders, opens or closes no positions, and calls no broker."""
+        rt = getattr(self, 'shadow_runtime', None)
+        if rt is None or rt.scheduler is None:
+            return
+        try:
+            rt.scheduler.maybe_run(self._shadow_canonical_records())
+        except Exception as e:
+            log(f"[UniverseShadow] cycle error: {e}", "WARN")
 
     def run(self) -> None:
         """Main loop — runs forever until Ctrl+C."""
@@ -319,6 +483,13 @@ class TradingBot:
                             "WARN")
                 except Exception as e:
                     log(f"[Scheduler] Cycle error: {e}", "WARN")
+
+                # ── Dynamic Universe shadow scheduler (Gate C wiring; default-off) ──
+                # Guarded no-op unless a shadow scheduler was constructed at startup
+                # (flag on + valid broker-free config + injected non-live providers). In
+                # production no providers are injected → scheduler is None → this never runs,
+                # opens no DB, calls no provider, and touches no broker.
+                self._maybe_run_shadow_cycle()
 
                 # ── Dashboard update ──────────────────────────
                 self.dash.update(

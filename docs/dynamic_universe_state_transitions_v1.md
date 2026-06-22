@@ -362,3 +362,21 @@ never starts shadow work.
 | `shadow_db_path_unsafe` | configured path collides with a production DB basename |
 | `bars_provider_missing` / `completed_bar_provider_missing` | a required provider is absent |
 | `live_provider_requires_approval` | a provider declares `is_live=True` (separate approval) |
+
+## Gate C runtime wiring — startup decision events (default-off, fail-closed)
+
+`main.py:init_shadow_runtime` maps the W2 reason codes above to stable, non-secret startup
+events logged once at `TradingBot.__init__`. The master-flag-off path (production default) logs
+only `shadow_runtime_disabled` and constructs nothing; any flag-on-but-blocked path logs the
+specific event below **plus** `shadow_runtime_not_started`. A scheduler is constructed (and
+`shadow_runtime_ready` logged) only when the flag is on AND the config is fully valid AND the
+providers are non-live — never in production (no providers are injected).
+
+| Event | Maps from (W2 reason) |
+|-------|------------------------|
+| `shadow_runtime_disabled`         | `flag_off` |
+| `shadow_runtime_db_path_unsafe`   | `shadow_db_path_unsafe` |
+| `shadow_runtime_provider_missing` | `bars_provider_missing` / `completed_bar_provider_missing` |
+| `shadow_runtime_config_invalid`   | `shadow_db_path_missing` / `live_provider_requires_approval` / `build_exception` / `boundary_import_failed` |
+| `shadow_runtime_not_started`      | (any flag-on-but-blocked reason — emitted alongside the specific event) |
+| `shadow_runtime_ready`            | flag on + fully valid + non-live providers (scheduler constructed) |

@@ -1,11 +1,16 @@
-"""Regression / safety: the shadow foundation is NON-INTEGRATED, so the live
-strategy path is provably unchanged.
+"""Regression / safety: with the master flag off (the default), the live strategy path is
+provably unchanged.
 
-  * No live module imports bot.universe (structural proof of zero coupling).
+  * As of the Gate C runtime-wiring tranche, ``main.py`` is the SOLE, intentional integration
+    point — and only LAZILY: it carries no module-level ``bot.universe`` import, so the boundary
+    is imported only inside ``init_shadow_runtime`` after the flag is confirmed true. Every other
+    live module (``api_server.py``, ``bot/*.py``, plugins, regime) still imports bot.universe
+    NOWHERE (strict structural proof of zero coupling).
   * Adding enable_dynamic_universe_shadow leaves all pre-existing flags' resolution
     byte-identical and adds no dependency.
   * The universe package imports no broker/data-provider module.
 """
+import ast
 import pathlib
 
 from bot.regime.flags import DEPENDENCIES, FeatureFlags, KNOWN_FLAGS, SAFE_DEFAULTS
@@ -25,7 +30,9 @@ PREEXISTING_DEFAULTS = {
 
 
 def _live_source_files():
-    files = [REPO / "main.py", REPO / "api_server.py"]
+    # Every live module EXCEPT main.py — these must import bot.universe NOWHERE. main.py is the
+    # sole, intentional Gate C integration point and is checked separately (lazy-only) below.
+    files = [REPO / "api_server.py"]
     files += [p for p in (REPO / "bot").glob("*.py")]
     files += list((REPO / "bot" / "plugins").glob("*.py"))
     files += list((REPO / "bot" / "regime").glob("*.py"))
@@ -33,12 +40,29 @@ def _live_source_files():
 
 
 def test_no_live_module_imports_bot_universe():
+    # Strict: api_server.py + all bot/plugin/regime modules reference bot.universe NOWHERE.
+    # (api_server.py staying clean is the structural enforcement of "do not wire api_server.py".)
     offenders = []
     for p in _live_source_files():
         text = p.read_text()
         if "bot.universe" in text or "from bot import universe" in text:
             offenders.append(str(p.relative_to(REPO)))
     assert offenders == [], f"live modules import bot.universe: {offenders}"
+
+
+def test_main_py_integration_is_lazy_only():
+    """Gate C: main.py is the one allowed integration point, but ONLY lazily — it must carry no
+    module-level (column-0) ``bot.universe`` import; the boundary is imported inside
+    ``init_shadow_runtime`` and only after the master flag is confirmed true. An eager top-level
+    import (which would run / couple bot.universe at process startup, flag off) fails this."""
+    tree = ast.parse((REPO / "main.py").read_text())
+    for node in tree.body:  # module-level statements only
+        if isinstance(node, ast.Import):
+            assert not any(a.name.startswith("bot.universe") for a in node.names), \
+                "main.py must not import bot.universe at module level (lazy-only)"
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith("bot.universe"), \
+                "main.py must not import bot.universe at module level (lazy-only)"
 
 
 def test_new_flag_registered_default_false():
