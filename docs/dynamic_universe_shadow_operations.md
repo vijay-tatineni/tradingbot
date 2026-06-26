@@ -105,6 +105,49 @@ treated as unavailable (fail-safe skip). `maybe_run` returns `missing_bar_skippe
 sched = DailyUniverseScheduler(ev, flags, bar_available_fn=lambda rec, td: bar_exists(rec, td))
 ```
 
+### Concrete broker-free source — `LocalCompletedBarSnapshotProvider` (BLOCKER-W1 source)
+
+`bot/universe/local_bar_provider.py` provides the first concrete `CompletedBarProvider`. It is
+broker-free, read-only, injected-only, default-off, and fail-closed. It answers from an
+**explicitly-configured local snapshot** (never a broker, never live data, never a production DB):
+
+```python
+from bot.universe.local_bar_provider import build_local_completed_bar_provider
+# Constructed ONLY for a present, safe source path; None otherwise (fail closed).
+prov = build_local_completed_bar_provider("/root/trading/runtime/shadow_bar_snapshots/")
+fn = as_bar_available_fn(prov)   # the scheduler's bar_available_fn seam
+```
+
+**Snapshot format (minimal, versioned).** A JSON object, a JSON array of objects, or JSONL — or a
+directory of `.json`/`.jsonl` files. Each record:
+
+```json
+{
+  "schema_version": 1,
+  "instrument_uid": "<canonical id>",   "listing_uid": "<canonical listing>",
+  "trading_date": "2026-01-05",         "timeframe": "1d",
+  "bar_end_time": "2026-01-05T21:00:00Z",
+  "available": true,
+  "source": "local_snapshot:<label>",   "version": "<deterministic version>",
+  "content_hash": "<hash>",             "generated_at": "2026-01-06T00:00:00Z"
+}
+```
+OHLCV values may be included but are not required. **Never** store credentials, account IDs, or
+raw broker/provider payloads. Identity is the R2A-1 canonical id, never a ticker.
+
+**Config seam (inert in production).** `settings.dynamic_universe_shadow.completed_bar_snapshot_source`
+selects the source. `main.py`'s `build_completed_bar_provider_from_config` builds the provider only
+when the master flag is on AND the source is safe; production (no block, flag off) yields `None`.
+**Path safety is basename + symlink-resolved basename only** — the operator's realpath preflight
+(see the realpath note in the pre-enable blocker register) still applies before enablement.
+
+**Fail-closed reasons:** `source_path_missing`, `source_path_unsafe`, `source_path_not_found`,
+`source_path_unreadable`, `snapshot_malformed`, `snapshot_schema_unsupported`,
+`instrument_mismatch`, `trading_date_mismatch`, `timeframe_mismatch`, `bar_not_completed`,
+`bar_future_timestamp`, `bar_unavailable`, `bar_proof_missing`, `provider_error`. The provider
+never raises. **Not enablement:** `bars_provider` is still unimplemented, so shadow stays
+non-enablable (`validate_shadow_config` → `bars_provider_missing`).
+
 ## Failure behaviour
 
 * Missing/short bars → DATA_INELIGIBLE (insufficient_history / indicators_unavailable).

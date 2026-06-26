@@ -651,6 +651,23 @@ is wired, no DB is created, no provider is called, and the feature stays default
   provider exception, a malformed/mismatched result, an unavailable bar, or a stale/incomplete
   bar ALL resolve to `available=False` with a stable reason; the boundary never raises, never
   reports available without full proof, imports no broker, and fetches no live data.
+  - **Concrete source (BLOCKER-W1 source) — IMPLEMENTED — awaiting independent review.** The
+    boundary above was a `Protocol` only — no concrete broker-free source existed, which kept
+    shadow non-enablable. New `bot/universe/local_bar_provider.py` adds the concrete, broker-free
+    `LocalCompletedBarSnapshotProvider`: it answers from an EXPLICITLY-configured, local,
+    read-only, immutable daily-bar snapshot (JSON / JSONL file, or a directory of them) — no
+    broker, no IBKR/IG/EODHD, no live data, no production DB. A pure `validate_source_path`
+    rejects a missing or production-DB-colliding source (basename + symlink-resolved basename),
+    and a fail-closed `build_local_completed_bar_provider` factory constructs the provider only
+    for a present, safe source. The `main.py` seam (`build_completed_bar_provider_from_config`
+    → `_resolve_shadow_runtime_config`) builds it ONLY when the master flag is on AND a safe
+    snapshot source is configured — default-off, no live default. Tests:
+    `tests/universe/test_completed_bar_provider.py`. See
+    `docs/dynamic_universe_completed_bar_provider_completion.md`.
+  - **Still not enablement.** `bars_provider` (the eligibility-bars provider) remains a SEPARATE,
+    not-yet-implemented tranche, so `validate_shadow_config` still fails closed at
+    `bars_provider_missing` even with the flag on and a valid completed-bar provider. Shadow
+    enablement (Gate E) and the service-restart window (Gate F) remain unapproved.
 - **BLOCKER-W2 — lazy, flag-gated, side-effect-free construction — IMPLEMENTED — awaiting
   independent review.** Constructing `Registry`/`CandidateStore`/`IdentityStore` (or
   `seed_registry`) runs `migrate()` → `sqlite3.connect()`, creating the DB file even with the
