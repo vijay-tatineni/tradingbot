@@ -86,7 +86,12 @@ deprecated `cooldown_until` column is no longer read by runtime logic (it stored
 despite its date-implying name); it remains as deprecated compatibility metadata. A session
 counts at most once (`cooldown_last_counted_trading_date` guards a duplicate same-date run)
 and only when a completed bar exists — a **weekend / holiday / missing-bar session never
-counts** (no calendar lookup; absence of a completed bar is the signal). The display-only
+counts** (no calendar lookup; absence of a completed bar is the signal). "A completed bar
+exists" is decided by the injected, fail-closed `bar_available_fn`; its first concrete
+broker-free source is `LocalCompletedBarSnapshotProvider` (a local read-only snapshot — no
+broker, no live data), so an unproven/late/future/missing bar resolves to "not available" and a
+session does not count. See `docs/dynamic_universe_shadow_operations.md` and
+`docs/dynamic_universe_completed_bar_provider_completion.md`. The display-only
 `cooldown_release_estimate` is left NULL: it is never authoritative without an approved
 exchange calendar. An ambiguous legacy row (non-zero `cooldown_until`, NULL session field)
 fails safe to a blocked/manual-review `COOLDOWN` (`cooldown_legacy_ambiguous`); the count is
