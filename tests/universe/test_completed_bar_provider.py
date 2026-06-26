@@ -283,14 +283,19 @@ def test_provider_opens_only_the_snapshot_no_production_db(tmp_path, monkeypatch
     real_open = builtins.open
 
     def tracking_open(file, *a, **k):
-        opened.append(os.path.abspath(str(file)))
+        # mode is the 2nd positional arg or the 'mode' kwarg (default 'r').
+        mode = (a[0] if a else k.get("mode", "r"))
+        opened.append((os.path.abspath(str(file)), mode))
         return real_open(file, *a, **k)
 
     monkeypatch.setattr(builtins, "open", tracking_open)
     prov.completed_bar(record=_rec(), trading_date=TD, timeframe=TF)
     prod = {"positions.db", "regime.db", "backtest.db", "universe.db", "universe_shadow.db",
             "tradingbot.db", "orders.db", "executions.db", "fills.db"}
-    for path in opened:
+    for path, mode in opened:
         assert os.path.basename(path) not in prod, f"provider opened a production DB: {path}"
+        # read-only: the provider must never open the source for write/append/update.
+        assert not any(c in str(mode) for c in ("w", "a", "+", "x")), \
+            f"provider opened {path} in non-read mode {mode!r}"
     # every opened path is under the temp snapshot dir
-    assert all(str(tmp_path) in p for p in opened)
+    assert all(str(tmp_path) in p for (p, _m) in opened)
