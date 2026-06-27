@@ -158,6 +158,24 @@ def build_completed_bar_provider_from_config(flags, shadow_cfg):
     return build_local_completed_bar_provider(source)
 
 
+def build_bars_provider_from_config(flags, shadow_cfg):
+    """Flag-gated, fail-closed construction of the broker-free eligibility bars provider.
+
+    Sibling of ``build_completed_bar_provider_from_config``. Returns ``None`` — importing NOTHING
+    from ``bot.universe`` — when the master flag is off (production default), so the lazy-import
+    contract holds. Only when the flag is on does it lazily import ``build_local_bars_provider`` and
+    build a provider from the EXPLICIT snapshot source
+    (``settings.dynamic_universe_shadow.bars_snapshot_source`` — a SEPARATE, unambiguous key from
+    ``completed_bar_snapshot_source``). A missing or unsafe source yields ``None`` (the factory
+    fails closed), so the caller's ``bars_provider`` stays ``None`` and ``validate_shadow_config``
+    fails closed at ``bars_provider_missing``. There is NO live default and NO production source."""
+    if not _shadow_master_flag_on(flags):
+        return None  # off → no construction, no bot.universe import (lazy-only contract)
+    source = (shadow_cfg or {}).get('bars_snapshot_source')
+    from bot.universe.local_bars_provider import build_local_bars_provider
+    return build_local_bars_provider(source)
+
+
 def init_shadow_runtime(flags, *, db_path=None, bars_provider=None,
                         completed_bar_provider=None,
                         builder=None, emit=None) -> ShadowRuntimeStartup:
@@ -353,17 +371,18 @@ class TradingBot:
 
         Returns the kwargs for ``init_shadow_runtime`` (``db_path`` / ``bars_provider`` /
         ``completed_bar_provider``). By policy (design §5) this supplies NO live default: the
-        ``completed_bar_provider`` (BLOCKER-W1) is built only when the master flag is on AND a
-        safe snapshot source is configured, else ``None``. ``bars_provider`` stays ``None`` (a
-        separate, not-yet-implemented tranche), so even a valid completed-bar provider leaves
-        ``validate_shadow_config`` failing closed at ``bars_provider_missing`` — shadow remains
-        non-enablable here by design. ``db_path`` is read from an EXPLICIT config block only
-        (``settings.dynamic_universe_shadow.shadow_db_path``) — never the production default —
-        so production (no such block) yields ``None`` and the wiring fails closed."""
+        ``completed_bar_provider`` (BLOCKER-W1) and ``bars_provider`` are each built only when the
+        master flag is on AND their respective safe snapshot source is configured, else ``None``
+        (so production — no such block, flag off — yields ``None`` for both and the wiring fails
+        closed). ``db_path`` is read from an EXPLICIT config block only
+        (``settings.dynamic_universe_shadow.shadow_db_path``) — never the production default — so
+        production (no such block) yields ``None`` and the wiring fails closed. NO live default for
+        any provider; construction is reachable only with injected non-live providers (tests)."""
         shadow_cfg = (settings or {}).get('dynamic_universe_shadow', {}) or {}
         return {
             "db_path": shadow_cfg.get('shadow_db_path'),  # explicit only; absent → None → fail closed
-            "bars_provider": None,                        # separate tranche; still no default
+            "bars_provider": build_bars_provider_from_config(
+                self.flags, shadow_cfg),                  # flag-gated, fail-closed (absent -> None)
             "completed_bar_provider": build_completed_bar_provider_from_config(
                 self.flags, shadow_cfg),                  # flag-gated, fail-closed (absent -> None)
         }
