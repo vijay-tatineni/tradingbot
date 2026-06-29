@@ -195,6 +195,13 @@ fresh completed bar, valid OHLC, required indicators available (SMA50/200, ATR14
 in cooldown, and corporate-action status. Unknown sector records `sector_unknown`
 (non-blocking) so the sector cap reasons about it explicitly downstream.
 
+The OHLCV history feeding this is supplied by the injected, broker-free **`bars_provider`**
+(`bot/universe/local_bars_provider.py::LocalBarsSnapshotProvider` — the concrete shadow source,
+default-off, fail-closed to `None`). It returns the `{bars: DataFrame, …}` the evaluator passes to
+`compute_indicators`; a missing/unsafe source or any malformed/mismatched/future snapshot yields
+`None` → no bars → `DATA_INELIGIBLE` (never a broker call). See
+`docs/dynamic_universe_local_bars_provider_completion.md`.
+
 ### Corporate-action policy (FROZEN — task §4)
 
 `structural_eligibility(snapshot, mode)` applies one of two distinct, never-confused

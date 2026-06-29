@@ -664,10 +664,30 @@ is wired, no DB is created, no provider is called, and the feature stays default
     snapshot source is configured — default-off, no live default. Tests:
     `tests/universe/test_completed_bar_provider.py`. See
     `docs/dynamic_universe_completed_bar_provider_completion.md`.
-  - **Still not enablement.** `bars_provider` (the eligibility-bars provider) remains a SEPARATE,
-    not-yet-implemented tranche, so `validate_shadow_config` still fails closed at
-    `bars_provider_missing` even with the flag on and a valid completed-bar provider. Shadow
-    enablement (Gate E) and the service-restart window (Gate F) remain unapproved.
+  - **Eligibility bars provider (`bars_provider`) — IMPLEMENTED — awaiting independent review.**
+    `bars_provider` is the SEPARATE eligibility-bars injection the evaluator reads
+    (`bot/universe/evaluator.py:295` — `Callable[[dict], Optional[dict]]`), distinct from the
+    completed-bar availability boundary. New `bot/universe/local_bars_provider.py` adds the
+    concrete, broker-free `LocalBarsSnapshotProvider` (sibling of the completed-bar provider,
+    reusing its path-safety/parsing helpers): it answers from an EXPLICITLY-configured, local,
+    read-only, immutable daily-bar snapshot (JSON / JSONL file, or a directory) carrying an OHLCV
+    array — no broker, no IBKR/IG/EODHD, no live data, no production DB; it never computes
+    indicators (it supplies the frame the evaluator feeds to `compute_indicators`). It declares
+    `is_live = False`, fails CLOSED to `None` with a stable reason on every bad input, and matches
+    the record by `canonical_instrument_id` (the only identity the evaluator's
+    `registry.all_canonical()` record carries; uid/listing accepted too for forward-compat). A
+    fail-closed `build_local_bars_provider` factory + the `main.py` seam
+    (`build_bars_provider_from_config` → `_resolve_shadow_runtime_config`, reading
+    `settings.dynamic_universe_shadow.bars_snapshot_source` — a SEPARATE key from
+    `completed_bar_snapshot_source`) construct it ONLY when the master flag is on AND a safe source
+    is configured — default-off, no live default. Tests:
+    `tests/universe/test_local_bars_provider.py` (incl. a real-`ShadowEvaluator` integration test).
+    See `docs/dynamic_universe_local_bars_provider_completion.md`.
+  - **Still not enablement.** With BOTH providers implemented, `validate_shadow_config` can pass
+    its provider checks ONLY when the flag is on AND both snapshot sources are configured + a safe
+    `shadow_db_path` is set (none in production). Production stays fail-closed (flag off → both
+    providers `None` → `bars_provider_missing`). A safe, APPROVED snapshot source (data/ops task)
+    plus Gate E (flag + paths approval) and Gate F (service-restart window) remain unapproved.
 - **BLOCKER-W2 — lazy, flag-gated, side-effect-free construction — IMPLEMENTED — awaiting
   independent review.** Constructing `Registry`/`CandidateStore`/`IdentityStore` (or
   `seed_registry`) runs `migrate()` → `sqlite3.connect()`, creating the DB file even with the

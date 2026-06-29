@@ -145,8 +145,46 @@ when the master flag is on AND the source is safe; production (no block, flag of
 `source_path_unreadable`, `snapshot_malformed`, `snapshot_schema_unsupported`,
 `instrument_mismatch`, `trading_date_mismatch`, `timeframe_mismatch`, `bar_not_completed`,
 `bar_future_timestamp`, `bar_unavailable`, `bar_proof_missing`, `provider_error`. The provider
-never raises. **Not enablement:** `bars_provider` is still unimplemented, so shadow stays
-non-enablable (`validate_shadow_config` → `bars_provider_missing`).
+never raises.
+
+### Concrete broker-free eligibility bars — `LocalBarsSnapshotProvider`
+
+`bot/universe/local_bars_provider.py` provides the concrete `bars_provider` the evaluator reads
+(`ShadowEvaluator(reg, bars_provider, flags, …)`; `bars_provider(rec) → {bars, corp_action_status,
+sector, spread, fresh_bar, admin_paused, price_unit, currency, …}` or `None`). It is the sibling of
+`LocalCompletedBarSnapshotProvider` — same explicitly-configured, local, read-only, immutable
+daily-bar snapshot family and the same path-safety helpers — but answers a DIFFERENT question
+(recent OHLCV history) and carries a DIFFERENT record type (an OHLCV array). It is broker-free,
+imports no broker / IBKR / IG / EODHD / live-data API and does NOT import
+`backtest.breakout_strategy` (it SUPPLIES the frame; the evaluator computes indicators). It declares
+`is_live = False`.
+
+```python
+from bot.universe.local_bars_provider import build_local_bars_provider
+bars = build_local_bars_provider("/root/trading/runtime/shadow_bars_snapshots/")  # explicit source
+```
+
+**Contract note (spec-vs-code).** The runtime calls `bars_provider(rec)` with ONLY the canonical
+record (no request date/timeframe). Identity is matched on `canonical_instrument_id` — the only
+identity `registry.all_canonical()` records carry (the `canonical_instruments` table has no
+`instrument_uid`/`listing_uid` columns); uid/listing are accepted too for forward-compat. The
+provider validates the snapshot record's OWN declared metadata: timeframe == the configured
+timeframe, and the most recent `bar_end_time` is a completed (`[:10] == trading_date`), non-future
+session, with a well-formed OHLCV array.
+
+**Config seam (inert in production).** `settings.dynamic_universe_shadow.bars_snapshot_source` (a
+SEPARATE, unambiguous key from `completed_bar_snapshot_source`) selects the source. `main.py`'s
+`build_bars_provider_from_config` → `_resolve_shadow_runtime_config` builds it only when the master
+flag is on AND the source is safe; production (no block, flag off) yields `None`.
+
+**Fail-closed reasons (→ `None`):** `source_path_missing`, `source_path_unsafe`,
+`source_path_not_found`, `source_path_unreadable`, `snapshot_malformed`,
+`snapshot_schema_unsupported`, `instrument_mismatch`, `timeframe_mismatch`, `trading_date_mismatch`,
+`bar_future_timestamp`, `bar_proof_missing`, `bars_missing`, `bars_malformed`, `provider_error`.
+
+**Not enablement:** code is inert and default-off. With both providers implemented, shadow becomes
+enablable only with the flag on AND both snapshot sources + a safe `shadow_db_path` configured
+(none in production) — and only after an APPROVED snapshot source plus Gate E / Gate F.
 
 ## Failure behaviour
 
