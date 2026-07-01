@@ -392,3 +392,30 @@ providers are non-live — never in production (no providers are injected).
 | `shadow_runtime_config_invalid`   | `shadow_db_path_missing` / `live_provider_requires_approval` / `build_exception` / `boundary_import_failed` |
 | `shadow_runtime_not_started`      | (any flag-on-but-blocked reason — emitted alongside the specific event) |
 | `shadow_runtime_ready`            | flag on + fully valid + non-live providers (scheduler constructed) |
+
+## Offline snapshot records / seed seam — fail-closed reason codes (IMPLEMENTED — awaiting review)
+
+`bot/universe/shadow_records.py` builds the scheduler's per-cycle canonical records from the two
+approved local snapshots (replacing the inert `[]` placeholder in
+`TradingBot._shadow_canonical_records`). It is broker-free, read-only, DB-free, and fail-closed: a
+source-level failure yields an EMPTY record list with a stable `source_reason`; a per-instrument
+failure DROPS that instrument (stable reason under `excluded`). A record is emitted only when its
+bars row and completed-bar row agree on the full R2A-1 identity triple
+`(canonical_instrument_id, instrument_uid, listing_uid)` — no ticker/symbol fallback.
+
+| Reason code | Meaning |
+|-------------|---------|
+| `snapshot_source_missing`        | a configured source path is absent/empty (factory returns `None`) |
+| `snapshot_source_unsafe`         | a source path is / resolves to a production-DB basename |
+| `snapshot_source_not_found`      | a configured source file/dir does not exist |
+| `snapshot_source_unreadable`     | an OS error reading a source file |
+| `snapshot_malformed`             | a source file is not parseable JSON/JSONL (or a bad `bar_end_time`) |
+| `snapshot_schema_unsupported`    | a row's `schema_version` ∉ {1} |
+| `snapshot_identity_mismatch`     | bars/completed identity disagree, or the R2A-1 triple is incomplete |
+| `snapshot_trading_date_mismatch` | `bar_end_time[:10] != trading_date` |
+| `snapshot_timeframe_mismatch`    | a row's `timeframe` ≠ the configured timeframe (`1d`) |
+| `snapshot_future_bar`            | `bar_end_time` is after the (injected/real) clock |
+| `snapshot_proof_missing`         | missing `source`/`version`/`content_hash`, or no completed-bar availability proof |
+| `snapshot_bars_insufficient`     | fewer than 200 OHLCV bars (sma200 floor) |
+| `snapshot_ohlcv_invalid`         | a bar has non-numeric / bool / malformed OHLCV |
+| `snapshot_provider_error`        | defensive: an unexpected error — fail closed to empty |
