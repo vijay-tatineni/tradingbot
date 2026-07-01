@@ -755,3 +755,47 @@ by `tests/universe/test_no_live_integration.py`).
   `api_server.py` untouched). The pre-existing `test_no_live_integration.py` guard was updated so
   `main.py` is the one allowed **lazy** integration point while `api_server.py` and every other
   live module remain at **zero** `bot.universe` references.
+
+## Offline snapshot records / seed seam — IMPLEMENTED — awaiting independent review
+
+Resolves the **records/seed** half of the remaining shadow-enablement blockers: the Gate C wiring
+above fed the scheduler an **empty (placeholder) `[]`** record set (candidate ingestion "not
+wired"), so the shadow path could never advance even with valid providers. This tranche replaces
+that placeholder with a **broker-free, explicit-config-only, fail-closed** offline records source.
+Still **code-only**: no flag flip, no live config, no snapshot generation, no DB/migration, no
+service restart, no broker call, no deployment.
+
+- **New module `bot/universe/shadow_records.py`.** `SnapshotShadowRecordsSource` builds the
+  scheduler's per-cycle canonical records from the SAME two approved, local, read-only snapshot
+  files the providers consume (`bars_snapshot_source` + `completed_bar_snapshot_source`) and
+  nothing else. It imports no broker/live-data/FX/portfolio API, opens every file strictly mode
+  `"r"`, creates no file/dir/DB, and reuses the already-reviewed path-safety + parsing helpers
+  (`validate_source_path` / `_parse_records_from_text` / the full 14-name `PRODUCTION_DB_BASENAMES`
+  set, re-checked on each child path).
+- **R2A-1 identity co-dependency enforced (design §4.3).** A record is emitted ONLY when its
+  local-bars row and its completed-bar row AGREE on the full
+  `(canonical_instrument_id, instrument_uid, listing_uid)` triple — identity is the R2A-1 canonical
+  id, never a ticker/symbol. Any missing id or cross-row disagreement fails closed
+  (`snapshot_identity_mismatch`), so the completed-bar gate (uid/listing) and the bars provider
+  (cid) can never key on inconsistent identities.
+- **Fail-closed everywhere.** Missing/unsafe/not-found/unparseable source → EMPTY record list with a
+  stable `source_reason`; a per-instrument validation failure DROPS that instrument (stable reason
+  under `excluded`), never silently included. Validated per row: `schema_version==1`, `timeframe`,
+  `trading_date`↔`bar_end_time` consistency, non-future `bar_end_time`, `source`+`version/
+  content_hash` proof, `≥200` OHLCV bars, numeric (non-bool) OHLCV, plus completed-bar
+  `available` proof. No exception escapes to the scheduler.
+- **`main.py` integration (flag-gated, lazy, fail-closed).** New `build_shadow_records_fn_from_config`
+  returns `None` — importing NOTHING from `bot.universe` — when the master flag is off (production
+  default) or either source is missing/unsafe. Only on the flag-on + both-sources-safe path does it
+  lazily import `build_shadow_records_source`. `TradingBot._shadow_canonical_records` now returns the
+  seam's proven records when the fn exists, else the inert `[]`. The seam is consulted only when a
+  shadow scheduler was actually constructed (guarded in `_maybe_run_shadow_cycle`) — never in
+  production. **Registry seeding into a shadow DB (`seed_registry(shadow_db_path)`) and snapshot
+  generation remain SEPARATE, out-of-band, gated steps (Gate E/F + data-ops)** — this seam opens no
+  database; it only READS approved local files to build the in-memory record list.
+- Tests: `tests/universe/test_shadow_records_seam.py` (feature-off no construction/no read;
+  missing/unsafe/symlink-to-prod-DB source; missing completed/bars snapshot; unsupported schema;
+  malformed JSON; identity mismatch; trading_date/timeframe mismatch; future bar; missing proof;
+  `<200` bars; invalid OHLCV; valid fixtures → non-empty records AND real scheduler receives them;
+  no-DB-creation; no-broker-import). The package-wide `test_no_live_integration.py` broker-free and
+  no-config-rewrite guards cover the new module automatically.

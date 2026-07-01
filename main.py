@@ -176,6 +176,26 @@ def build_bars_provider_from_config(flags, shadow_cfg):
     return build_local_bars_provider(source)
 
 
+def build_shadow_records_fn_from_config(flags, shadow_cfg):
+    """Flag-gated, fail-closed construction of the broker-free offline records/seed seam.
+
+    Returns ``None`` — importing NOTHING from ``bot.universe`` — when the master flag is off
+    (production default), so the lazy-import contract holds. Only when the flag is on does it lazily
+    import ``build_shadow_records_source`` and build a records source from the SAME two EXPLICIT
+    snapshot sources the providers use (``bars_snapshot_source`` + ``completed_bar_snapshot_source``).
+    If either source is missing or unsafe the factory returns ``None`` (fail closed), so the caller's
+    ``_shadow_records_fn`` stays ``None`` and ``TradingBot._shadow_canonical_records`` keeps returning
+    the inert ``[]`` placeholder. There is NO live default and NO production source; it opens no DB
+    and calls no broker — it only READS approved local snapshot files."""
+    if not _shadow_master_flag_on(flags):
+        return None  # off → no construction, no bot.universe import (lazy-only contract)
+    bars_source = (shadow_cfg or {}).get('bars_snapshot_source')
+    completed_source = (shadow_cfg or {}).get('completed_bar_snapshot_source')
+    from bot.universe.shadow_records import build_shadow_records_source
+    return build_shadow_records_source(bars_source=bars_source,
+                                       completed_source=completed_source)
+
+
 def init_shadow_runtime(flags, *, db_path=None, bars_provider=None,
                         completed_bar_provider=None,
                         builder=None, emit=None) -> ShadowRuntimeStartup:
@@ -301,6 +321,13 @@ class TradingBot:
         # fails closed at provider validation and ``self.shadow_runtime.scheduler`` stays None.
         self.shadow_runtime = init_shadow_runtime(
             self.flags, **self._resolve_shadow_runtime_config(settings))
+        # Offline snapshot records/seed seam: the broker-free source of the shadow scheduler's
+        # per-cycle canonical records. Flag-gated + fail-closed (absent flag / missing / unsafe
+        # source → None → ``_shadow_canonical_records`` keeps returning ``[]``). Never live, never
+        # a DB open. Only consulted when a shadow scheduler was actually constructed (guarded in
+        # ``_maybe_run_shadow_cycle``), which itself never happens in production.
+        _du_shadow_cfg = (settings or {}).get('dynamic_universe_shadow', {}) or {}
+        self._shadow_records_fn = build_shadow_records_fn_from_config(self.flags, _du_shadow_cfg)
 
         regime_db = str(BASE_DIR / 'regime.db')
         init_overlay_registry(regime_db)
@@ -388,9 +415,15 @@ class TradingBot:
         }
 
     def _shadow_canonical_records(self) -> list:
-        """Canonical-records source for the shadow scheduler. Candidate ingestion is a SEPARATE,
-        not-yet-approved tranche; this returns an empty list (a documented placeholder) so the
-        wired call site introduces no ingestion and no provider/broker call."""
+        """Canonical-records source for the shadow scheduler.
+
+        ``self._shadow_records_fn`` is the broker-free offline records/seed seam
+        (``bot.universe.shadow_records.SnapshotShadowRecordsSource``), constructed by
+        ``build_shadow_records_fn_from_config`` ONLY when the master flag is on and both explicit,
+        path-safe snapshot sources are configured; otherwise it is ``None`` and this returns the
+        inert ``[]`` placeholder (production posture — no ingestion, no file read, no provider/broker
+        call). When present the seam reads the approved local snapshots READ-ONLY and returns the
+        proven canonical records (never raising; fail-closed → ``[]``/subset)."""
         fn = getattr(self, '_shadow_records_fn', None)
         return list(fn()) if fn is not None else []
 

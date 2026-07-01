@@ -374,3 +374,33 @@ operator must (1) run the realpath preflight above; (2) add an explicit
 `TradingBot._resolve_shadow_runtime_config` (no live default exists); (4) set
 `enable_dynamic_universe_shadow=true`; (5) restart `cogniflowai-bot.service` and confirm a
 `shadow_runtime_ready` line. Until all hold, the wiring stays inert (`shadow_runtime_disabled`).
+
+## Offline snapshot records / seed seam (IMPLEMENTED — awaiting independent review)
+
+The shadow scheduler's per-cycle records now come from a broker-free, explicit-config-only,
+fail-closed offline source (`bot/universe/shadow_records.py::SnapshotShadowRecordsSource`), built by
+`main.py::build_shadow_records_fn_from_config` and consumed by `TradingBot._shadow_canonical_records`
+(which previously returned an inert `[]`). The seam reads the SAME two approved local snapshot files
+the providers use — `settings.dynamic_universe_shadow.bars_snapshot_source` and
+`completed_bar_snapshot_source` — strictly read-only, and builds one canonical record per instrument
+that carries the full R2A-1 identity triple `(canonical_instrument_id, instrument_uid, listing_uid)`
+plus currency. It opens no database, generates no snapshot, and calls no broker.
+
+Fail-closed posture (production): with the master flag off — or either snapshot source absent/unsafe
+— `build_shadow_records_fn_from_config` returns `None`, so `_shadow_canonical_records` keeps
+returning `[]` and the seam imports nothing from `bot.universe`. Even when a records fn exists it is
+consulted ONLY if a shadow scheduler was actually constructed (guarded in `_maybe_run_shadow_cycle`),
+which never happens in production.
+
+Per-instrument fail-closed reasons (a failing instrument is DROPPED, never included):
+`snapshot_source_missing` · `snapshot_source_unsafe` · `snapshot_source_not_found` ·
+`snapshot_schema_unsupported` · `snapshot_malformed` · `snapshot_identity_mismatch` ·
+`snapshot_trading_date_mismatch` · `snapshot_timeframe_mismatch` · `snapshot_future_bar` ·
+`snapshot_proof_missing` · `snapshot_bars_insufficient` (`<200` bars) · `snapshot_ohlcv_invalid` ·
+`snapshot_provider_error`.
+
+**Still required before this seam does anything at runtime (SEPARATE, gated — NOT authorized here):**
+(a) approved snapshot generation + data-ops signoff (Gate E/F, per
+`offline_snapshot_source_approval_design.md`); (b) registry seeding into the dedicated shadow DB
+(`seed_registry(shadow_db_path)`) so the evaluator has the matching canonical rows; (c) the shadow
+enablement steps above. This seam is **wiring, not activation**.
