@@ -141,8 +141,8 @@ Facts bearing on it (this section makes no recommendation):
 - Base branch: `breakout-strategy`
 - Audit branch: `docs/safety-audit-option-b`
 - Current deployed HEAD before this audit branch: `c6a1c00554a28187a748997c17d42ab2c29379da`
-- Documentation-only commit: `4b1f6a98b5adbf335265c6388534bb14eec9ed89`
-- PR: `PR_LINK_PLACEHOLDER`
+- Documentation-only commit: `8cf947db921890a5cac7f18dded144c8a8948bce`
+- PR: `https://github.com/vijay-tatineni/tradingbot/pull/16`
 - Status: documentation-only branch; no strategy, runtime, config, DB, snapshot, broker order, or service changes.
 
 **This audit does not authorize any code, config, order, or service change.** It records read-only findings only. Live broker access was limited to one read-only IBKR probe (positions/open orders/executions); zero orders were placed, modified, or cancelled; zero database writes were performed.
