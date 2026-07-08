@@ -37,6 +37,18 @@ The rollout blocked because no approved canonical identity source and no approve
 Further Dynamic Universe work is paused.
 ```
 
+## Repository and Branch Status
+
+- Production/deployed working tree: `/root/trading`
+- Base branch: `breakout-strategy`
+- Documentation branch: `docs/trading-bot-status-review`
+- Current deployed HEAD before this documentation branch: `c6a1c00554a28187a748997c17d42ab2c29379da`
+- Documentation-only commit: `d1d1dfd583c70716107a204bce5ba67b78c7c926`
+- PR: https://github.com/vijay-tatineni/tradingbot/pull/15
+- Status: documentation-only branch; no strategy, runtime, config, DB, snapshot, broker, or service changes.
+
+This document records the paused state of the Dynamic Universe rollout and the trading bot strategy review. It does not authorize activation, deployment, migrations, IBKR access, shadow mode, paper trading, or live trading changes.
+
 ## Original Trading Bot Strategy
 
 The live bot's trading logic lives in `bot/layer1.py` (active), `bot/layer2.py` (accumulation), and
@@ -203,6 +215,8 @@ Recorded in `/root/deployment_records/dynamic_universe_rollout_paused.md` (verdi
   **unfilled placeholder template**: identity fields are `FILL_REAL_*`, hashes are `FILL_SHA256_*`,
   and it covers only 1 of the 5 symbols. **Not a usable approved package.** (This directory is
   untracked and intentionally **not** added to Git.)
+
+The active documentation branch is `docs/trading-bot-status-review`, created from `breakout-strategy`. The operational `/root/trading` deployment remains on `breakout-strategy` at `c6a1c00554a28187a748997c17d42ab2c29379da` unless separately changed. This branch is documentation-only.
 
 ## What We Learned
 
