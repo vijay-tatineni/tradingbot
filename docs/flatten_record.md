@@ -5,7 +5,7 @@
 > positions** and **0 working orders**. Step 3b (moving the live databases) and the cash reset
 > were **not** performed. This document is documentation-only. **No order was placed, modified,
 > or cancelled; no live database was moved, deleted, or written; no service was restarted.**
-> One incidental working-tree change is disclosed and reverted in §7a. Account identifiers are
+> One incidental working-tree change is disclosed and reverted in §8a. Account identifiers are
 > redacted.
 
 - Working tree: `/root/trading` · Branch: `docs/flatten-and-pause` · Base: `main` @ `7781dfe`
@@ -273,9 +273,58 @@ a reset would discard the position history behind these six unprotected shorts.
 
 ---
 
-## 7. Process notes and disclosures
+## 7. Authorized delegated flatten — prepared, NOT executed
 
-**7a. Working tree branch switch — disclosed and reverted.** This branch is based on `main`
+On 2026-07-26 the operator confirmed Client Portal shows **the same account**, `DUQ***950`, which
+eliminates the account-mismatch hypothesis of §6. The remaining explanation stands: the close
+requests never reached the broker. The operator then authorized a delegated flatten under
+**Phase 1 Option 2** constraints — buy-to-close only the six shorts at exact quantities, one at a
+time with fill verification between each, plain market orders, **Monday during US regular hours**,
+no other orders of any kind.
+
+**Nothing has been executed.** 2026-07-26 is a Sunday; US RTH is Monday 13:30–20:00 UTC. A
+re-probe at 21:42 UTC confirmed the book is unchanged (6 shorts, 0 working orders, 0 executions),
+and `TotalCashValue` is still `GBP 250,000.00` — **no cash reset has been applied.**
+
+Tooling is prepared and verified at
+`/root/trading/backups/20260726T210849Z/flatten/flatten_shorts.py` (dry run by default;
+`--execute` required to place orders).
+
+**Guards, built around the specific failure that caused this.** The prior attempt closed at 2×
+size or ran twice, flipping six longs to shorts. The script is structured so it cannot repeat that
+in reverse:
+
+- Order quantity is always computed from the **live broker position** read immediately before each
+  order. The authorized numbers are an assertion checked against that read, never the order input.
+- Contracts are whitelisted by **`conId`**, not symbol string.
+- Pre-flight requires exactly six positions, matching conIds, every position **negative**, every
+  size exactly as authorized, and **zero** working orders.
+- After each fill the position is re-read and must be absent or exactly 0. **A positive result
+  aborts the entire run immediately** rather than continuing to the next symbol.
+- Execute mode refuses to run outside US RTH (weekend/holiday aware).
+- Every `orderId`, `permId`, `execId`, fill price and timestamp is journalled to
+  `flatten/flatten_journal.json` after each step, so a half-completed run still leaves a record.
+
+**Verification performed 2026-07-26 (no orders placed):**
+
+- Dry run against the live gateway: pre-flight passed, six intended orders printed, book unchanged.
+- `--execute` attempted: aborted at the RTH guard with **0 orders placed**, exit code 2.
+- `flatten/test_guards.py` — 8/8 offline abort-path cases pass with zero orders recorded: already
+  long (flip), one quantity doubled (the 2× bug), account already flat (cash reset applied),
+  unauthorized symbol present, one of the six missing, resting working order, outside RTH, plus the
+  authorized-six case passing pre-flight.
+
+**Known gap to carry into `PHASE_1_FLAT`.** Once flat, the instruction is to move the live DBs into
+this archive. That remains verifiable only up to the file move: confirming the dashboard renders
+empty requires restarting `cogniflowai-api.service`, which the no-restart constraint forbids. The
+dashboard will continue to display stale Jul 8 state until a restart is separately authorized. This
+is recorded as an unsatisfied acceptance criterion rather than dropped.
+
+---
+
+## 8. Process notes and disclosures
+
+**8a. Working tree branch switch — disclosed and reverted.** This branch is based on `main`
 (`7781dfe`), matching how PR #16 is based. Creating it with `git checkout -b` in `/root/trading`
 briefly moved the *production working tree* off the deployed lineage (`docs/safety-audit-option-b`,
 `350b28f`) and onto `main`, which is substantially behind it — `git diff --stat` between the two
@@ -297,12 +346,12 @@ shows **332 files changed, ~71,900 deletions**, including `web/dashboard.html` (
 - **Prevented from recurring:** subsequent edits to this document were made through a detached
   `git worktree`, leaving `/root/trading` on the deployed branch throughout.
 
-**7b. Pre-commit checklist.** `CLAUDE.md` requires `pytest tests/ -v` before every commit. It was
+**8b. Pre-commit checklist.** `CLAUDE.md` requires `pytest tests/ -v` before every commit. It was
 **skipped** for these commits: they add a single Markdown file under `docs/` and touch no Python,
-config, template, or test. Nav-bar checks were performed (7a). No hardcoded `~/trading/` paths
+config, template, or test. Nav-bar checks were performed (8a). No hardcoded `~/trading/` paths
 were introduced. Port 8080 was not started.
 
-**7c. Services.** No service was restarted, started, or stopped at any point, per instruction.
+**8c. Services.** No service was restarted, started, or stopped at any point, per instruction.
 Dynamic Universe remains frozen and untouched.
 
 ---
@@ -310,4 +359,4 @@ Dynamic Universe remains frozen and untouched.
 **This record does not authorize any code, config, order, or service change.** It documents
 read-only probes, a protective database copy, and a halt. Zero orders were placed, modified, or
 cancelled; zero live databases were moved or written; zero services were restarted. The one
-incidental change to the working tree is disclosed and reverted in §7a.
+incidental change to the working tree is disclosed and reverted in §8a.
