@@ -260,8 +260,17 @@ class IGBroker(BaseBroker):
         action: str,
         qty: float,
         name: str,
+        stop_price: float = None,
     ) -> FillResult:
-        """Place a market order on IG and wait for confirmation."""
+        """Place a market order on IG and wait for confirmation.
+
+        When ``stop_price`` is given the protective stop is attached through
+        the deal parameters of the opening request itself (``stop_level``), so
+        the position is never live without protection -- IG's equivalent of the
+        IBKR parent/child bracket. ``guaranteed_stop`` stays "false": a
+        guaranteed stop is a chargeable product and changing that is not in
+        this PR's scope.
+        """
         epic = self._resolve_epic(contract)
         if not epic:
             logger.error("place_order: no epic for %s", name)
@@ -290,7 +299,8 @@ class IGBroker(BaseBroker):
                 limit_distance=None,
                 limit_level=None,
                 quote_id=None,
-                stop_level=None,
+                stop_level=(float(stop_price)
+                            if stop_price is not None else None),
                 stop_distance=None,
                 trailing_stop=None,
                 trailing_stop_increment=None,
@@ -396,9 +406,12 @@ class IGBroker(BaseBroker):
         signal: int,
         confidence: str,
         position: float,
+        stop_price: float = None,
     ) -> tuple[str, FillResult]:
         """
         Translate a signal into an order, respecting ``long_only``.
+
+        ``stop_price`` is applied to entries only; closes never carry a stop.
 
         Returns (action_string, FillResult).
         """
@@ -408,7 +421,8 @@ class IGBroker(BaseBroker):
         long_only = inst.get("long_only", True)
 
         if signal == 1 and position == 0:
-            result = self.place_order(inst, "BUY", qty, name)
+            result = self.place_order(inst, "BUY", qty, name,
+                                      stop_price=stop_price)
             return f"BOUGHT [{confidence}]", result
 
         if signal == -1 and position > 0:
@@ -416,7 +430,8 @@ class IGBroker(BaseBroker):
             return "SOLD_CLOSE", result
 
         if signal == -1 and position == 0 and not long_only:
-            result = self.place_order(inst, "SELL", qty, name)
+            result = self.place_order(inst, "SELL", qty, name,
+                                      stop_price=stop_price)
             return f"SHORTED [{confidence}]", result
 
         if signal == 1 and position < 0:

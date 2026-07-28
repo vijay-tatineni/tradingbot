@@ -186,6 +186,10 @@ class PositionReconciler:
         self.tracker = tracker
         self.alerts = alerts
         self.gate = ReconciliationGate(auto_clear=auto_clear)
+        # Stop-protection issues already reported, so a standing problem does
+        # not re-alert every cycle (same discipline as the divergence gate).
+        self._reported_unprotected: set[str] = set()
+        self._reported_orphans: set[str] = set()
 
     def is_blocked(self, symbol: str) -> bool:
         return self.gate.is_blocked(symbol)
@@ -222,7 +226,70 @@ class PositionReconciler:
                     f"{divergence.describe()} — new entries blocked", "WARN")
             self._alert(self._format_alert(newly_divergent, context))
 
+        # Protective-stop audit rides the same pass: it needs the same broker
+        # read and owns the same alerting path.
+        self.check_protective_stops(context)
+
         return divergences
+
+    def check_protective_stops(self, context: str = "startup") -> dict:
+        """Report positions without a broker-held stop, and orphaned stops.
+
+        Two distinct failures, both invisible before PR B:
+
+        * **unprotected** — a tracked position with no working stop at the
+          broker. If the process dies, that position has no protection at all.
+        * **orphaned** — a working stop with no matching broker position. The
+          stop is never ratcheted and never expires, so left alone it can OPEN
+          a brand-new position in the opposite direction the next time price
+          touches it. That is how a flatten becomes a reversal.
+
+        Returns ``{'unprotected': [...], 'orphaned': [...], 'verified': bool}``.
+        """
+        result = {"unprotected": [], "orphaned": [], "verified": False}
+
+        if not getattr(self.broker, "supports_stop_introspection", lambda: False)():
+            log(f"[Stops] broker cannot list working orders ({context}) — "
+                f"stop protection is UNVERIFIED, not confirmed absent", "WARN")
+            return result
+
+        try:
+            stop_symbols = set(self.broker.working_stop_symbols())
+            broker_symbols = {p.symbol for p in self.broker.get_all_positions()
+                              if float(p.qty or 0.0) != 0.0}
+        except Exception as exc:
+            log(f"[Stops] could not read working stops ({context}): {exc} — "
+                f"treating as unverified", "WARN")
+            return result
+
+        result["verified"] = True
+        skip = self._unmanaged()
+        tracked = {s for s in self.tracker.open if s not in skip}
+
+        result["unprotected"] = sorted(tracked - stop_symbols)
+        result["orphaned"] = sorted(stop_symbols - broker_symbols - skip)
+
+        new_unprotected = [s for s in result["unprotected"]
+                           if s not in self._reported_unprotected]
+        new_orphans = [s for s in result["orphaned"]
+                       if s not in self._reported_orphans]
+        self._reported_unprotected = set(result["unprotected"])
+        self._reported_orphans = set(result["orphaned"])
+
+        if new_unprotected or new_orphans:
+            lines = [f"⚠️ <b>Protective stop check</b> ({context})", ""]
+            for symbol in new_unprotected:
+                log(f"[Stops] {symbol} has NO broker-held stop", "WARN")
+                lines.append(f"• {symbol}: tracked position with no "
+                             f"broker-held stop")
+            for symbol in new_orphans:
+                log(f"[Stops] orphaned stop for {symbol} — no open position",
+                    "WARN")
+                lines.append(f"• {symbol}: orphaned stop order, no open "
+                             f"position (could open a new one)")
+            self._alert("\n".join(lines))
+
+        return result
 
     def _format_alert(self, divergences: Sequence[Divergence],
                       context: str) -> str:

@@ -30,10 +30,16 @@ class BrokerPosition:
 
 @dataclass
 class FillResult:
-    """Result of an order placement attempt."""
+    """Result of an order placement attempt.
+
+    ``stop_attached`` reports whether a broker-held protective stop is working
+    for the position this fill opened. Meaningful for entries only.
+    """
     success: bool = False
     fill_price: float = 0.0
     filled_qty: float = 0.0
+    stop_attached: bool = False
+    stop_order_id: int = 0
 
     def __bool__(self):
         return self.success
@@ -126,7 +132,7 @@ class BaseBroker(ABC):
 
     @abstractmethod
     def place_order(self, contract, action: str, qty: float,
-                    name: str) -> FillResult:
+                    name: str, stop_price: float = None) -> FillResult:
         """
         Place a market order and wait for fill confirmation.
 
@@ -135,6 +141,11 @@ class BaseBroker(ABC):
             action: 'BUY' or 'SELL'
             qty: number of shares/contracts
             name: instrument display name (for logging)
+            stop_price: when given, submit the entry with a broker-attached
+                protective stop at this level, atomically. Implementations must
+                guarantee the spec invariant that no unprotected position
+                persists: if the entry fills but the stop cannot be made to
+                work after one retry, flatten the position and alert.
 
         Returns:
             FillResult with fill details
@@ -154,8 +165,9 @@ class BaseBroker(ABC):
         """
 
     @abstractmethod
-    def handle_signal(self, inst: dict, signal: int,
-                      confidence: str, position: float) -> tuple[str, FillResult]:
+    def handle_signal(self, inst: dict, signal: int, confidence: str,
+                      position: float,
+                      stop_price: float = None) -> tuple[str, FillResult]:
         """
         Execute a trade based on signal and current position.
         Respects long_only constraint from instrument config.
@@ -172,6 +184,29 @@ class BaseBroker(ABC):
 
     def set_alerts(self, alerts) -> None:
         """Wire up alert handler (e.g. Telegram) for order failures."""
+
+    # ── Broker-held protective stops ──────────────────────────
+    #
+    # Concrete no-op defaults rather than abstract methods: a broker that
+    # cannot introspect its working orders still satisfies the interface, and
+    # the startup check degrades to "cannot verify" instead of breaking. Both
+    # are overridden where the broker does support it.
+
+    def working_stop_symbols(self) -> set:
+        """Symbols that currently have a live broker-held protective stop."""
+        return set()
+
+    def supports_stop_introspection(self) -> bool:
+        """Whether working_stop_symbols() reflects reality for this broker.
+
+        False means the startup check must report "unverifiable" rather than
+        concluding that every position is unprotected.
+        """
+        return False
+
+    def cancel_stops_for_symbol(self, symbol: str) -> int:
+        """Cancel working protective stops for a symbol; return the count."""
+        return 0
 
     # ── Portfolio ─────────────────────────────────────────────
 

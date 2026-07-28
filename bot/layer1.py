@@ -30,6 +30,7 @@ from bot.logger           import log, separator
 from bot.sizing            import calculate_qty
 from bot.order_validator  import validate_order, OrderValidationError
 from bot.reconciliation    import PositionReconciler
+from bot.protective_stops  import compute_stop_price
 
 _BASE_DIR = Path(__file__).parent.parent
 
@@ -271,6 +272,12 @@ class ActiveTrading:
             'emergency_stop_pct',
             trail_stop_pct * 2  # default: 2x trail stop
         )
+        # Levels for the broker-attached protective stop. Deliberately the
+        # emergency level, not the trail: the broker stop is a backstop for
+        # process/host death, and attaching at the trail level would fire
+        # without the synthetic layer's confirmation logic, changing exits.
+        entry_stop_long  = compute_stop_price(price, 'LONG',  emergency_stop_pct)
+        entry_stop_short = compute_stop_price(price, 'SHORT', emergency_stop_pct)
         bar_closed = is_bar_close(timeframe, inst)
 
         # Per-cycle per-instrument tick — plugins use this to advance
@@ -440,7 +447,8 @@ class ActiveTrading:
                         allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                         if allowed:
                             fill_result = self.broker.place_order(
-                                inst['contract'], 'BUY', inst['qty'], inst['name'])
+                                inst['contract'], 'BUY', inst['qty'], inst['name'],
+                                stop_price=entry_stop_long)
                             if fill_result:
                                 fill_price = fill_result.fill_price or price
                                 fill_qty = fill_result.filled_qty or inst['qty']
@@ -487,7 +495,8 @@ class ActiveTrading:
                         live_blocked_by = "sentiment"
                     if allowed:
                         action, fill_result = self.broker.handle_signal(
-                            inst, result.signal, result.confidence, pos)
+                            inst, result.signal, result.confidence, pos,
+                            stop_price=entry_stop_long)
                         if 'BOUGHT' in action and fill_result:
                             fill_price = fill_result.fill_price or price
                             fill_qty = fill_result.filled_qty or inst['qty']
@@ -527,7 +536,8 @@ class ActiveTrading:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed:
                         action, fill_result = self.broker.handle_signal(
-                            inst, result.signal, result.confidence, pos)
+                            inst, result.signal, result.confidence, pos,
+                            stop_price=entry_stop_short)
                         if 'SHORTED' in action and fill_result:
                             fill_price = fill_result.fill_price or price
                             fill_qty = fill_result.filled_qty or inst['qty']
