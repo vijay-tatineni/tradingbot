@@ -46,6 +46,38 @@ def _minutes_since_boundary(now_local, hour, minute):
     return delta / 60
 
 
+def _minutes_until_boundary(now_local, hour, minute):
+    """Return minutes remaining until (hour, minute) today, or None if passed."""
+    boundary = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    delta = (boundary - now_local).total_seconds()
+    if delta < 0:
+        return None
+    return delta / 60
+
+
+def exchange_schedule(inst: dict):
+    """(tz, 4hr close times, daily close time) for an instrument's exchange."""
+    market = inst.get('market', '')
+    currency = inst.get('currency', 'USD')
+    if market == 'LSE' or currency == 'GBP':
+        return LONDON_TZ, LSE_4HR_CLOSES, LSE_DAILY_CLOSE
+    if currency == 'EUR':
+        return PARIS_TZ, EUR_4HR_CLOSES, EUR_DAILY_CLOSE
+    return NEW_YORK_TZ, US_4HR_CLOSES, US_DAILY_CLOSE
+
+
+def has_unreachable_4hr_boundary(inst: dict) -> bool:
+    """True when a 4hr bar closes at or after this exchange's market close.
+
+    US:  4hr closes 12:00 / 16:00, market closes 16:00 -> 16:00 unreachable.
+    LSE: 4hr closes 13:00 / 17:00, market closes 16:30 -> 17:00 unreachable
+         (a full 30 minutes after trading has ended).
+    EUR: 4hr closes 13:00 / 17:00, market closes 17:30 -> both reachable.
+    """
+    _tz, four_hr_closes, daily_close = exchange_schedule(inst)
+    return any(boundary >= daily_close for boundary in four_hr_closes)
+
+
 def is_bar_close(timeframe: str, inst: dict, now_utc=None) -> bool:
     """
     Check if we're within WINDOW_MINUTES after a bar close boundary.
@@ -90,15 +122,28 @@ def should_evaluate_tier2(timeframe: str, inst: dict, now_utc=None) -> bool:
     daily-timeframe instrument. Evaluating each cycle turns an unbounded dead
     band into one cycle interval.
 
-    4hr instruments keep the existing window: their 12:00 boundary falls inside
-    market hours and is genuinely reached. (Their second boundary, at the
-    16:00 close, is unreachable for the same reason as above -- so 4hr names get
-    one evaluation per day rather than two. Out of scope here; noted rather
-    than silently fixed.)
+    4hr instruments keep the post-close window for boundaries that fall inside
+    market hours (US 12:00, LSE 13:00). For a boundary at or after the market
+    close -- US 16:00, LSE 17:00 -- the post-close window is unreachable for
+    exactly the same reason, so Tier-2 evaluates in the window immediately
+    *before* the close instead: the last moment the bar is still observable.
+    Without that, US and LSE 4hr names got one evaluation per day rather than
+    two, and the final bar of every session was never acted on.
     """
     if timeframe == 'daily':
         return True
-    return is_bar_close(timeframe, inst, now_utc)
+    if is_bar_close(timeframe, inst, now_utc):
+        return True
+
+    # Pre-close fallback for a 4hr boundary that the post-close window can
+    # never observe.
+    if not has_unreachable_4hr_boundary(inst):
+        return False
+
+    tz, _four_hr_closes, daily_close = exchange_schedule(inst)
+    now_local = (now_utc or datetime.datetime.now(pytz.utc)).astimezone(tz)
+    remaining = _minutes_until_boundary(now_local, *daily_close)
+    return remaining is not None and 0 < remaining <= WINDOW_MINUTES
 
 
 def next_bar_close_str(timeframe: str, inst: dict, now_utc=None) -> str:
