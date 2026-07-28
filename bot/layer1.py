@@ -104,12 +104,37 @@ class ActiveTrading:
 
         # Live equity for risk sizing, read once per cycle rather than once
         # per instrument (same freshness, one broker call instead of N).
+        #
+        # An unreadable equity blocks NEW ENTRIES for the whole cycle. It is
+        # never substituted with a fallback model or an assumed figure: the
+        # same discipline as PR A's failed position read and PR B's
+        # unverifiable stop check -- absence of evidence is not evidence, and
+        # it must never quietly admit new risk. Exits are deliberately
+        # unaffected; they do not depend on sizing and must always be able to
+        # run.
         self._cycle_equity = self.broker.get_account_equity()
-        if self._cycle_equity:
+        equity_ok = bool(self._cycle_equity and self._cycle_equity > 0)
+        self._equity_unavailable = not equity_ok
+
+        if equity_ok:
             log(f"Account equity: {self._cycle_equity:,.2f} (live)")
+            if getattr(self, '_equity_alerted', False):
+                log("Account equity readable again — new entries re-enabled")
+                self._equity_alerted = False
         else:
-            log("Account equity unavailable — sizing falls back to "
-                "equal-notional this cycle", "WARN")
+            log("Account equity unavailable — NEW ENTRIES BLOCKED this "
+                "cycle (exits unaffected)", "WARN")
+            if self.alerts and not getattr(self, '_equity_alerted', False):
+                try:
+                    self.alerts.send(
+                        "⚠️ <b>Account equity unreadable</b>\n\n"
+                        "Risk sizing needs live broker equity, so new entries "
+                        "are blocked until it can be read again. Existing "
+                        "positions are still managed and exits still run."
+                    )
+                except Exception as e:
+                    log(f"  equity alert failed: {e}", "WARN")
+                self._equity_alerted = True
 
         self.signal_rows = []
         self._entries_this_cycle = 0
@@ -182,6 +207,10 @@ class ActiveTrading:
 
     def _can_enter(self, symbol: str) -> bool:
         """Check if portfolio risk limits allow a new entry."""
+        if getattr(self, '_equity_unavailable', False):
+            log(f"  [{symbol}] Skipping entry — account equity unreadable, "
+                f"cannot size by risk", "WARN")
+            return False
         if self.reconciler.is_blocked(symbol):
             log(f"  [{symbol}] Skipping entry — unresolved position divergence "
                 f"between broker and positions.db", "WARN")

@@ -135,9 +135,10 @@ def calculate_qty(instrument: dict, current_price: float,
                 f"no position taken", "WARN")
         return qty
 
-    log(f"  [{symbol}] No live equity available — falling back to "
-        f"equal-notional sizing", "WARN")
-
+    # No equity supplied. This is the backtest simulator's path
+    # (backtest/simulator.py has no broker to ask), NOT a live fallback: in
+    # live trading layer1 blocks new entries outright when equity cannot be
+    # read, rather than silently sizing by a different model.
     target = instrument.get('target_notional')
     if target is None:
         target = default_target_notional

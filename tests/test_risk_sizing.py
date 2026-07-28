@@ -173,19 +173,66 @@ def test_live_equity_selects_risk_sizing():
     assert calculate_qty(inst, 100.0, 1000.0, equity=EQUITY) == 500
 
 
-def test_missing_equity_falls_back_to_equal_notional_not_an_assumed_figure():
-    """The legacy int(target/price) path — visibly different, never invented."""
+def test_no_equity_is_the_backtest_path_not_a_live_fallback():
+    """backtest/simulator.py has no broker to ask, so it sizes by notional.
+
+    In *live* trading this branch is unreachable: layer1 blocks new entries
+    outright when equity cannot be read (see the entry-gate tests below), so
+    equal-notional never silently substitutes for risk sizing.
+    """
     inst = {"symbol": "AAPL", "currency": "USD", "trail_stop_pct": 5.0}
     assert calculate_qty(inst, 100.0, 1000.0, equity=None) == 10
 
 
-def test_zero_equity_is_treated_as_unavailable_not_as_zero_risk():
-    inst = {"symbol": "AAPL", "currency": "USD", "trail_stop_pct": 5.0}
-    assert calculate_qty(inst, 100.0, 1000.0, equity=0.0) == 10
-
-
-def test_equal_notional_legacy_behaviour_is_unchanged():
-    """Regression guard for the fallback path."""
+def test_equal_notional_behaviour_is_unchanged_for_the_simulator():
+    """Regression guard: backtests must keep sizing exactly as before."""
     inst = {"symbol": "AAPL", "currency": "USD"}
     assert calculate_qty(inst, 250.0, 1000.0) == 4
     assert calculate_qty({"symbol": "X", "qty": 7}, 100.0, None) == 7
+
+
+# ── live entry gate when equity cannot be read ───────────────────────
+#
+# ActiveTrading is built via object.__new__ so __init__ -- which would
+# construct a real PositionTracker against the live positions.db path -- never
+# runs. Only the attributes _can_enter reads are populated.
+
+class _StubReconciler:
+    def is_blocked(self, symbol):
+        return False
+
+
+def _entry_gate(equity_unavailable):
+    from types import SimpleNamespace
+
+    from bot.layer1 import ActiveTrading
+
+    bot = object.__new__(ActiveTrading)
+    bot.reconciler = _StubReconciler()
+    bot.cfg = SimpleNamespace(max_open_positions=5, max_entries_per_cycle=3)
+    bot._open_count = 0
+    bot._entries_this_cycle = 0
+    bot._equity_unavailable = equity_unavailable
+    return bot
+
+
+def test_unreadable_equity_blocks_new_entries():
+    """No fallback model: an unreadable account admits no new risk."""
+    assert _entry_gate(True)._can_enter("AAPL") is False
+
+
+def test_readable_equity_leaves_entries_alone():
+    assert _entry_gate(False)._can_enter("AAPL") is True
+
+
+def test_equity_block_applies_to_every_symbol():
+    """Unlike PR A's per-symbol divergence block, this one is account-wide."""
+    gate = _entry_gate(True)
+    assert all(gate._can_enter(s) is False for s in ("AAPL", "MSFT", "BARC"))
+
+
+def test_entry_gate_defaults_to_permitting_when_flag_absent():
+    """A partially-built object must not accidentally block all trading."""
+    gate = _entry_gate(False)
+    del gate._equity_unavailable
+    assert gate._can_enter("AAPL") is True
