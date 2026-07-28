@@ -79,22 +79,35 @@ class IBKRBroker(BaseBroker):
     # ── Order Execution ───────────────────────────────────────
 
     def place_order(self, contract, action: str, qty: float,
-                    name: str) -> FillResult:
-        result = self._orders.place(contract, action, qty, name)
+                    name: str, stop_price: float = None) -> FillResult:
+        result = self._orders.place(contract, action, qty, name,
+                                    stop_price=stop_price)
         return self._convert_fill(result)
 
     def close_position(self, inst: dict, position: float) -> FillResult:
         result = self._orders.close(inst, position)
         return self._convert_fill(result)
 
-    def handle_signal(self, inst: dict, signal: int,
-                      confidence: str, position: float) -> tuple[str, FillResult]:
+    def handle_signal(self, inst: dict, signal: int, confidence: str,
+                      position: float,
+                      stop_price: float = None) -> tuple[str, FillResult]:
         action, result = self._orders.handle_signal(
-            inst, signal, confidence, position)
+            inst, signal, confidence, position, stop_price=stop_price)
         return action, self._convert_fill(result)
 
     def set_alerts(self, alerts) -> None:
         self._orders.alerts = alerts
+
+    # ── Broker-held protective stops ──────────────────────────
+
+    def supports_stop_introspection(self) -> bool:
+        return True
+
+    def working_stop_symbols(self) -> set:
+        return {t.contract.symbol for t in self._orders.working_stop_trades()}
+
+    def cancel_stops_for_symbol(self, symbol: str) -> int:
+        return self._orders.cancel_stops_for(symbol)
 
     # ── Portfolio ─────────────────────────────────────────────
 
@@ -138,6 +151,8 @@ class IBKRBroker(BaseBroker):
             success=ibkr_result.success,
             fill_price=ibkr_result.fill_price,
             filled_qty=ibkr_result.filled_qty,
+            stop_attached=getattr(ibkr_result, 'stop_attached', False),
+            stop_order_id=getattr(ibkr_result, 'stop_order_id', 0),
         )
 
     @staticmethod
