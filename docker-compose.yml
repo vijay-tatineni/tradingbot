@@ -11,6 +11,14 @@ services:
       TWS_ACCEPT_INCOMING: "accept"
       TWOFA_DEVICE: "IBKEY"
       TWOFA_TIMEOUT_ACTION: "restart"
+      # Auto-resolve the "Existing session detected" login dialog by taking over
+      # the session, instead of blocking on it forever waiting for a human click.
+      # On 2026-07-27 an unset value left IBC stuck on that modal for ~3h, so the
+      # API refused every clientId and the authorized flatten window was lost.
+      # Renders into IBC's config.ini line 329 via config.ini.tmpl (envsubst) --
+      # editing config.ini by hand does NOT persist, as it is regenerated from
+      # that template on every container start (scripts/common.sh).
+      EXISTING_SESSION_DETECTED_ACTION: "primary"
       TWS_SETTINGS_PATH: ""  
     ports:
       - "127.0.0.1:4001:4001"
