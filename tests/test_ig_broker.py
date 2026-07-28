@@ -93,6 +93,16 @@ def test_create_broker_ig_without_credentials():
     assert broker.api_key == ""
 
 
+def test_empty_config_credentials_not_overridden_by_env():
+    """Empty string in config must be honoured, not replaced by env vars."""
+    with patch.dict("os.environ", {"IG_USERNAME": "env_user", "IG_PASSWORD": "env_pass", "IG_API_KEY": "env_key"}):
+        cfg = _make_cfg(ig_username="", ig_password="", ig_api_key="")
+        broker = IGBroker(cfg)
+        assert broker.username == ""
+        assert broker.password == ""
+        assert broker.api_key == ""
+
+
 # ── Interface compliance ──────────────────────────────────────────
 
 def test_ig_broker_implements_base():
