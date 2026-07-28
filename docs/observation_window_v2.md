@@ -1,6 +1,8 @@
 # Observation Window v2 — Pre-Registration
 
-> **Pre-registration. Nothing restarts until this document is merged.**
+> **Pre-registration.** Criteria were fixed and merged **before** the Phase 3 restart on
+> 2026-07-28, so they cannot be adjusted after seeing results. The window itself starts per
+> §7.1 — the first full session after all seven §8 checks pass, not the restart evening.
 > Per `docs/phase2_remediation_spec.md` §Phase 3, the success criteria are fixed **before**
 > services come back up, so they cannot be adjusted after seeing results.
 > All figures below were signed off by the operator on 2026-07-28.
@@ -236,11 +238,35 @@ independent of §6.2 and is evaluated first.
 
 ---
 
-## 7. Duration
+## 7. Timing
+
+### 7.1 When the clock starts
+
+**The window dates from the first full trading session after all seven §8 checks pass —
+not from the first cycle after restart.**
+
+Services were restarted on **2026-07-28 at 18:21 ET, with markets closed**. Cycles ran and
+four §8 checks passed that evening, but items 2, 3 and 5 cannot be observed without a live
+session: no entry can be placed, and Tier-2 cannot evaluate, while every instrument is shut.
+Dating the window from that evening would count hours in which the system could not have
+done the thing being measured.
 
 | | |
 |---|---|
-| Nominal duration | **4 calendar weeks** from first cycle |
+| Restart (services up, cycling) | 2026-07-28, 18:21 ET |
+| **Window start** | **first full session on 2026-07-29, once §8 items 2, 3 and 5 are confirmed** |
+| Recorded start timestamp | *to be filled in when §8 completes* |
+
+If §8 does not complete on 2026-07-29 — no entry occurs, so items 2 and 3 stay open — the
+clock still starts once **item 5 (Tier-2 evaluations)** is confirmed, since that is the check
+that proves the measured system is the fixed one. Items 2 and 3 are then confirmed at the
+first entry and recorded in §10 without moving the start date.
+
+### 7.2 Duration
+
+| | |
+|---|---|
+| Nominal duration | **4 calendar weeks** from the §7.1 window start |
 | Hard minimum | 4 weeks **and** the §5 sample floor |
 | Extension trigger | §5 floor unmet, **or** §6.2 returns EXTEND |
 | Extension increment | **2 weeks**, at most **twice** (10 weeks total) |
@@ -271,9 +297,45 @@ To be confirmed on the first cycle, before the window is considered started:
 The deferred `CLAUDE.md` restart rule from PR #19 and every Phase 2 PR since is satisfied by
 this restart.
 
+### 8.1 Status as of the 2026-07-28 restart
+
+| # | Check | Status |
+|---|---|---|
+| 1 | Reconciliation silent | ✅ no divergence, no unprotected position, no orphan; tracker 0 vs broker 0 |
+| 2 | First entry carries a broker-held stop | ⏸ pending first entry |
+| 3 | Sizing matches the risk formula | ⏸ pending first entry |
+| 4 | Equity reads; no entry block | ✅ `Account equity: 251,006.98 (live)` every cycle |
+| 5 | Tier-2 evaluations in logs | ⏸ markets closed at restart; due 2026-07-29 |
+| 6 | Stop-ratio cap live | ✅ no instrument exceeds 3× |
+| 7 | Services restarted | ✅ api → nginx → bot (re-enabled) |
+
+IG (`cogniflowai-ig-api`, `cogniflowai-ig-bot`) remains **stopped** — see §11.
+
 ---
 
-## 9. Sign-off log
+## 9. Restart record — database policy applied
+
+The Phase 1 archive was not restored wholesale. Each database was classified as **history**
+(safe, restore) or **live state / counter** (stale, start fresh), because stale state
+re-entering a flat account creates divergence or contaminates a fresh measurement.
+
+| Database | Classification | Action | Why |
+|---|---|---|---|
+| `regime.db` | history | **restored** | 12,143 shadow decisions, 518 classification cache rows |
+| `news.db` | history | **restored** | 47,771 headlines |
+| `backtest.db` | history | **restored** | 55,025 OHLCV bars, 85 walk-forward results |
+| `advisor.db` | history | **restored** | dated append-only `advisor_reports` archive |
+| `positions.db` | live state | **fresh** | held 4 stale LONGs (GOOGL, NBIS, AAPL, MSFT) against a flat broker — would fire 4 phantom divergences and block entries |
+| `learning_loop.db` | counter state | **fresh** | see §11 |
+| `layer3_silver.db` | live state | **fresh** | `silver_scalper_state` held SSLN intraday state from 2026-07-08 (`day_low`=`day_high`=4314.0); SSLN is enabled, so a three-week-old intraday range would corrupt the scalper. Its history table `layer3_trades` was empty — nothing to preserve |
+
+All restores were verified by hash against the archive, and the archive itself re-verified
+intact (9/9) afterwards. Code deployed: `/root/trading` moved from `350b28f` to `c44fe1f`
+(17 commits), which is what actually put PRs A–D and the cap into production.
+
+---
+
+## 10. Sign-off log
 
 | Item | Decision | Date |
 |---|---|---|
@@ -282,5 +344,55 @@ this restart.
 | Sample floors (§5), ±0.10R band (§6), durations (§7) | **Accepted** | 2026-07-28 |
 | Decision statistic | **Refined**: bootstrap CI, not point estimates. KEEP/RETIRE only when the CI clears the band; a straddling CI at 4 weeks extends toward the 10-week hard stop | 2026-07-28 |
 | `E_taken ≤ 0` hard override | **Confirmed as written** (§6.3) | 2026-07-28 |
+| Window start date | **First full session after §8 completes**, not the restart evening (§7.1) | 2026-07-28 |
+| `advisor.db` / `layer3_silver.db` | Classified by the established rule: advisor **restored** (history), layer3_silver **fresh** (stale intraday state) — §9 | 2026-07-28 |
 
-Nothing restarts until this document is merged.
+Phase 3 services were restarted on 2026-07-28 after this document was merged. The window
+itself starts per §7.1.
+
+---
+
+## 11. Post-window follow-ups
+
+Named, deferred, and **not to be actioned during the window** — changing the system
+mid-flight would void the measurement (§7.2).
+
+### 11.1 Consecutive-loss counter has no era boundary
+
+`LearningLoop._check_consecutive_losses` reads:
+
+```sql
+SELECT outcome FROM trades WHERE symbol = ? AND outcome IS NOT NULL
+ORDER BY id DESC LIMIT 5
+```
+
+There is no filter on time, system version, or window. `_check_auto_disable` then writes
+`enabled: false` into `instruments.json` at the threshold (default 3), so **outcomes produced
+by one version of the system can auto-disable an instrument under a later, different one**.
+
+This is why `learning_loop.db` was started fresh (§9). At restart the archive held 36
+outcomes whose newest was 2026-07-08, and **SU already carried two trailing losses** — a
+single loss under the new system would have disabled it on old-system evidence. Seven other
+symbols carried one.
+
+Starting fresh sidesteps the problem for this window; it does not fix it. The counter will
+accumulate the same latent issue across any future system change.
+
+**Proposed fix (post-window):** give the trades table an era/window marker and filter the
+counter to the current era, so auto-disable only ever reasons about outcomes the current
+system produced. Do not implement during the window.
+
+### 11.2 IG demo market-data entitlement
+
+`cogniflowai-ig-api` and `cogniflowai-ig-bot` remain **stopped**. The IG deployment logs
+`insufficient bars: got 0, need 200` continuously — the known demo entitlement issue. IG is
+out of scope for this window and is not measured by it.
+
+Consequence: nginx still serves the IG vhost on **port 8083** with no backend behind it, so
+requests there error. Accepted and left as-is.
+
+### 11.3 Databases not carried into this window
+
+`learning_loop.db` (§11.1) and `layer3_silver.db` (§9) were started fresh. Their archived
+contents remain in `backups/20260726T210849Z/trading_live_dbs_20260728T1900Z/`, hash-verified
+and untouched, should either be wanted later.
