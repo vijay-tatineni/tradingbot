@@ -1,4 +1,28 @@
-# Phase 1 Flatten Record — **HALTED AT STEP 3**
+# Phase 1 Flatten Record — **COMPLETE: `PHASE_1_FLAT`**
+
+> **Status: `PHASE_1_FLAT`, issued 2026-07-28.** The IBKR paper account `DUQ141950` is
+> verified flat: 0 positions, 0 working orders, broker-computed `GrossPositionValue` GBP 0.00.
+> **No order was ever placed, modified, or cancelled at any point in Phase 1.** The account did
+> not become flat through trading — an overnight cash reset wiped the six short positions before
+> the authorized flatten could run. Phase 1 baseline: **GBP 250,000**.
+
+This record has two parts, kept separate because the second supersedes the first's *status*
+but not its *evidence*:
+
+| | Date | Status then | Contents |
+|---|---|---|---|
+| **Part I** | 2026-07-26 | `PHASE_1_NOT_FLAT` | Discovery of the six flipped shorts, read-only probes, protective DB copy, halt |
+| **Part II** | 2026-07-27 → 28 | **`PHASE_1_FLAT`** | Stuck-gateway remediation, flat verification, decommission, sign-off |
+
+Part I is retained verbatim. Its `PHASE_1_NOT_FLAT` banner and its "required decision" were
+accurate on 2026-07-26 and are **superseded by Part II** — read it as history, not as current
+state. Section numbers in Part II are namespaced `II.n` so the two parts never collide.
+
+---
+
+# Part I — 2026-07-26: halted at step 3 (superseded)
+
+> *Historical record, preserved unchanged. Superseded by Part II.*
 
 > **Status: `PHASE_1_NOT_FLAT`.** The IBKR paper account is **not flat**. Read-only probes at
 > 2026-07-26 21:06 UTC (`clientId=77`) and 21:19 UTC (`clientId=0`) both found **6 open short
@@ -360,3 +384,273 @@ Dynamic Universe remains frozen and untouched.
 read-only probes, a protective database copy, and a halt. Zero orders were placed, modified, or
 cancelled; zero live databases were moved or written; zero services were restarted. The one
 incidental change to the working tree is disclosed and reverted in §8a.
+
+---
+
+# Part II — 2026-07-27/28: flat, decommissioned, signed off
+
+> **No order was ever placed.** The delegated flatten was authorized twice and executed
+> zero times: Monday's window was lost to a stuck broker gateway, and by Tuesday's window
+> the account was already flat because an overnight cash reset had wiped the positions.
+> Every broker interaction recorded here was read-only (`readonly=True`).
+
+- Committed on `docs/flatten-and-pause` via a detached `git worktree`, leaving the
+  production tree `/root/trading` on its own branch throughout (same practice as §8a).
+- Record written: 2026-07-28
+
+---
+
+## II.1. Outcome
+
+| Item | Result |
+|---|---|
+| Orders placed | **0** (none, on either authorized day) |
+| Final account state | **FLAT** — 0 positions, 0 working orders |
+| How it became flat | **Overnight cash reset**, not trades (see §II.4) |
+| Authorized flatten | Not executed — became unnecessary |
+| Services | **All stopped** — both APIs, both bots, nginx; ports 8080–8083 closed (§II.6.1) |
+| Live DBs | **Archived**, hash-verified — IBKR tree (§II.6.2) and IG tree (§II.6.3) |
+| Phase 1 baseline | **GBP 250,000** (§II.5) |
+| PHASE_1_FLAT | **ISSUED** 2026-07-28 |
+
+---
+
+## II.2. Background
+
+The six short positions were the residue of an earlier flatten that closed at 2× size
+(or ran twice), flipping six longs to shorts. The authorized remediation was a
+buy-to-close of exactly those six shorts:
+
+`AAPL 3, AMZN 2, META 1, MSFT 2, NBIS 6, NVDA 2`
+
+under standing constraints: exact quantities taken from a live broker read, one at a
+time with fill verification and a long-flip check between each, plain market orders,
+US regular hours only, and no other orders of any kind.
+
+---
+
+## II.3. Timeline
+
+### Monday 2026-07-27 — window lost to a stuck gateway
+
+- Authorization issued for Monday US RTH.
+- Dry run and clientId-0 probe both failed: `TimeoutError` during the API handshake on
+  every clientId (0, 1, 77).
+- Root cause was **not** the script. IB Gateway was blocked on a modal dialog since
+  **12:24 ET**:
+  `IBC: detected dialog entitled: Existing session detected` /
+  `IBC: User must choose whether to continue with this session (scenario 1)`.
+  Login never completed, so the API refused all connections (`remove Client 77/0/1`).
+- Contributing config defect: `ExistingSessionDetectedAction=` is **empty**, so IBC waits
+  for manual input instead of auto-resolving. See §II.7 item 1.
+- Remediation (authorized): user logged out of Client Portal; container restarted
+  `20:16:03Z`; `IBC: Login has completed` at `20:16:15Z`. No 2FA prompt fired — the paper
+  login authenticates on password alone. No session-conflict dialog on this login.
+- Post-restart read-only probe (`probes/ibkr_probe_cid0_2026-07-27T2018Z.json`):
+  **all six shorts still open**, exact authorized quantities, all six conIds matching,
+  0 working orders, 0 executions. Every `avgCost` byte-identical to the 2026-07-26 21:19Z
+  probe, confirming nothing had moved in the account.
+- Market closed (16:00 ET) before the gateway was usable. Flatten deferred; authorization
+  re-issued for Tuesday RTH.
+
+### Tuesday 2026-07-28 — account already flat
+
+- Session confirmed open (14:44 ET), gateway healthy, both bot services inactive.
+- Pre-flatten clientId-0 probe at `18:45:48Z`: **0 positions**.
+- That empty read was **not** taken at face value — an empty `ib.positions()` is
+  indistinguishable from a not-yet-populated cache. Flatness was corroborated across
+  independent channels before any downstream action (§II.4).
+- Flatten **skipped** under the pre-authorized already-flat branch. No orders placed.
+
+---
+
+## II.4. Flat verification (multi-channel)
+
+An empty position list alone was treated as insufficient evidence. Confirmed via:
+
+| Channel | Method | Result |
+|---|---|---|
+| Positions | explicit `reqPositions()` + 5s settle, clientId 5 | **0** |
+| Portfolio | separate account-update feed, `ib.portfolio()` | **0** |
+| **Gross position value** | broker-computed `GrossPositionValue` | **GBP 0.00** |
+| Working orders | `reqAllOpenOrders()` | **0** |
+| Executions | clientId **0** (full manual/Client Portal visibility) | **0** |
+
+`GrossPositionValue` is computed broker-side and can only be `0.00` if the account holds
+nothing, which distinguishes "genuinely flat" from "data not yet arrived". Two separate
+client connections (0 and 5) agreed.
+
+**Cause — reset, not trades.** clientId 0 is the only client that sees orders and
+executions originating outside the API (TWS GUI, Client Portal, mobile). It reported
+**zero executions**. Positions therefore did not disappear through trading. Combined with
+a round `TotalCashValue` of GBP 250,000.00 that was not present the previous evening, the
+overnight cash reset wiped the six shorts.
+
+---
+
+## II.5. Post-flat account snapshot
+
+Read-only, account `DUQ141950`, server time `2026-07-28 19:00:30Z` (positions/balances)
+and `19:01:08Z` (clientId-0 executions/orders).
+
+| Field | Value |
+|---|---|
+| Positions | **0** |
+| Open / working orders | **0** |
+| Executions (clientId 0) | **0** |
+| GrossPositionValue | GBP 0.00 |
+| TotalCashValue | GBP 250,000.00 |
+| NetLiquidation | GBP 251,006.98 |
+| AvailableFunds | GBP 249,986.82 |
+| BuyingPower | GBP 999,947.25 |
+
+Prior state for contrast — 2026-07-27 20:18Z, all six short:
+
+| Symbol | conId | Position | avgCost |
+|---|---|---|---|
+| AAPL | 265598 | −3 | 312.79003335 |
+| AMZN | 3691937 | −2 | 242.3148 |
+| META | 107113386 | −1 | 602.4474 |
+| MSFT | 272093 | −2 | 382.7619 |
+| NBIS | 88819736 | −6 | 224.9185 |
+| NVDA | 4815747 | −2 | 202.9756 |
+
+### Reset amount discrepancy — resolved
+
+The reset was expected to be **£1,000,000** and to be submitted *after* the flat probe.
+A reset processed overnight regardless, and cash settled at **GBP 250,000.00**, not
+1,000,000. Note that `BuyingPower` of 999,947.25 is ≈4× cash, which is standard intraday
+leverage on a 250,000 balance — so a "1,000,000" figure seen in the UI may have been
+buying power rather than the reset amount. Both facts are recorded here without asserting
+which occurred; this needs reconciliation before Phase 2 sizing assumptions are set.
+
+**Resolved 2026-07-28:** the **GBP 250,000 balance is kept as the Phase 1 baseline**. No
+further reset was submitted, and Phase 1 is signed off against this figure. Any Phase 2
+sizing work must read equity live from the broker rather than assume this number (§II.7 item 2).
+
+---
+
+## II.6. Decommission — services stopped, live DBs archived
+
+Performed 2026-07-28 ~19:15Z, after the account was verified flat.
+
+### II.6.1 Services
+
+| Service | State | Enabled |
+|---|---|---|
+| `cogniflowai-api` | **stopped** | `enabled` (intentional) |
+| `cogniflowai-ig-api` | **stopped** | `enabled` (intentional) |
+| `cogniflowai-bot` | stopped | `disabled` |
+| `cogniflowai-ig-bot` | stopped | `disabled` |
+| `nginx` | **stopped** | `enabled` (intentional) |
+
+**Dashboards are intentionally offline until Phase 3.** The API services and nginx were
+deliberately left *stopped but enabled* — they are not to be restarted against an empty
+tree; Phase 3 restores them. Only the two bot services are `disabled`.
+
+Ports **8080, 8081, 8082 and 8083 are all closed** — the web surface is not merely erroring,
+it is not serving at all. (8080 closed also satisfies the standing project rule that it
+never run.)
+
+### II.6.2 Live DB archival
+
+Nine SQLite databases moved out of `/root/trading` into
+`backups/20260726T210849Z/trading_live_dbs_20260728T1900Z/`:
+
+`advisor.db`, `backtest.db`, `layer3_silver.db`, `learning_loop.db`, `news.db`,
+`positions.db`, `regime.db`, `trades.db`, `trading.db`
+
+Method and verification:
+
+- Services were stopped **before** the move; no WAL/SHM/journal sidecar files existed and
+  no process held an open handle, so nothing was stranded or half-written.
+- Moved into a **new subdirectory** of the existing backup rather than over the Jul-26
+  snapshot. The pre-existing `trading/` snapshot and its `SHA256SUMS.txt` are untouched and
+  still validate (**27 files OK**). The live files were not byte-identical to that snapshot
+  — most likely because the Jul-26 copy was a hot copy of databases the API had open, not
+  because the data diverged; nothing had written the live DBs since Jul 8.
+- The archive has its own `SHA256SUMS.txt`; `sha256sum -c` passes for all nine, and every
+  hash matches the pre-move hash taken in the live tree (no corruption in transit).
+- `/root/trading` now contains **no `.db` files**, and none were auto-recreated (the
+  services were already down, which was the reason for stopping them first).
+
+### II.6.3 IG live DB archival
+
+The `/root/trading-ig/` tree was archived the same way, into a parallel subdirectory of the
+same backup: `backups/20260726T210849Z/trading_ig_live_dbs_20260728T1916Z/`.
+
+Eight databases moved: `advisor.db`, `backtest.db`, `layer3_silver.db`, `learning_loop.db`,
+`news.db`, `positions.db`, `regime.db`, `trading.db` (the IG tree has no `trades.db`).
+
+Same verification as §II.6.2: `cogniflowai-ig-api` and `cogniflowai-ig-bot` were already
+stopped, no WAL/SHM/journal sidecars existed, no open handles were held; the archive has its
+own `SHA256SUMS.txt`, `sha256sum -c` passes for all eight, and every hash matches the
+pre-move hash. `/root/trading-ig` now contains no `.db` files.
+
+Both deployments are therefore fully decommissioned: no live databases and no running
+services in either tree.
+
+### II.6.4 Verification-gate status in a decommissioned tree
+
+The standing pre-commit rule is `pytest tests/ -v` with all tests passing. **That gate
+cannot pass while the tree is decommissioned**, and the reason is benign:
+
+- `tests/test_breakout_indicators.py:68` calls `sqlite3.connect("backtest.db")` on a
+  **relative** path, and line 13 imports `load_bars` from `backtest.database`. With the
+  databases archived, SQLite silently creates an empty file, `load_bars` returns nothing,
+  and the warmup-date assertions fail with
+  `TypeError: Cannot index by location index with a non-integer key`.
+- Result at time of writing: **3 failed, 1949 passed, 1 skipped** (a 4th,
+  `test_entry_signal_requires_all_four_conditions`, fails intermittently under a different
+  ordering). All failures trace to the archived databases, not to a code defect.
+- **Trap:** running the suite in this tree **recreates** `backtest.db`, `learning_loop.db`,
+  `positions.db` and `regime.db` as empty schemas, leaving the tree looking populated while
+  holding no data. After the run above, all four were confirmed byte-different from the
+  archived originals and deleted; both archives re-verified afterwards (9/9 and 8/8 OK).
+  **Anyone running tests here must re-clean the tree afterwards.**
+- `scripts/pre_commit_check.py` additionally reports a `<nav>`-element check and a set of
+  hardcoded-path checks as failing. These are unrelated to this work, which adds only this
+  Markdown file and touches none of the implicated sources.
+
+The commit recording this decommission is therefore made **with the test gate knowingly
+red**, because a green gate is unobtainable until Phase 3 restores the databases.
+
+---
+
+## II.7. Open items
+
+### Carried to Phase 2
+
+1. **`ExistingSessionDetectedAction` compose fix.** Template line 329 of
+   `/home/ibgateway/ibc/config.ini.tmpl` is
+   `ExistingSessionDetectedAction=${EXISTING_SESSION_DETECTED_ACTION}`, and `common.sh:11`
+   regenerates `config.ini` from that template on **every container start**. Editing
+   `config.ini` directly is erased by the next restart — verified empirically: after the
+   20:16 restart the file's mtime updated and line 329 was blank again. The durable fix is
+   `EXISTING_SESSION_DETECTED_ACTION: "primary"` in `docker-compose.yml`.
+   **Container-recreation caveat:** applying it requires `docker-compose up -d`, which
+   recreates the container and drops its writable layer — including TWS settings under
+   `/home/ibgateway/Jts`, as no bind mount is configured. **Not applied.**
+2. **PR D must size from live broker equity, never a hardcoded account value.** This
+   episode is the argument: the account's cash baseline changed overnight without warning
+   (§II.5), and the previously audited sizing path already computes notional independently of
+   real risk. Any sizing that embeds an assumed account value will silently mis-size after
+   a reset.
+
+### Resolved
+
+3. **Reset reconciliation — closed.** The GBP 250,000 balance is kept as the Phase 1
+   baseline; no further reset was submitted. This was the last item gating sign-off. See §II.5.
+
+---
+
+## II.8. Evidence
+
+- `backups/20260726T210849Z/probes/ibkr_probe_cid0_2026-07-27T2018Z.json` — six shorts intact
+- `backups/20260726T210849Z/probes/ibkr_probe_cid0_2026-07-28T1845Z_pre.json` — first flat read
+- `backups/20260726T210849Z/probes/ibkr_verify_flat_2026-07-28T1858Z.json` — multi-channel confirmation
+- `backups/20260726T210849Z/flatten/flatten_journal_20260726T2145Z_aborted.json` — Sunday RTH-guard abort
+- `backups/20260726T210849Z/flatten/flatten_shorts.py` — the authorized script (never run with `--execute`)
+- `backups/20260726T210849Z/trading_live_dbs_20260728T1900Z/SHA256SUMS.txt` — archived IBKR live DBs (9 files, verified)
+- `backups/20260726T210849Z/trading_ig_live_dbs_20260728T1916Z/SHA256SUMS.txt` — archived IG live DBs (8 files, verified)
+- `backups/20260726T210849Z/SHA256SUMS.txt` — pre-existing Jul-26 snapshot manifest, still valid (27 files)
