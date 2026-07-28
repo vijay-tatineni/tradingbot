@@ -25,7 +25,8 @@ from bot.market_hours     import MarketHours
 from bot.indicators       import Indicators
 from bot.signals          import SignalEngine
 from bot.position_tracker import PositionTracker
-from bot.bar_schedule     import is_bar_close, next_bar_close_str
+from bot.bar_schedule     import (is_bar_close, next_bar_close_str,
+                                  should_evaluate_tier2)
 from bot.logger           import log, separator
 from bot.sizing            import calculate_qty
 from bot.order_validator  import validate_order, OrderValidationError
@@ -327,11 +328,15 @@ class ActiveTrading:
                         log(f"  [{symbol}] Tier 1: price {price:.2f}, "
                             f"emergency at {e_price:.2f} → HOLD")
 
-                # ── Tier 2: Trail stop + TP (bar close only) ───────
-                bar_closed = is_bar_close(timeframe, inst)
+                # ── Tier 2: Trail stop + TP ───────────────────────
+                # Daily names evaluate every cycle: their bar-close window is
+                # the market close, and _process_instrument returns early when
+                # the market is shut, so the window was never observed and
+                # trail/TP never ran at all. 4hr names keep the window.
+                evaluate_tier2 = should_evaluate_tier2(timeframe, inst)
 
-                if bar_closed:
-                    # Update peak price ONLY on bar close
+                if evaluate_tier2:
+                    # Peak update: on bar close for 4hr, every cycle for daily.
                     self.tracker.update(symbol, price, trail_stop_pct,
                                         inst.get('currency', 'USD'))
 
@@ -341,10 +346,10 @@ class ActiveTrading:
                         inst.get('currency', 'USD')
                     )
 
-                    # Log bar close evaluation
+                    # Log the Tier-2 evaluation
                     peak = self.tracker.get_peak(symbol)
                     stop = self.tracker.get_stop_level(symbol)
-                    log(f"  [{symbol}] Bar closed — price {price:.2f}, "
+                    log(f"  [{symbol}] Tier 2 evaluated — price {price:.2f}, "
                         f"peak {peak:.2f}, trail at {stop:.2f}")
 
                     if smart_exit:
