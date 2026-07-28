@@ -117,6 +117,34 @@ class Portfolio:
             log(f"  P&L error: {e}", "WARN")
         return 0.0
 
+    def get_account_equity(self):
+        """Live account equity (NetLiquidation) in the account's base currency.
+
+        Returns ``None`` when it cannot be read. Deliberately no fallback
+        constant: sizing must degrade to a different, clearly-logged model
+        rather than quietly size against a stale number. Phase 1's overnight
+        baseline change from ~GBP 1.01M to GBP 250,000 is the standing reason.
+        """
+        try:
+            candidates = {}
+            for v in self.ib.accountValues(self.cfg.account):
+                if v.tag == 'NetLiquidation':
+                    try:
+                        value = float(v.value)
+                    except (TypeError, ValueError):
+                        continue
+                    if value > 0:
+                        candidates[v.currency or ''] = value
+            if not candidates:
+                return None
+            # IBKR reports NetLiquidation per currency plus a BASE roll-up.
+            if 'BASE' in candidates:
+                return candidates['BASE']
+            return next(iter(candidates.values()))
+        except Exception as e:
+            log(f"  Equity read failed: {e}", "WARN")
+        return None
+
     def _get_fx_rate(self, currency: str) -> float:
         """Get FX rate to convert currency to USD. Returns 1.0 for USD."""
         if currency == 'USD':

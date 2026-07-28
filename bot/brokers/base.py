@@ -192,6 +192,15 @@ class BaseBroker(ABC):
     # the startup check degrades to "cannot verify" instead of breaking. Both
     # are overridden where the broker does support it.
 
+    def get_account_equity(self):
+        """Live account equity in the account's base currency, or None.
+
+        None means "could not read", never "assume a number": risk sizing must
+        fall back to a visibly different model rather than size against a
+        stale or invented equity figure.
+        """
+        return None
+
     def working_stop_symbols(self) -> set:
         """Symbols that currently have a live broker-held protective stop."""
         return set()
