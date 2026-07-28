@@ -102,6 +102,15 @@ class ActiveTrading:
             self._close_all()
             return
 
+        # Live equity for risk sizing, read once per cycle rather than once
+        # per instrument (same freshness, one broker call instead of N).
+        self._cycle_equity = self.broker.get_account_equity()
+        if self._cycle_equity:
+            log(f"Account equity: {self._cycle_equity:,.2f} (live)")
+        else:
+            log("Account equity unavailable — sizing falls back to "
+                "equal-notional this cycle", "WARN")
+
         self.signal_rows = []
         self._entries_this_cycle = 0
         self._open_count = len(self.tracker.open)
@@ -263,8 +272,14 @@ class ActiveTrading:
         # so existing instruments are unaffected.
         allow_new_entries    = inst.get('allow_new_entries',     True)
 
-        # Risk-based position sizing: calculate qty from target_notional
-        entry_qty = calculate_qty(inst, price, self.cfg.default_target_notional)
+        # Fixed-fractional risk sizing against live broker equity, read once
+        # per cycle in run(). Falls back to equal-notional only if equity
+        # could not be read — never to an assumed figure.
+        entry_qty = calculate_qty(
+            inst, price, self.cfg.default_target_notional,
+            equity=getattr(self, '_cycle_equity', None),
+            settings=self.cfg._raw.get('settings', {}),
+        )
         inst['qty'] = entry_qty  # Override fixed qty for this cycle
 
         action = "--"

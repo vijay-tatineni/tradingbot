@@ -100,6 +100,9 @@ class IBKRBroker(BaseBroker):
 
     # ── Broker-held protective stops ──────────────────────────
 
+    def get_account_equity(self):
+        return self._portfolio.get_account_equity()
+
     def supports_stop_introspection(self) -> bool:
         return True
 
