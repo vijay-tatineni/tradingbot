@@ -46,18 +46,19 @@ def _minutes_since_boundary(now_local, hour, minute):
     return delta / 60
 
 
-def is_bar_close(timeframe: str, inst: dict) -> bool:
+def is_bar_close(timeframe: str, inst: dict, now_utc=None) -> bool:
     """
     Check if we're within WINDOW_MINUTES after a bar close boundary.
 
     Args:
         timeframe: '4hr' or 'daily'
         inst: instrument dict with 'market', 'currency' keys
+        now_utc: injectable clock for testing; defaults to now
 
     Returns:
         True if a bar just closed (within the detection window).
     """
-    now_utc = datetime.datetime.now(pytz.utc)
+    now_utc = now_utc or datetime.datetime.now(pytz.utc)
     market = inst.get('market', '')
     currency = inst.get('currency', 'USD')
 
@@ -73,9 +74,36 @@ def is_bar_close(timeframe: str, inst: dict) -> bool:
                                  US_4HR_CLOSES, US_DAILY_CLOSE)
 
 
-def next_bar_close_str(timeframe: str, inst: dict) -> str:
+def should_evaluate_tier2(timeframe: str, inst: dict, now_utc=None) -> bool:
+    """Whether Tier-2 (trailing stop + take profit) should evaluate this cycle.
+
+    **Daily-timeframe instruments evaluate every cycle.** Not a preference --
+    the bar-close window is unreachable for them:
+
+      * ``is_bar_close('daily', ...)`` is true only for WINDOW_MINUTES after the
+        daily close, which *is* the market close (US 16:00 ET, LSE 16:30).
+      * ``layer1._process_instrument`` returns early when the market is closed,
+        so a cycle never runs during that window.
+
+    The two conditions never overlap, so Tier-2 for daily names evaluated
+    *never* -- trailing stops and take-profits were dead code for every
+    daily-timeframe instrument. Evaluating each cycle turns an unbounded dead
+    band into one cycle interval.
+
+    4hr instruments keep the existing window: their 12:00 boundary falls inside
+    market hours and is genuinely reached. (Their second boundary, at the
+    16:00 close, is unreachable for the same reason as above -- so 4hr names get
+    one evaluation per day rather than two. Out of scope here; noted rather
+    than silently fixed.)
+    """
+    if timeframe == 'daily':
+        return True
+    return is_bar_close(timeframe, inst, now_utc)
+
+
+def next_bar_close_str(timeframe: str, inst: dict, now_utc=None) -> str:
     """Return a human-readable string of the next bar close time (for logging)."""
-    now_utc = datetime.datetime.now(pytz.utc)
+    now_utc = now_utc or datetime.datetime.now(pytz.utc)
     market = inst.get('market', '')
     currency = inst.get('currency', 'USD')
 
