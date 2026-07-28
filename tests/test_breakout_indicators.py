@@ -1,6 +1,7 @@
 """Frozen breakout indicators — independent-recomputation parity + the
 current-bar-exclusion of the 20-day high (the highest-value correctness catch)."""
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -63,9 +64,26 @@ def test_adx_high_in_strong_trend():
     assert np.nanmax(adx) > ADX_THRESHOLD
 
 
+BACKTEST_DB = Path(__file__).resolve().parent.parent / "backtest.db"
+
+
 @pytest.fixture(scope="module")
 def conn():
-    c = sqlite3.connect("backtest.db")
+    """Read-only handle to the repo-root backtest.db, skipped when absent.
+
+    Previously this called sqlite3.connect("backtest.db") on a *relative* path,
+    which had two defects: it depended on the caller's cwd, and sqlite silently
+    *creates* a missing file -- so running the suite in a tree whose databases
+    had been archived left empty backtest.db/positions.db/regime.db behind, and
+    the assertions below then failed with an opaque non-integer index error.
+
+    Opening read-only through a file: URI cannot create or write the database,
+    and the existence check turns "no data available" into a skip rather than a
+    spurious failure.
+    """
+    if not BACKTEST_DB.exists():
+        pytest.skip(f"backtest.db not present at {BACKTEST_DB}")
+    c = sqlite3.connect(f"file:{BACKTEST_DB}?mode=ro", uri=True)
     yield c
     c.close()
 

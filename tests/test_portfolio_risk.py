@@ -36,6 +36,10 @@ def _make_layer(max_open=10, max_entries=2):
     layer._synced = True
     layer._entries_this_cycle = 0
     layer._open_count = 0
+    # _can_enter consults the reconciler first; these tests exercise the
+    # portfolio limits, so nothing is divergent here.
+    layer.reconciler = MagicMock()
+    layer.reconciler.is_blocked.return_value = False
     return layer
 
 

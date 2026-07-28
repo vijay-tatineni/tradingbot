@@ -29,6 +29,7 @@ from bot.bar_schedule     import is_bar_close, next_bar_close_str
 from bot.logger           import log, separator
 from bot.sizing            import calculate_qty
 from bot.order_validator  import validate_order, OrderValidationError
+from bot.reconciliation    import PositionReconciler
 
 _BASE_DIR = Path(__file__).parent.parent
 
@@ -47,6 +48,14 @@ class ActiveTrading:
         self.indics    = Indicators(cfg)
         self.engine    = SignalEngine()
         self.tracker   = PositionTracker(cfg)
+
+        # Broker-vs-positions.db divergence detection. Read-only on the broker
+        # side; blocks new entries per-symbol when the two disagree.
+        _settings = cfg._raw.get('settings', {})
+        self.reconciler = PositionReconciler(
+            cfg, broker, self.tracker, alerts,
+            auto_clear=_settings.get('reconciliation_auto_clear', False),
+        )
 
         # LLM sentiment settings
         settings = cfg._raw.get('settings', {})
@@ -71,12 +80,20 @@ class ActiveTrading:
         log(f"Portfolio P&L: ${self.total_pnl:+.2f}  |  Limit: -${self.cfg.portfolio_loss_limit}")
 
         # Sync existing IBKR positions with tracker on first run
+        first_cycle = not self._synced
         if not self._synced:
             self._sync_existing_positions()
             self._synced = True
 
         # Reconcile tracker with broker every cycle
         self._reconcile_with_broker()
+
+        # Independent divergence check (read-only). Runs *after* the repair
+        # above so it reports only what that repair could not resolve, and
+        # unlike it, is not limited to active_instruments — a broker position
+        # outside the configured universe is exactly the blind spot that left
+        # four positions unprotected in the 2026-07 audit.
+        self.reconciler.run(context="startup" if first_cycle else "cycle")
 
         if self.broker.is_emergency_stop(self.total_pnl):
             log(f"EMERGENCY STOP: P&L ${self.total_pnl:.2f} hit loss limit!", "ERROR")
@@ -154,6 +171,10 @@ class ActiveTrading:
 
     def _can_enter(self, symbol: str) -> bool:
         """Check if portfolio risk limits allow a new entry."""
+        if self.reconciler.is_blocked(symbol):
+            log(f"  [{symbol}] Skipping entry — unresolved position divergence "
+                f"between broker and positions.db", "WARN")
+            return False
         if self._open_count >= self.cfg.max_open_positions:
             log(f"  [{symbol}] Skipping entry — max positions reached "
                 f"({self._open_count}/{self.cfg.max_open_positions})")
