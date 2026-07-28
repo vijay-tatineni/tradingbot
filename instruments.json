@@ -40,7 +40,7 @@
       "symbol": "XAGUSD",
       "take_profit_pct": 10.0,
       "trail_stop_pct": 1.0,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 3.0
     },
     {
       "currency": "GBP",
@@ -181,7 +181,7 @@
       "take_profit_pct": 5,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 4.5
     },
     {
       "currency": "USD",
@@ -200,7 +200,7 @@
       "take_profit_pct": 5,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 4.5
     },
     {
       "currency": "USD",
@@ -252,7 +252,7 @@
       "take_profit_pct": 3.0,
       "timeframe": "4hr",
       "trail_stop_pct": 1.0,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 3.0
     },
     {
       "currency": "USD",
@@ -311,7 +311,7 @@
       "take_profit_pct": 8.0,
       "timeframe": "4hr",
       "trail_stop_pct": 2.5,
-      "emergency_stop_pct": 8.0
+      "emergency_stop_pct": 7.5
     },
     {
       "currency": "USD",
@@ -350,7 +350,7 @@
       "take_profit_pct": 20.0,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 6.0
+      "emergency_stop_pct": 4.5
     },
     {
       "currency": "GBP",
@@ -370,7 +370,7 @@
       "take_profit_pct": 15.0,
       "timeframe": "4hr",
       "trail_stop_pct": 1.0,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 3.0
     },
     {
       "currency": "USD",
@@ -422,7 +422,7 @@
       "experiment": true,
       "experiment_reason": "Marginal historical evidence; included in regime-filter paper experiment",
       "experiment_start": "2026-06-01",
-      "emergency_stop_pct": 5.0,
+      "emergency_stop_pct": 3.0,
       "trail_stop_pct": 1.0,
       "take_profit_pct": 12.0
     },
@@ -444,7 +444,7 @@
       "take_profit_pct": 3,
       "timeframe": "daily",
       "trail_stop_pct": 1,
-      "emergency_stop_pct": 5.0,
+      "emergency_stop_pct": 3.0,
       "indicators": {
         "rsi_period": 7,
         "rsi_oversold": 30,
@@ -471,7 +471,7 @@
       "take_profit_pct": 3.0,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 4.5
     },
     {
       "currency": "USD",
@@ -490,7 +490,7 @@
       "take_profit_pct": 3.0,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 4.5
     },
     {
       "currency": "GBP",
@@ -531,7 +531,7 @@
       "take_profit_pct": 5,
       "timeframe": "4hr",
       "trail_stop_pct": 1.5,
-      "emergency_stop_pct": 5.0
+      "emergency_stop_pct": 4.5
     },
     {
       "symbol": "NVTS",
@@ -546,7 +546,7 @@
       "target_notional": 1000,
       "stop_pct": 5.0,
       "take_profit_pct": 3,
-      "emergency_stop_pct": 10.0,
+      "emergency_stop_pct": 3.0,
       "indicators": {
         "rsi_period": 7,
         "rsi_oversold": 30,
