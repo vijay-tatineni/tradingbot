@@ -15,7 +15,10 @@ from pathlib import Path
 import pandas as pd
 
 from backtest.offline_signals import generate_signals
-from backtest.simulator import simulate_trades, summarise, TradeResult, SimulationSummary
+from backtest.simulator import (
+    simulate_trades, summarise, TradeResult, SimulationSummary,
+    CostConfig, classify_instrument,
+)
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -44,6 +47,7 @@ def run_simple_backtest(
     tp_pct: float,
     indicator_settings: dict,
     instrument_config: dict,
+    default_target_notional: float = None,
 ) -> BacktestResult | None:
     """
     Run the bot's signal engine with fixed params over the full dataset.
@@ -57,12 +61,23 @@ def run_simple_backtest(
     currency = instrument_config.get("currency", "USD")
     timeframe = instrument_config.get("timeframe", "daily")
     enabled = instrument_config.get("enabled", True)
+    # Realistic sizing: per-instrument target_notional override, else the
+    # global default. None -> simulator falls back to fixed qty (unchanged).
+    target_notional = instrument_config.get("target_notional") or default_target_notional
 
     print(f"  Generating signals...", end=" ", flush=True)
     signals = generate_signals(df, indicator_settings, symbol)
     print(f"{len(signals)} signals")
 
-    print(f"  Simulating trades (stop={stop_pct}%, TP={tp_pct}%)...", end=" ", flush=True)
+    # Default to BASE (realistic) transaction costs, resolved for this
+    # instrument's class. Override via a "cost_model" block in settings, or
+    # pass CostConfig.zero() to recover the frictionless number.
+    inst_class = classify_instrument(currency, instrument_config.get("sec_type", "STK"))
+    cost_config = CostConfig.from_settings(indicator_settings, inst_class, preset="base")
+
+    size_desc = f"target=${target_notional:.0f}" if target_notional else f"qty={qty}"
+    print(f"  Simulating trades (stop={stop_pct}%, TP={tp_pct}%, {size_desc}, "
+          f"costs=base/{inst_class})...", end=" ", flush=True)
     trades = simulate_trades(
         signals, df,
         stop_pct=stop_pct,
@@ -70,6 +85,8 @@ def run_simple_backtest(
         qty=qty,
         long_only=long_only,
         currency=currency,
+        target_notional=target_notional,
+        cost_config=cost_config,
     )
     summary = summarise(trades)
     print(f"{summary.trade_count} trades")

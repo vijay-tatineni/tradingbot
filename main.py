@@ -29,11 +29,14 @@ import sqlite3
 import datetime
 import argparse
 import time
+from dataclasses import dataclass
+from typing import Optional
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
 from bot.config        import Config
+from bot.guardrails     import validate_no_edge_guardrails, validate_hard_disabled_instruments
 from bot.brokers       import create_broker
 from bot.market_hours  import MarketHours
 from bot.layer1        import ActiveTrading
@@ -41,6 +44,21 @@ from bot.layer2        import Accumulation
 from bot.layer3_silver import SilverScalper
 from bot.dashboard     import Dashboard
 from bot.logger        import log, banner, separator
+from bot.regime.flags  import FeatureFlags
+from bot.regime.orchestrator import RegimeOrchestrator
+from bot.regime.log_setup    import setup_regime_logging
+from bot.regime.cache        import RegimeCache
+from bot.regime.classifier   import RegimeClassifier
+from bot.regime.cost_tracker import CostTracker
+from bot.regime.scheduler    import RegimeClassificationScheduler
+from bot.regime.smoothing_store import SmoothedStateStore
+from bot.regime.blocked_entries import RegimeBlockedEntriesLog
+from bot.degradation.instrument_pause_registry import InstrumentPauseRegistry
+from bot.overlays.registry import active_overlays as overlay_active_overlays, init_overlay_registry
+from bot.regime.router     import route as regime_route
+from bot.shadow.counterfactual_logger import CounterfactualLogger
+from bot.shadow.trade_simulator import ShadowTradeSimulator
+from bot.shadow.position_metadata_store import PositionMetadataStore
 
 BASE_DIR = Path(__file__).parent
 
@@ -54,6 +72,176 @@ from bot.llm                   import create_llm
 # ── Future plugins (uncomment to activate) ────────────────────
 # from bot.plugins.macro_filter import MacroFilter
 # from bot.plugins.ml_override  import MLOverride
+
+
+# ── Dynamic Universe shadow runtime wiring (Gate C) ───────────────────────────
+# Default-off, fail-closed wiring that can LATER start the Dynamic Universe shadow
+# scheduler — but ONLY when the master flag is explicitly true AND a valid, broker-free
+# shadow configuration (a dedicated shadow DB path + injected non-live providers) is
+# supplied. This tranche WIRES the path (so it is reviewable) but does not ACTIVATE it.
+#
+# Inertness contract (verified by tests/universe/test_shadow_runtime_wiring.py):
+#   * No top-level ``bot.universe`` import in main.py — the W1/W2 boundary is imported
+#     LAZILY inside ``init_shadow_runtime`` and ONLY after the master flag is confirmed true.
+#   * Flag absent/false (the production default) → ``init_shadow_runtime`` returns immediately:
+#     nothing imported from bot.universe, nothing constructed, no ``sqlite3.connect``, no
+#     ``migrate()``, no DB file, no provider construction/call, no scheduler.
+#   * Flag true but config/provider invalid → ``build_shadow_scheduler`` (W2) fails closed —
+#     it validates first and constructs nothing / touches no filesystem — and a stable,
+#     non-secret reason is logged. No DB, no provider call, no scheduler.
+#   * No live provider default (policy, design §5): in production NO providers are injected,
+#     so the build always fails closed at ``bars_provider_missing`` and the scheduler stays
+#     None → the per-cycle seam (``TradingBot._maybe_run_shadow_cycle``) is a guarded no-op.
+#   * A constructed scheduler (reachable only with injected non-live stub providers, i.e.
+#     tests/rehearsal) is shadow-only: it submits/modifies/cancels no orders, opens/closes no
+#     positions, calls no broker, and writes only to its dedicated shadow DB.
+
+SHADOW_RUNTIME_DISABLED         = "shadow_runtime_disabled"
+SHADOW_RUNTIME_CONFIG_INVALID   = "shadow_runtime_config_invalid"
+SHADOW_RUNTIME_PROVIDER_MISSING = "shadow_runtime_provider_missing"
+SHADOW_RUNTIME_DB_PATH_UNSAFE   = "shadow_runtime_db_path_unsafe"
+SHADOW_RUNTIME_READY            = "shadow_runtime_ready"
+SHADOW_RUNTIME_NOT_STARTED      = "shadow_runtime_not_started"
+
+_SHADOW_MASTER_FLAG = "enable_dynamic_universe_shadow"
+
+# Map the W1/W2 validator's fail-closed reason codes → stable startup-evidence events.
+_SHADOW_REASON_EVENT = {
+    "flag_off":                        SHADOW_RUNTIME_DISABLED,
+    "shadow_db_path_missing":          SHADOW_RUNTIME_CONFIG_INVALID,
+    "shadow_db_path_unsafe":           SHADOW_RUNTIME_DB_PATH_UNSAFE,
+    "bars_provider_missing":           SHADOW_RUNTIME_PROVIDER_MISSING,
+    "completed_bar_provider_missing":  SHADOW_RUNTIME_PROVIDER_MISSING,
+    "live_provider_requires_approval": SHADOW_RUNTIME_CONFIG_INVALID,
+}
+
+
+@dataclass(frozen=True)
+class ShadowRuntimeStartup:
+    """Outcome of the startup wiring decision (no side effects unless flag on AND valid).
+
+    ``ready`` is True only when the master flag is on, the broker-free shadow config fully
+    validated, and a shadow scheduler was constructed — reachable only with injected non-live
+    providers (tests/rehearsal), never in production. ``scheduler`` is that shadow-only
+    scheduler when ready, else None. ``reason`` carries the stable fail-closed code otherwise."""
+    ready: bool
+    reason: Optional[str] = None
+    scheduler: object = None
+
+
+def _shadow_master_flag_on(flags) -> bool:
+    """Read the master flag fail-closed (any error → treated as off)."""
+    try:
+        return bool(flags.get(_SHADOW_MASTER_FLAG))
+    except Exception:
+        return False
+
+
+def _default_shadow_emit(code: str, reason: Optional[str] = None) -> None:
+    log(f"[UniverseShadow] {code}" + (f" (reason={reason})" if reason else ""), "INFO")
+
+
+def build_completed_bar_provider_from_config(flags, shadow_cfg):
+    """Flag-gated, fail-closed construction of the broker-free completed-bar provider (BLOCKER-W1).
+
+    Returns ``None`` — constructing and importing NOTHING from ``bot.universe`` — when the master
+    flag is off (production default), so the lazy-import contract holds. Only when the flag is on
+    does it lazily import ``build_local_completed_bar_provider`` and build a provider from the
+    EXPLICIT snapshot source (``settings.dynamic_universe_shadow.completed_bar_snapshot_source``).
+    A missing or unsafe source yields ``None`` (the factory fails closed), so the caller's
+    ``completed_bar_provider`` stays ``None`` and ``validate_shadow_config`` fails closed at
+    ``completed_bar_provider_missing``. There is NO live default and NO production source."""
+    if not _shadow_master_flag_on(flags):
+        return None  # off → no construction, no bot.universe import (lazy-only contract)
+    source = (shadow_cfg or {}).get('completed_bar_snapshot_source')
+    from bot.universe.local_bar_provider import build_local_completed_bar_provider
+    return build_local_completed_bar_provider(source)
+
+
+def build_bars_provider_from_config(flags, shadow_cfg):
+    """Flag-gated, fail-closed construction of the broker-free eligibility bars provider.
+
+    Sibling of ``build_completed_bar_provider_from_config``. Returns ``None`` — importing NOTHING
+    from ``bot.universe`` — when the master flag is off (production default), so the lazy-import
+    contract holds. Only when the flag is on does it lazily import ``build_local_bars_provider`` and
+    build a provider from the EXPLICIT snapshot source
+    (``settings.dynamic_universe_shadow.bars_snapshot_source`` — a SEPARATE, unambiguous key from
+    ``completed_bar_snapshot_source``). A missing or unsafe source yields ``None`` (the factory
+    fails closed), so the caller's ``bars_provider`` stays ``None`` and ``validate_shadow_config``
+    fails closed at ``bars_provider_missing``. There is NO live default and NO production source."""
+    if not _shadow_master_flag_on(flags):
+        return None  # off → no construction, no bot.universe import (lazy-only contract)
+    source = (shadow_cfg or {}).get('bars_snapshot_source')
+    from bot.universe.local_bars_provider import build_local_bars_provider
+    return build_local_bars_provider(source)
+
+
+def build_shadow_records_fn_from_config(flags, shadow_cfg):
+    """Flag-gated, fail-closed construction of the broker-free offline records/seed seam.
+
+    Returns ``None`` — importing NOTHING from ``bot.universe`` — when the master flag is off
+    (production default), so the lazy-import contract holds. Only when the flag is on does it lazily
+    import ``build_shadow_records_source`` and build a records source from the SAME two EXPLICIT
+    snapshot sources the providers use (``bars_snapshot_source`` + ``completed_bar_snapshot_source``).
+    If either source is missing or unsafe the factory returns ``None`` (fail closed), so the caller's
+    ``_shadow_records_fn`` stays ``None`` and ``TradingBot._shadow_canonical_records`` keeps returning
+    the inert ``[]`` placeholder. There is NO live default and NO production source; it opens no DB
+    and calls no broker — it only READS approved local snapshot files."""
+    if not _shadow_master_flag_on(flags):
+        return None  # off → no construction, no bot.universe import (lazy-only contract)
+    bars_source = (shadow_cfg or {}).get('bars_snapshot_source')
+    completed_source = (shadow_cfg or {}).get('completed_bar_snapshot_source')
+    from bot.universe.shadow_records import build_shadow_records_source
+    return build_shadow_records_source(bars_source=bars_source,
+                                       completed_source=completed_source)
+
+
+def init_shadow_runtime(flags, *, db_path=None, bars_provider=None,
+                        completed_bar_provider=None,
+                        builder=None, emit=None) -> ShadowRuntimeStartup:
+    """Decide, fail-closed, whether to construct the Dynamic Universe shadow scheduler.
+
+    Master-flag gate FIRST: when the flag is absent/false this returns immediately having
+    imported NOTHING from ``bot.universe`` and constructed NOTHING (no DB, no provider, no
+    scheduler) — only a single ``shadow_runtime_disabled`` evidence line is logged. Only when
+    the flag is true does it LAZILY import the W1/W2 boundary and call ``build_shadow_scheduler``,
+    which validates first and constructs nothing unless the shadow config is fully valid and the
+    providers are non-live. Every flag-on-but-blocked outcome logs a stable, non-secret reason
+    plus ``shadow_runtime_not_started`` and returns ``ready=False`` with no scheduler. Never
+    raises; never starts runtime scheduling (the caller's per-cycle seam does that, and only
+    when a scheduler exists)."""
+    emit = emit or _default_shadow_emit
+
+    if not _shadow_master_flag_on(flags):
+        # Normal production posture: flag off → no import, no construction, no DB, no provider.
+        emit(SHADOW_RUNTIME_DISABLED, reason="flag_off")
+        return ShadowRuntimeStartup(ready=False, reason="flag_off", scheduler=None)
+
+    def _blocked(reason: str) -> ShadowRuntimeStartup:
+        emit(_SHADOW_REASON_EVENT.get(reason, SHADOW_RUNTIME_CONFIG_INVALID), reason=reason)
+        emit(SHADOW_RUNTIME_NOT_STARTED, reason=reason)
+        return ShadowRuntimeStartup(ready=False, reason=reason, scheduler=None)
+
+    # Flag ON — import the boundary LAZILY (never at module top); fail closed on import error.
+    try:
+        from bot.universe.shadow_runtime import build_shadow_scheduler
+    except Exception:
+        return _blocked("boundary_import_failed")
+
+    build = builder or build_shadow_scheduler
+    try:
+        result = build(flags=flags, db_path=db_path, bars_provider=bars_provider,
+                       completed_bar_provider=completed_bar_provider)
+    except Exception:
+        # A provider/factory/builder exception must fail closed — no start, no DB, no crash.
+        return _blocked("build_exception")
+
+    if not getattr(result, "ok", False):
+        return _blocked(getattr(result, "reason", None) or "config_invalid")
+
+    # Flag on + fully valid config + non-live providers → a shadow-only scheduler was built.
+    emit(SHADOW_RUNTIME_READY)
+    return ShadowRuntimeStartup(ready=True, reason=None, scheduler=result.scheduler)
 
 
 class TradingBot:
@@ -121,6 +309,67 @@ class TradingBot:
         # self.register_plugin(MacroFilter(self.cfg))
         # self.register_plugin(MLOverride(self.cfg))
 
+        # ── Regime orchestrator (§14) ─────────────────────────
+        flag_config = self.cfg._raw.get('settings', {}).get('feature_flags', {})
+        self.flags = FeatureFlags(flag_config)
+
+        # ── Dynamic Universe shadow scheduler wiring (Gate C; default-off, fail-closed) ──
+        # Owned by the TradingBot runtime path. ``init_shadow_runtime`` checks the master flag
+        # FIRST: in production (flag absent/false) it imports no bot.universe module and
+        # constructs nothing, so this line is a pure no-op beyond one startup log. No live
+        # providers are injected (policy: no live default), so even with the flag on the build
+        # fails closed at provider validation and ``self.shadow_runtime.scheduler`` stays None.
+        self.shadow_runtime = init_shadow_runtime(
+            self.flags, **self._resolve_shadow_runtime_config(settings))
+        # Offline snapshot records/seed seam: the broker-free source of the shadow scheduler's
+        # per-cycle canonical records. Flag-gated + fail-closed (absent flag / missing / unsafe
+        # source → None → ``_shadow_canonical_records`` keeps returning ``[]``). Never live, never
+        # a DB open. Only consulted when a shadow scheduler was actually constructed (guarded in
+        # ``_maybe_run_shadow_cycle``), which itself never happens in production.
+        _du_shadow_cfg = (settings or {}).get('dynamic_universe_shadow', {}) or {}
+        self._shadow_records_fn = build_shadow_records_fn_from_config(self.flags, _du_shadow_cfg)
+
+        regime_db = str(BASE_DIR / 'regime.db')
+        init_overlay_registry(regime_db)
+        self.pause_registry = InstrumentPauseRegistry(regime_db)
+        self.cf_logger = CounterfactualLogger(regime_db)
+        self.pm_store = PositionMetadataStore(regime_db)
+        self.regime_cache = RegimeCache(regime_db)
+        self.regime_cost_tracker = CostTracker(regime_db)
+        self.smoothing_store = SmoothedStateStore(regime_db)
+        self.regime_classifier = RegimeClassifier(
+            cache=self.regime_cache,
+            cost_tracker=self.regime_cost_tracker,
+        )
+        self.regime_blocked_entries_log = RegimeBlockedEntriesLog(regime_db)
+        self.shadow_trade_simulator = ShadowTradeSimulator(self.cf_logger)
+
+        self.orchestrator = RegimeOrchestrator(
+            flags=self.flags,
+            pause_registry=self.pause_registry,
+            overlay_registry_fn=overlay_active_overlays,
+            router_fn=regime_route,
+            smoothing_store=self.smoothing_store,
+            counterfactual_logger=self.cf_logger,
+            position_metadata_store=self.pm_store,
+            telegram_alerts=self.alerts,
+            config_path=config_path,
+            regime_cache=self.regime_cache,
+            blocked_entries_log=self.regime_blocked_entries_log,
+            shadow_trade_simulator=self.shadow_trade_simulator,
+        )
+        self.register_plugin(self.orchestrator)
+
+        self.regime_scheduler = RegimeClassificationScheduler(
+            flags=self.flags,
+            classifier=self.regime_classifier,
+            cache=self.regime_cache,
+            smoothing_store=self.smoothing_store,
+            bars_fetcher=self._regime_bars_fetcher,
+        )
+
+        setup_regime_logging(str(BASE_DIR))
+
         # ── Wire alerts to broker for order failure notifications ─
         self.broker.set_alerts(self.alerts)
 
@@ -144,6 +393,55 @@ class TradingBot:
         self.plugins.append(plugin)
         log(f"Plugin registered: {plugin.name}")
 
+    def _resolve_shadow_runtime_config(self, settings) -> dict:
+        """Provider/path injection seam for the Dynamic Universe shadow scheduler.
+
+        Returns the kwargs for ``init_shadow_runtime`` (``db_path`` / ``bars_provider`` /
+        ``completed_bar_provider``). By policy (design §5) this supplies NO live default: the
+        ``completed_bar_provider`` (BLOCKER-W1) and ``bars_provider`` are each built only when the
+        master flag is on AND their respective safe snapshot source is configured, else ``None``
+        (so production — no such block, flag off — yields ``None`` for both and the wiring fails
+        closed). ``db_path`` is read from an EXPLICIT config block only
+        (``settings.dynamic_universe_shadow.shadow_db_path``) — never the production default — so
+        production (no such block) yields ``None`` and the wiring fails closed. NO live default for
+        any provider; construction is reachable only with injected non-live providers (tests)."""
+        shadow_cfg = (settings or {}).get('dynamic_universe_shadow', {}) or {}
+        return {
+            "db_path": shadow_cfg.get('shadow_db_path'),  # explicit only; absent → None → fail closed
+            "bars_provider": build_bars_provider_from_config(
+                self.flags, shadow_cfg),                  # flag-gated, fail-closed (absent -> None)
+            "completed_bar_provider": build_completed_bar_provider_from_config(
+                self.flags, shadow_cfg),                  # flag-gated, fail-closed (absent -> None)
+        }
+
+    def _shadow_canonical_records(self) -> list:
+        """Canonical-records source for the shadow scheduler.
+
+        ``self._shadow_records_fn`` is the broker-free offline records/seed seam
+        (``bot.universe.shadow_records.SnapshotShadowRecordsSource``), constructed by
+        ``build_shadow_records_fn_from_config`` ONLY when the master flag is on and both explicit,
+        path-safe snapshot sources are configured; otherwise it is ``None`` and this returns the
+        inert ``[]`` placeholder (production posture — no ingestion, no file read, no provider/broker
+        call). When present the seam reads the approved local snapshots READ-ONLY and returns the
+        proven canonical records (never raising; fail-closed → ``[]``/subset)."""
+        fn = getattr(self, '_shadow_records_fn', None)
+        return list(fn()) if fn is not None else []
+
+    def _maybe_run_shadow_cycle(self) -> None:
+        """Per-cycle seam for the Dynamic Universe shadow scheduler — a guarded no-op unless a
+        shadow scheduler was constructed at startup (master flag on + valid broker-free config +
+        injected non-live providers). In production no providers are injected, so
+        ``self.shadow_runtime.scheduler`` is None and this returns immediately: no provider call,
+        no DB open, no broker call. The scheduler, when present, is shadow-only — it submits,
+        modifies, or cancels no orders, opens or closes no positions, and calls no broker."""
+        rt = getattr(self, 'shadow_runtime', None)
+        if rt is None or rt.scheduler is None:
+            return
+        try:
+            rt.scheduler.maybe_run(self._shadow_canonical_records())
+        except Exception as e:
+            log(f"[UniverseShadow] cycle error: {e}", "WARN")
+
     def run(self) -> None:
         """Main loop — runs forever until Ctrl+C."""
         banner([
@@ -165,6 +463,31 @@ class TradingBot:
         # Notify plugins bot has started
         for plugin in self.plugins:
             plugin.on_start()
+
+        # ── Regime-filter warm-up warning ─────────────────────
+        # When the filter is live, any instrument without a smoothed
+        # regime yet (scheduler hasn't classified it since startup)
+        # has its entries BLOCKED until classification lands. Surface
+        # the count once at startup so a fully-blocked filter isn't
+        # mistaken for a dead bot.
+        if self.flags.get("enable_regime_filter_live"):
+            instruments = self.cfg.active_instruments
+            no_regime = 0
+            for inst in instruments:
+                symbol = inst.get("symbol")
+                if not symbol:
+                    continue
+                try:
+                    if self.smoothing_store.get_latest(symbol) is None:
+                        no_regime += 1
+                except Exception:
+                    # Treat an unreadable smoothing store as "no regime"
+                    # for warning purposes — it would block too.
+                    no_regime += 1
+            if no_regime > 0:
+                log(f"REGIME FILTER LIVE: {no_regime} of {len(instruments)} "
+                    f"instruments have no smoothed regime — entries will be "
+                    f"BLOCKED until classification lands", "WARN")
 
         # Start watchdog
         self.watchdog.start()
@@ -219,6 +542,27 @@ class TradingBot:
 
                 # ── Layer 3: Silver Scalper (every cycle, LSE hours) ─
                 self.l3.run()
+
+                # ── Daily regime classifier scheduler (idempotent) ──
+                try:
+                    sched_summary = self.regime_scheduler.maybe_run(
+                        self.cfg.active_instruments
+                    )
+                    if sched_summary["classified"]:
+                        log(f"[Scheduler] Classified "
+                            f"{len(sched_summary['classified'])} instruments")
+                    if sched_summary["errors"]:
+                        log(f"[Scheduler] Errors: {sched_summary['errors']}",
+                            "WARN")
+                except Exception as e:
+                    log(f"[Scheduler] Cycle error: {e}", "WARN")
+
+                # ── Dynamic Universe shadow scheduler (Gate C wiring; default-off) ──
+                # Guarded no-op unless a shadow scheduler was constructed at startup
+                # (flag on + valid broker-free config + injected non-live providers). In
+                # production no providers are injected → scheduler is None → this never runs,
+                # opens no DB, calls no provider, and touches no broker.
+                self._maybe_run_shadow_cycle()
 
                 # ── Dashboard update ──────────────────────────
                 self.dash.update(
@@ -281,6 +625,23 @@ class TradingBot:
                 log(traceback.format_exc(), "ERROR")
                 self.alerts.send_error(f"Cycle #{cycle} error: {e}")
                 self.broker.reconnect()
+
+    def _regime_bars_fetcher(self, inst: dict):
+        """Daily-bar fetcher injected into RegimeClassificationScheduler.
+
+        Returns None when the contract isn't qualified yet (pre-startup) or
+        when the broker has no data — the scheduler treats that as an error
+        for that instrument and moves on.
+        """
+        contract = inst.get("contract")
+        if contract is None:
+            return None
+        try:
+            return self.broker.fetch_bars(contract, days=300, bar_size="1 day")
+        except Exception as e:
+            log(f"[Scheduler] fetch_bars failed for "
+                f"{inst.get('symbol', '?')}: {e}", "WARN")
+            return None
 
     def _get_today_trades(self) -> list:
         """Get today's closed trades from learning_loop.db."""
@@ -511,6 +872,12 @@ def validate_environment(config_file: str = None) -> None:
                 data = json.load(f)
             if 'settings' not in data or 'layer1_active' not in data:
                 errors.append("instruments.json missing 'settings' or 'layer1_active' keys")
+            # No-edge guardrail: refuse to start if a known-marginal
+            # instrument is enabled without an explicit override.
+            errors.extend(validate_no_edge_guardrails(data))
+            # Hard-disabled invariant: refuse to start if a broker-ineligible
+            # / administratively hard-disabled instrument is enabled.
+            errors.extend(validate_hard_disabled_instruments(data))
         except json.JSONDecodeError as e:
             errors.append(f"instruments.json has invalid JSON: {e}")
 

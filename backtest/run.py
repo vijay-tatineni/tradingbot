@@ -196,6 +196,7 @@ def _run_walkforward_mode(args, instruments, settings, enabled_count, fresh_down
                 instrument_config=inst,
                 train_months=args.train_months,
                 test_months=args.test_months,
+                default_target_notional=settings.get("default_target_notional"),
             )
             if result is not None:
                 wf_results.append(result)
@@ -259,6 +260,7 @@ def _run_backtest_mode(args, instruments, settings):
                 tp_pct=tp_pct,
                 indicator_settings=inst_indicator_settings,
                 instrument_config=inst,
+                default_target_notional=settings.get("default_target_notional"),
             )
             if result is not None:
                 bt_results.append(result)

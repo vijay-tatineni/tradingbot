@@ -169,6 +169,37 @@ class ActiveTrading:
         self._entries_this_cycle += 1
         self._open_count += 1
 
+    def _broadcast_signal_to_shadow(self, inst: dict, signal: int,
+                                    confidence: str,
+                                    live_blocked_by) -> None:
+        """Gap #10: fan out every BUY/SELL engine signal to plugins'
+        log_signal hook so the shadow corpus reflects engine intent
+        regardless of layer1's position-limit and validation gates.
+        Failures in any plugin must not affect live trading.
+        """
+        for p in self.plugins:
+            try:
+                p.log_signal(inst, signal, confidence, live_blocked_by)
+            except Exception as e:
+                log(f"[Shadow] log_signal failed in {p.name}: {e}", "WARN")
+
+    def _regime_filter_allows(self, inst: dict, signal: int,
+                              confidence: str, price: float) -> bool:
+        """Regime-filter experiment hook. Asks every plugin whether
+        this entry should be blocked by the regime filter. Returns
+        False only if any plugin says block; failures fall through to
+        allow so a buggy plugin can never halt live trading.
+        """
+        bar_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for p in self.plugins:
+            try:
+                if not p.apply_regime_filter(inst, signal, confidence,
+                                             price, bar_time):
+                    return False
+            except Exception as e:
+                log(f"[RegimeFilter] {p.name} raised: {e}", "WARN")
+        return True
+
     def _process_instrument(self, inst: dict) -> dict:
         symbol   = inst['symbol']
         mkt_open = self.hours.is_open(inst)
@@ -203,6 +234,11 @@ class ActiveTrading:
         reentry_recovery_pct = inst.get('reentry_recovery_pct',  1.5)
         reentry_cooldown     = inst.get('reentry_cooldown_mins',  30)
         loss_limit           = inst.get('loss_limit',            200)
+        # Exits-only switch: when False, no NEW position is opened for
+        # this instrument (re-entry or fresh) but an existing position
+        # is still fully managed (trail/TP/emergency). Absent → True,
+        # so existing instruments are unaffected.
+        allow_new_entries    = inst.get('allow_new_entries',     True)
 
         # Risk-based position sizing: calculate qty from target_notional
         entry_qty = calculate_qty(inst, price, self.cfg.default_target_notional)
@@ -214,6 +250,19 @@ class ActiveTrading:
             'emergency_stop_pct',
             trail_stop_pct * 2  # default: 2x trail stop
         )
+        bar_closed = is_bar_close(timeframe, inst)
+
+        # Per-cycle per-instrument tick — plugins use this to advance
+        # shadow positions (regime-filter experiment) so blocked-entry
+        # P&L gets measured against the same tier-1/tier-2 exit logic
+        # the live path uses. Default plugin behaviour is a no-op.
+        for p in self.plugins:
+            try:
+                p.on_instrument_tick(inst, price, bar_closed,
+                                     trail_stop_pct, take_profit_pct,
+                                     emergency_stop_pct)
+            except Exception as e:
+                log(f"[Tick] {p.name} raised: {e}", "WARN")
 
         if pos != 0:
             # ── Tier 1: Emergency hard stop (every cycle) ──────────
@@ -283,19 +332,57 @@ class ActiveTrading:
                             action = "CLOSE FAILED (smart exit)"
 
                     # Signal reversal (short-able CFDs only)
+                    # allow_new_entries=false GATES this path: the
+                    # reversal's exit component (closing the existing
+                    # position) still runs — exit management is always
+                    # preserved — but the opposite-direction entry is
+                    # suppressed. Net effect: a reversal becomes a plain
+                    # exit, not an exit-and-flip, so no new risk is opened
+                    # in either direction. Dormant for current instruments
+                    # (long_only stocks never reach it; shortable CFDs are
+                    # disabled).
                     elif result.signal == -1 and not inst.get('long_only', True):
-                        allowed = all(p.pre_trade(inst, -1, result.confidence)
-                                      for p in self.plugins)
-                        if allowed:
-                            action, fill_result = self.broker.handle_signal(
-                                inst, result.signal, result.confidence, pos)
-                            if 'FAILED' not in action:
+                        if not allow_new_entries:
+                            # Exit-only: close the position, do NOT flip.
+                            fill_result = self.broker.close_position(inst, pos)
+                            if fill_result:
                                 exit_price = fill_result.fill_price or price
-                                self.tracker.on_close(symbol, exit_price,
-                                                      'SIGNAL_REVERSED',
-                                                      reentry_cooldown)
+                                self.tracker.on_close(
+                                    symbol, exit_price,
+                                    'SIGNAL_REVERSED (entry suppressed)',
+                                    reentry_cooldown)
+                                action = ("CLOSED (reversal — new entry "
+                                          "suppressed)")
                                 for p in self.plugins:
-                                    p.post_trade(inst, -1, action, exit_price)
+                                    p.post_trade(inst, 0, action, exit_price)
+                            else:
+                                action = "CLOSE FAILED (reversal exit)"
+                            log(f"  [{symbol}] reversal → closed position; "
+                                f"opposite entry suppressed — "
+                                f"allow_new_entries=false (exits only)")
+                        else:
+                            live_blocked_by = None
+                            if not self._regime_filter_allows(
+                                    inst, -1, result.confidence, price):
+                                action = "REGIME FILTER BLOCKED"
+                                live_blocked_by = "regime_filter"
+                            else:
+                                allowed = all(p.pre_trade(inst, -1, result.confidence)
+                                              for p in self.plugins)
+                                if allowed:
+                                    action, fill_result = self.broker.handle_signal(
+                                        inst, result.signal, result.confidence, pos)
+                                    if 'FAILED' not in action:
+                                        exit_price = fill_result.fill_price or price
+                                        self.tracker.on_close(symbol, exit_price,
+                                                              'SIGNAL_REVERSED',
+                                                              reentry_cooldown)
+                                        for p in self.plugins:
+                                            p.post_trade(inst, -1, action, exit_price)
+                                else:
+                                    live_blocked_by = "orchestrator"
+                            self._broadcast_signal_to_shadow(
+                                inst, -1, result.confidence, live_blocked_by)
                 else:
                     next_close = next_bar_close_str(timeframe, inst)
                     log(f"  [{symbol}] Waiting for bar close (next: {next_close})")
@@ -308,11 +395,26 @@ class ActiveTrading:
                 should_reenter, re_reason = self.tracker.check_reentry(
                     symbol, price, signal_valid, reentry_recovery_pct
                 )
-                if should_reenter:
-                    if not self._can_enter(symbol):
+                if should_reenter and not allow_new_entries:
+                    # Exits-only: a re-entry would genuinely have fired
+                    # (recovery met + valid signal) but is suppressed. The
+                    # pos != 0 exit block is untouched. Logged only on a
+                    # real would-fire — not on every watch cycle.
+                    action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                    log(f"  [{symbol}] re-entry suppressed — "
+                        f"allow_new_entries=false (exits only)")
+                elif should_reenter:
+                    live_blocked_by = None
+                    if not self._regime_filter_allows(
+                            inst, 1, result.confidence, price):
+                        action = "REGIME FILTER BLOCKED"
+                        live_blocked_by = "regime_filter"
+                    elif not self._can_enter(symbol):
                         action = "RE-ENTRY BLOCKED (position limit)"
+                        live_blocked_by = "position_limit"
                     elif not self._validate_entry(inst, inst['qty'], price, "BUY"):
                         action = "RE-ENTRY BLOCKED (validation)"
+                        live_blocked_by = "order_validator"
                     else:
                         allowed = all(p.pre_trade(inst, 1, result.confidence) for p in self.plugins)
                         if allowed:
@@ -331,20 +433,37 @@ class ActiveTrading:
                                 pos_info = self.broker.get_position_info(symbol, price)
                             else:
                                 action = "RE-ENTRY FAILED"
+                        else:
+                            live_blocked_by = "orchestrator"
+                    self._broadcast_signal_to_shadow(
+                        inst, 1, result.confidence, live_blocked_by)
                 else:
                     action = f"WATCHING: {re_reason}"
 
+            elif result.signal == 1 and not allow_new_entries:
+                # Fresh long signal that would have fired — suppressed.
+                action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                log(f"  [{symbol}] entry suppressed — "
+                    f"allow_new_entries=false (exits only)")
             elif result.signal == 1:
                 # Fresh entry
-                if not self._can_enter(symbol):
+                live_blocked_by = None
+                if not self._regime_filter_allows(
+                        inst, 1, result.confidence, price):
+                    action = "REGIME FILTER BLOCKED"
+                    live_blocked_by = "regime_filter"
+                elif not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                    live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "BUY"):
                     action = "ENTRY BLOCKED (validation)"
+                    live_blocked_by = "order_validator"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed and not self._llm_sentiment_check(inst, "BUY", df):
                         allowed = False
                         action = "BLOCKED by LLM sentiment"
+                        live_blocked_by = "sentiment"
                     if allowed:
                         action, fill_result = self.broker.handle_signal(
                             inst, result.signal, result.confidence, pos)
@@ -359,13 +478,30 @@ class ActiveTrading:
                             pos_info = self.broker.get_position_info(symbol, price)
                     else:
                         action = "BLOCKED by plugin"
+                        if live_blocked_by is None:
+                            live_blocked_by = "orchestrator"
+                self._broadcast_signal_to_shadow(
+                    inst, 1, result.confidence, live_blocked_by)
 
+            elif (result.signal == -1 and not inst.get('long_only', True)
+                    and not allow_new_entries):
+                # Fresh short signal that would have fired — suppressed.
+                action = "ENTRY SUPPRESSED (allow_new_entries=false)"
+                log(f"  [{symbol}] entry suppressed — "
+                    f"allow_new_entries=false (exits only)")
             elif result.signal == -1 and not inst.get('long_only', True):
                 # Fresh short from flat
-                if not self._can_enter(symbol):
+                live_blocked_by = None
+                if not self._regime_filter_allows(
+                        inst, -1, result.confidence, price):
+                    action = "REGIME FILTER BLOCKED"
+                    live_blocked_by = "regime_filter"
+                elif not self._can_enter(symbol):
                     action = "ENTRY BLOCKED (position limit)"
+                    live_blocked_by = "position_limit"
                 elif not self._validate_entry(inst, entry_qty, price, "SELL"):
                     action = "ENTRY BLOCKED (validation)"
+                    live_blocked_by = "order_validator"
                 else:
                     allowed = all(p.pre_trade(inst, result.signal, result.confidence) for p in self.plugins)
                     if allowed:
@@ -383,6 +519,9 @@ class ActiveTrading:
                             pos_info = self.broker.get_position_info(symbol, price)
                     else:
                         action = "BLOCKED by plugin"
+                        live_blocked_by = "orchestrator"
+                self._broadcast_signal_to_shadow(
+                    inst, -1, result.confidence, live_blocked_by)
 
         # Refresh position info after any trades
         pos_info   = self.broker.get_position_info(symbol, price)

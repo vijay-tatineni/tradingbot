@@ -1,0 +1,27 @@
+{
+  "input": {
+    "instrument": "BARC.L",
+    "trading_date": "2026-01-15",
+    "features": {
+      "adx_14": 35.0,
+      "atr_14": 5.2,
+      "atr_pct": 2.6,
+      "ma_200_slope_pct_per_day": 0.08,
+      "range_efficiency": 0.52,
+      "realized_volatility_20d": 18.5,
+      "close_above_ma200": true,
+      "distance_to_ma200_pct": 5.2
+    }
+  },
+  "tool_response": {
+    "regime": "TRENDING",
+    "confidence": 0.92,
+    "rationale": "Strong ADX at 35, high range efficiency 0.52, price well above MA200",
+    "key_features": ["adx_14", "range_efficiency", "close_above_ma200"]
+  },
+  "expected": {
+    "raw_regime": "TRENDING",
+    "confidence": 0.92,
+    "cache_hit": false
+  }
+}

@@ -63,6 +63,17 @@ body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono',mon
 .global-grid input:focus { outline:none; border-color:var(--gold); }
 .override-count { font-size:0.62rem; color:var(--muted); margin-top:8px; }
 
+/* ── Add Instrument Panel ── */
+.add-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+.add-grid label { display:block; font-size:0.6rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+.add-grid input, .add-grid select { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:5px 8px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:0.72rem; width:100%; }
+.add-grid input:focus, .add-grid select:focus { outline:none; border-color:var(--gold); }
+.add-grid .check-cell { display:flex; align-items:center; gap:6px; margin-top:18px; }
+.add-grid .check-cell input { width:auto; }
+.add-actions { margin-top:14px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.add-actions .hint { font-size:0.62rem; color:var(--muted); }
+.inst-del { margin-left:4px; }
+
 /* ── Instrument Card ── */
 .inst-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; margin:0 24px 8px; overflow:hidden; transition:all 0.2s; }
 .inst-card.modified { border-color:var(--amber); }
@@ -209,6 +220,7 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
   <a href="instruments.html" class="active">Instruments Editor</a>
   <a href="tests.html">Tests</a>
   <a href="advisor.html">Advisor</a>
+  <a href="labelling.html">Label</a>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser"></span>
   <a href="#" class="nav-logout" onclick="logout()">Logout</a>
@@ -239,6 +251,96 @@ input:checked + .slider:before { transform:translateX(16px); background:var(--gr
   <div class="global-body" id="globalBody">
     <div class="global-grid" id="globalGrid"></div>
     <div class="override-count" id="overrideCount"></div>
+  </div>
+</div>
+
+<!-- Add New Instrument (Layer 1) -->
+<div class="global-panel">
+  <div class="global-header" style="cursor:default">
+    <span>➕ Add New Instrument <span id="addPanelLayer" style="color:var(--muted);font-weight:400">(Layer 1)</span></span>
+  </div>
+  <div class="global-body show">
+    <div class="add-grid">
+      <div>
+        <label>Symbol *</label>
+        <input id="new-symbol" placeholder="e.g. TSLA" style="text-transform:uppercase" autocomplete="off">
+      </div>
+      <div>
+        <label>Name *</label>
+        <input id="new-name" placeholder="e.g. Tesla Inc" autocomplete="off">
+      </div>
+      <div>
+        <label>Flag</label>
+        <input id="new-flag" placeholder="📈" autocomplete="off">
+      </div>
+      <div class="ibkr-only">
+        <label>Sec Type</label>
+        <select id="new-sectype">
+          <option value="CFD" selected>CFD</option>
+          <option value="STK">STK</option>
+        </select>
+      </div>
+      <div class="ig-only">
+        <label>IG Epic *</label>
+        <input id="new-ig-epic" placeholder="e.g. KA.D.BARC.CASH.IP" autocomplete="off">
+      </div>
+      <div>
+        <label>Exchange</label>
+        <input id="new-exchange" autocomplete="off">
+      </div>
+      <div>
+        <label>Currency</label>
+        <select id="new-currency">
+          <option value="USD" selected>USD</option>
+          <option value="GBP">GBP</option>
+          <option value="EUR">EUR</option>
+        </select>
+      </div>
+      <div>
+        <label>Quantity</label>
+        <input id="new-qty" type="number" value="100" step="1">
+      </div>
+      <div class="ig-only">
+        <label>Target Notional *</label>
+        <input id="new-target-notional" type="number" step="1" placeholder="e.g. 1000">
+      </div>
+      <div>
+        <label>Timeframe</label>
+        <select id="new-timeframe">
+          <option value="daily" selected>daily</option>
+          <option value="4hr">4hr</option>
+          <option value="1hr">1hr</option>
+        </select>
+      </div>
+      <div>
+        <label>Trail Stop %</label>
+        <input id="new-stop" type="number" step="0.1" placeholder="optional">
+      </div>
+      <div>
+        <label>Take Profit %</label>
+        <input id="new-tp" type="number" step="0.1" placeholder="optional">
+      </div>
+      <div>
+        <label>Emergency Stop %</label>
+        <input id="new-emergency" type="number" step="0.1" placeholder="optional">
+      </div>
+      <div class="ibkr-only">
+        <label>Loss Limit</label>
+        <input id="new-loss" type="number" step="1" placeholder="optional">
+      </div>
+      <div class="check-cell">
+        <input id="new-longonly" type="checkbox">
+        <label style="margin:0">Long Only</label>
+      </div>
+      <div class="ibkr-only" style="grid-column:1 / -1">
+        <label>Notes</label>
+        <input id="new-notes" placeholder="optional" autocomplete="off">
+      </div>
+    </div>
+    <div class="add-actions">
+      <button class="btn btn-success" onclick="addInstrument()">➕ Add Instrument</button>
+      <span class="hint">Adds to Layer 1 and saves immediately. Restart the bot to begin trading it.</span>
+    </div>
   </div>
 </div>
 
@@ -295,6 +397,7 @@ async function loadData() {
     origData.forEach(inst => { wfData[inst.symbol] = inst; });
     renderWFStatus();
     renderGlobalDefaults();
+    applyBrokerToAddForm();
     renderCards();
   } catch(e) {
     toast('Cannot connect to API server', 'error');
@@ -418,6 +521,8 @@ function renderCard(inst, idx) {
           <span class="slider"></span>
         </label>
       </span>
+      <button class="btn btn-danger btn-sm inst-del" title="Delete ${sym}"
+        onclick="event.stopPropagation();deleteInstrument('${sym}')">🗑</button>
     </div>
     <div class="inst-detail ${expanded ? 'show' : ''}" id="detail-${sym}">
       ${renderDetail(inst, idx)}
@@ -794,6 +899,141 @@ async function confirmSave() {
   modifications = {};
   indicatorMods = {};
   await loadData();
+}
+
+// ── Add / Delete Instrument (Layer 1) ────────────
+// Both use the full-array replace endpoint /api/instruments/layer1, because
+// /api/instruments/update is update-only (it rejects unknown symbols, so it
+// cannot create). We first read the clean on-disk array via GET
+// /api/instruments so the WF-enriched fields that /wf-recommendations injects
+// (resolved_indicators, wf_stop, wf_verdict, ...) never get written back.
+// Show the right fields for the active broker (read from settings.broker,
+// returned in the /wf-recommendations + /api/instruments responses).
+// IBKR uses sec_type/exchange/qty (+ loss_limit/notes); IG uses ig_epic
+// + target_notional. Exchange is common (SMART for IBKR, LSE etc. for IG).
+function applyBrokerToAddForm() {
+  const ig = (globalSettings.broker || 'ibkr').toLowerCase() === 'ig';
+  document.querySelectorAll('.ibkr-only').forEach(el => el.style.display = ig ? 'none' : '');
+  document.querySelectorAll('.ig-only').forEach(el => el.style.display = ig ? '' : 'none');
+  const ex = document.getElementById('new-exchange');
+  if (ex) {
+    ex.placeholder = ig ? 'e.g. LSE' : 'e.g. SMART';
+    if (!ex.value) ex.value = ig ? '' : 'SMART';
+  }
+  const sub = document.getElementById('addPanelLayer');
+  if (sub) sub.textContent = ig ? '(Layer 1 · IG)' : '(Layer 1)';
+}
+
+function resetAddForm() {
+  ['new-symbol','new-name','new-flag','new-ig-epic','new-target-notional',
+   'new-stop','new-tp','new-emergency','new-loss','new-notes']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const lo = document.getElementById('new-longonly'); if (lo) lo.checked = false;
+  const qty = document.getElementById('new-qty'); if (qty) qty.value = '100';
+  const tf = document.getElementById('new-timeframe'); if (tf) tf.value = 'daily';
+  document.getElementById('new-exchange').value = '';
+  applyBrokerToAddForm();  // restore broker-specific exchange default/placeholder
+}
+
+async function addInstrument() {
+  const ig = (globalSettings.broker || 'ibkr').toLowerCase() === 'ig';
+  const symbol = document.getElementById('new-symbol').value.trim().toUpperCase();
+  const name   = document.getElementById('new-name').value.trim();
+  if (!symbol || !name) { toast('Symbol and Name are required', 'error'); return; }
+  if (origData.some(i => i.symbol === symbol)) { toast(`${symbol} already in Layer 1`, 'error'); return; }
+
+  const num = id => {
+    const v = document.getElementById(id).value.trim();
+    return v === '' ? null : +v;
+  };
+
+  const inst = {
+    symbol, name,
+    flag:      document.getElementById('new-flag').value.trim() || '📈',
+    currency:  document.getElementById('new-currency').value,
+    qty:       num('new-qty') ?? 100,
+    timeframe: document.getElementById('new-timeframe').value,
+    long_only: document.getElementById('new-longonly').checked,
+    enabled:   true,
+  };
+  // Exchange is common; IBKR requires it so default to SMART, IG only if given.
+  const exVal = document.getElementById('new-exchange').value.trim();
+  if (exVal) inst.exchange = exVal;
+  else if (!ig) inst.exchange = 'SMART';
+
+  const stop = num('new-stop');      if (stop != null) inst.trail_stop_pct = stop;
+  const tp   = num('new-tp');        if (tp != null) inst.take_profit_pct = tp;
+  const emg  = num('new-emergency'); if (emg != null) inst.emergency_stop_pct = emg;
+
+  if (ig) {
+    const epic = document.getElementById('new-ig-epic').value.trim();
+    if (!epic) { toast('IG Epic is required', 'error'); return; }
+    const tn = num('new-target-notional');
+    if (tn == null) { toast('Target Notional is required for IG', 'error'); return; }
+    inst.ig_epic = epic;
+    inst.target_notional = tn;
+  } else {
+    inst.sec_type = document.getElementById('new-sectype').value;
+    const loss = num('new-loss'); if (loss != null) inst.loss_limit = loss;
+    const notes = document.getElementById('new-notes').value.trim(); if (notes) inst.notes = notes;
+  }
+
+  try {
+    const cfgRes = await fetch(API + '/api/instruments', { headers: apiHeaders() });
+    if (cfgRes.status === 401) { logout(); return; }
+    const cfg = await cfgRes.json();
+    const layer1 = cfg.layer1_active || [];
+    if (layer1.some(i => i.symbol === symbol)) { toast(`${symbol} already in Layer 1`, 'error'); return; }
+    layer1.push(inst);
+
+    const r = await fetch(API + '/api/instruments/layer1', {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(layer1),
+    });
+    if (r.status === 401) { logout(); return; }
+    const result = await r.json();
+    if (r.ok && result.ok) {
+      toast(`${symbol} added to Layer 1. Restart bot to trade it.`, 'success');
+      resetAddForm();
+      await loadData();
+    } else {
+      toast('Add failed: ' + (result.message || result.error || 'unknown error'), 'error');
+    }
+  } catch(e) {
+    toast('Add failed: cannot reach API', 'error');
+  }
+}
+
+async function deleteInstrument(sym) {
+  if (!confirm(`Delete ${sym} permanently?\n\nIt will be removed from Layer 1. A timestamped backup of instruments.json is saved automatically.`)) return;
+  try {
+    const cfgRes = await fetch(API + '/api/instruments', { headers: apiHeaders() });
+    if (cfgRes.status === 401) { logout(); return; }
+    const cfg = await cfgRes.json();
+    const layer1 = (cfg.layer1_active || []).filter(i => i.symbol !== sym);
+
+    const r = await fetch(API + '/api/instruments/layer1', {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(layer1),
+    });
+    if (r.status === 401) { logout(); return; }
+    const result = await r.json();
+    if (r.ok && result.ok) {
+      delete modifications[sym];
+      delete indicatorMods[sym];
+      delete testResults[sym];
+      delete optimiseJobs[sym];
+      expandedCards.delete(sym);
+      toast(`${sym} deleted. Restart bot to apply.`, 'success');
+      await loadData();
+    } else {
+      toast('Delete failed: ' + (result.message || result.error || 'unknown error'), 'error');
+    }
+  } catch(e) {
+    toast('Delete failed: cannot reach API', 'error');
+  }
 }
 
 // ── Apply WF ─────────────────────────────────────

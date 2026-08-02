@@ -1,0 +1,14 @@
+{
+  "description": "Same-regime persistence: high-confidence TRENDING persists across 3 days",
+  "initial_regime": "UNCLEAR",
+  "classifications": [
+    {"raw_regime": "TRENDING", "confidence": 0.90},
+    {"raw_regime": "TRENDING", "confidence": 0.88},
+    {"raw_regime": "TRENDING", "confidence": 0.92}
+  ],
+  "expected_states": [
+    {"effective_regime": "TRENDING", "days_in_regime": 1, "pending_regime": null},
+    {"effective_regime": "TRENDING", "days_in_regime": 2, "pending_regime": null},
+    {"effective_regime": "TRENDING", "days_in_regime": 3, "pending_regime": null}
+  ]
+}

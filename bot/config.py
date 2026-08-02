@@ -9,6 +9,11 @@ import os
 import sys
 from pathlib import Path
 from bot.logger import log
+from bot.guardrails import (
+    validate_no_edge_guardrails,
+    validate_hard_disabled_instruments,
+    ConfigGuardrailError,
+)
 
 BASE_DIR = Path(__file__).parent.parent
 CONFIG_FILE = str(BASE_DIR / 'instruments.json')
@@ -23,6 +28,28 @@ class Config:
     def __init__(self, path: str = CONFIG_FILE):
         self.path = path
         self._raw = self._load()
+
+        # No-edge guardrail (defense in depth — main.validate_environment
+        # is the primary startup gate, but any path that constructs Config
+        # must also refuse a config where a known-marginal instrument is
+        # enabled without an explicit override).
+        _guard_errors = validate_no_edge_guardrails(self._raw)
+        if _guard_errors:
+            for e in _guard_errors:
+                log(f"GUARDRAIL: {e}", "ERROR")
+            raise ConfigGuardrailError(
+                "No-edge guardrail failed for: " + "; ".join(_guard_errors))
+
+        # Hard-disabled invariant (defense in depth — main.validate_environment
+        # is the primary startup gate, but any path that constructs Config must
+        # also refuse a config where a hard-disabled instrument is enabled).
+        _hard_errors = validate_hard_disabled_instruments(self._raw)
+        if _hard_errors:
+            for e in _hard_errors:
+                log(f"GUARDRAIL: {e}", "ERROR")
+            raise ConfigGuardrailError(
+                "Hard-disabled invariant failed for: " + "; ".join(_hard_errors))
+
         s = self._raw['settings']
 
         # ── Connection ────────────────────────────────────────

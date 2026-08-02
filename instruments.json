@@ -5,6 +5,7 @@
     {
       "currency": "USD",
       "disabled_reason": "no_cfd_market_data_paper_account",
+      "hard_disabled": true,
       "enabled": false,
       "exchange": "SMART",
       "flag": "\ud83e\udd47",
@@ -24,6 +25,7 @@
     {
       "currency": "USD",
       "disabled_reason": "no_cfd_market_data_paper_account",
+      "hard_disabled": true,
       "enabled": false,
       "exchange": "SMART",
       "flag": "\ud83e\udd48",
@@ -212,6 +214,8 @@
       "qty": 100,
       "sec_type": "STK",
       "symbol": "ANET",
+      "allow_new_entries": false,
+      "disabled_reason": "No demonstrated edge; exits only (validation Phase 0, 2026-06-02)",
       "emergency_stop_pct": 10.0,
       "trail_stop_pct": 5.0,
       "take_profit_pct": 15.0
@@ -415,6 +419,9 @@
       "qty": 50,
       "sec_type": "STK",
       "symbol": "NBIS",
+      "experiment": true,
+      "experiment_reason": "Marginal historical evidence; included in regime-filter paper experiment",
+      "experiment_start": "2026-06-01",
       "emergency_stop_pct": 5.0,
       "trail_stop_pct": 1.0,
       "take_profit_pct": 12.0
@@ -642,6 +649,9 @@
     }
   ],
   "settings": {
+    "feature_flags": {
+      "enable_regime_filter_live": true
+    },
     "account": "DUQ141950",
     "adx_period": 14,
     "adx_threshold": 20,
