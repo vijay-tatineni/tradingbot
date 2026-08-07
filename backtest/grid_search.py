@@ -41,6 +41,7 @@ def run_grid_search(
     symbol: str = "",
     currency: str = "USD",
     show_progress: bool = False,
+    target_notional: float = None,
 ) -> GridResult | None:
     """
     Try all (stop_pct, tp_pct) combinations from PARAM_GRID.
@@ -66,7 +67,9 @@ def run_grid_search(
                 print(f"    {symbol} grid search: {count}/{total} "
                       f"({count * 100 // total}%)")
 
-            trades = simulate_trades(signals, df, stop_pct, tp_pct, qty, long_only, currency)
+            trades = simulate_trades(signals, df, stop_pct, tp_pct, qty,
+                                     long_only, currency,
+                                     target_notional=target_notional)
             summary = summarise(trades)
 
             entry = {

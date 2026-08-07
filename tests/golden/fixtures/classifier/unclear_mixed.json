@@ -1,0 +1,27 @@
+{
+  "input": {
+    "instrument": "HSBA.L",
+    "trading_date": "2026-01-15",
+    "features": {
+      "adx_14": 22.0,
+      "atr_14": 3.5,
+      "atr_pct": 1.8,
+      "ma_200_slope_pct_per_day": -0.02,
+      "range_efficiency": 0.28,
+      "realized_volatility_20d": 14.0,
+      "close_above_ma200": false,
+      "distance_to_ma200_pct": -1.5
+    }
+  },
+  "tool_response": {
+    "regime": "UNCLEAR",
+    "confidence": 0.55,
+    "rationale": "ADX at borderline 22, mixed directional signals",
+    "key_features": ["adx_14", "range_efficiency"]
+  },
+  "expected": {
+    "raw_regime": "UNCLEAR",
+    "confidence": 0.55,
+    "cache_hit": false
+  }
+}

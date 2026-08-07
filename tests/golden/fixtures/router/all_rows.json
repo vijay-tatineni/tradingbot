@@ -1,0 +1,68 @@
+{
+  "description": "Every row of the §9.8 routing table",
+  "test_cases": [
+    {
+      "name": "TRENDING_no_overlays",
+      "regime": "TRENDING",
+      "overlays": [],
+      "flags": {},
+      "expected_engine": "TripleConfirmationEngine",
+      "expected_allow": true,
+      "expected_block_reason": null
+    },
+    {
+      "name": "TRENDING_with_overlays",
+      "regime": "TRENDING",
+      "overlays": [{"overlay_name": "EARNINGS_LOCKOUT"}],
+      "flags": {},
+      "expected_engine": "TripleConfirmationEngine",
+      "expected_allow": false,
+      "expected_block_reason_contains": "Overlay active"
+    },
+    {
+      "name": "RANGING_no_overlays_mr_live",
+      "regime": "RANGING",
+      "overlays": [],
+      "flags": {"enable_mean_reversion_live": true},
+      "expected_engine": "MeanReversionEngine",
+      "expected_allow": true,
+      "expected_block_reason": null
+    },
+    {
+      "name": "RANGING_no_overlays_mr_not_live",
+      "regime": "RANGING",
+      "overlays": [],
+      "flags": {"enable_mean_reversion_live": false},
+      "expected_engine": "NoOpEngine",
+      "expected_allow": false,
+      "expected_block_reason_contains": "Mean-reversion not enabled live"
+    },
+    {
+      "name": "RANGING_with_overlays_mr_live",
+      "regime": "RANGING",
+      "overlays": [{"overlay_name": "MACRO_LOCKOUT"}],
+      "flags": {"enable_mean_reversion_live": true},
+      "expected_engine": "MeanReversionEngine",
+      "expected_allow": false,
+      "expected_block_reason_contains": "Overlay active"
+    },
+    {
+      "name": "RANGING_with_overlays_mr_not_live",
+      "regime": "RANGING",
+      "overlays": [{"overlay_name": "MACRO_LOCKOUT"}],
+      "flags": {"enable_mean_reversion_live": false},
+      "expected_engine": "NoOpEngine",
+      "expected_allow": false,
+      "expected_block_reason_contains": "Mean-reversion not enabled live"
+    },
+    {
+      "name": "UNCLEAR_no_overlays",
+      "regime": "UNCLEAR",
+      "overlays": [],
+      "flags": {},
+      "expected_engine": "NoOpEngine",
+      "expected_allow": false,
+      "expected_block_reason": "Regime UNCLEAR"
+    }
+  ]
+}

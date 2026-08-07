@@ -141,3 +141,66 @@ def test_pnl_no_positions_shows_zero(tmp_path, tmp_db):
         data = json.load(f)
     assert data["pnl_by_currency"] == {}
     assert data["total_pnl"] == 0
+
+
+def _read_data(tmp_path):
+    with open(os.path.join(str(tmp_path), 'data.json')) as f:
+        return json.load(f)
+
+
+def test_live_breakeven_currency_shows_zero(tmp_path, tmp_db):
+    """Open position with a LIVE price at break-even → currency shows $0,
+    so the operator sees the positions exist (the AVGO/NBIS-during-session case)."""
+    cfg = _make_cfg(str(tmp_path))
+    dash = dashboard_mod.Dashboard(cfg)
+
+    # Live price present (price>0, avg_cost>0) and equal → genuine break-even.
+    signals = [_make_signal('AVGO', 2, 'USD', unreal_pnl=0, price=440.0, avg_cost=440.0)]
+    dash.update(1, signals, [], 0, False, True)
+
+    data = _read_data(tmp_path)
+    assert data["pnl_by_currency"] == {"USD": 0}
+    assert data["total_pnl"] == 0
+
+
+def test_no_usd_positions_currency_absent(tmp_path, tmp_db):
+    """No USD positions at all → USD never appears (not even $0)."""
+    cfg = _make_cfg(str(tmp_path))
+    dash = dashboard_mod.Dashboard(cfg)
+
+    signals = [_make_signal('SU', 10, 'EUR', unreal_pnl=750.0, price=100.0, avg_cost=25.0)]
+    dash.update(1, signals, [], 750.0, False, False)
+
+    data = _read_data(tmp_path)
+    assert "USD" not in data["pnl_by_currency"]
+    assert data["pnl_by_currency"] == {"EUR": 750.0}
+
+
+def test_live_position_with_profit_unchanged(tmp_path, tmp_db):
+    """Open position with profit → currency shows the profit (unchanged)."""
+    cfg = _make_cfg(str(tmp_path))
+    dash = dashboard_mod.Dashboard(cfg)
+
+    signals = [_make_signal('AVGO', 2, 'USD', unreal_pnl=37.38, price=458.09, avg_cost=439.4)]
+    dash.update(1, signals, [], 37.38, False, True)
+
+    data = _read_data(tmp_path)
+    assert data["pnl_by_currency"] == {"USD": 37.38}
+    assert data["total_pnl"] == 37.38
+
+
+def test_market_closed_zero_does_not_fabricate(tmp_path, tmp_db):
+    """Open position but NO live price (market closed, price=0) → do NOT show a
+    misleading $0; edf283b cache-preserve still governs. Guards against the
+    regression my first attempt at this fix introduced."""
+    cfg = _make_cfg(str(tmp_path))
+    dash = dashboard_mod.Dashboard(cfg)
+
+    # Seed a last-known USD value, then a cycle with the market closed (price=0).
+    _seed_pnl_cache(tmp_db, {"USD": 120.0})
+    signals = [_make_signal('AVGO', 2, 'USD', unreal_pnl=0, price=0, avg_cost=440.0)]
+    dash.update(1, signals, [], 0, False, False)
+
+    data = _read_data(tmp_path)
+    # Last-known value preserved, NOT overwritten with $0.
+    assert data["pnl_by_currency"] == {"USD": 120.0}

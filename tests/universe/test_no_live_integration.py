@@ -1,0 +1,172 @@
+"""Regression / safety: with the master flag off (the default), the live strategy path is
+provably unchanged.
+
+  * As of the Gate C runtime-wiring tranche, ``main.py`` is the SOLE, intentional integration
+    point — and only LAZILY: it carries no module-level ``bot.universe`` import, so the boundary
+    is imported only inside ``init_shadow_runtime`` after the flag is confirmed true. Every other
+    live module (``api_server.py``, ``bot/*.py``, plugins, regime) still imports bot.universe
+    NOWHERE (strict structural proof of zero coupling).
+  * Adding enable_dynamic_universe_shadow leaves all pre-existing flags' resolution
+    byte-identical and adds no dependency.
+  * The universe package imports no broker/data-provider module.
+"""
+import ast
+import pathlib
+
+from bot.regime.flags import DEPENDENCIES, FeatureFlags, KNOWN_FLAGS, SAFE_DEFAULTS
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
+# Pre-existing flag defaults (the 14 flags that existed before the shadow foundation).
+PREEXISTING_DEFAULTS = {
+    "enable_classifier_shadow": True, "enable_classifier_live": False,
+    "enable_persistence_shadow": True, "enable_persistence_live": False,
+    "enable_router_shadow": True, "enable_router_live": False,
+    "enable_event_overlays_shadow": True, "enable_event_overlays_live": False,
+    "enable_mean_reversion_shadow": True, "enable_mean_reversion_live": False,
+    "enable_position_tagged_exit_policy": False, "enable_calendar_ui": False,
+    "data_quality_strict_mode": False, "enable_regime_filter_live": False,
+}
+
+
+def _live_source_files():
+    # Every live module EXCEPT main.py — these must import bot.universe NOWHERE. main.py is the
+    # sole, intentional Gate C integration point and is checked separately (lazy-only) below.
+    files = [REPO / "api_server.py"]
+    files += [p for p in (REPO / "bot").glob("*.py")]
+    files += list((REPO / "bot" / "plugins").glob("*.py"))
+    files += list((REPO / "bot" / "regime").glob("*.py"))
+    return [p for p in files if p.exists()]
+
+
+def test_no_live_module_imports_bot_universe():
+    # Strict: api_server.py + all bot/plugin/regime modules reference bot.universe NOWHERE.
+    # (api_server.py staying clean is the structural enforcement of "do not wire api_server.py".)
+    offenders = []
+    for p in _live_source_files():
+        text = p.read_text()
+        if "bot.universe" in text or "from bot import universe" in text:
+            offenders.append(str(p.relative_to(REPO)))
+    assert offenders == [], f"live modules import bot.universe: {offenders}"
+
+
+def test_main_py_integration_is_lazy_only():
+    """Gate C: main.py is the one allowed integration point, but ONLY lazily — it must carry no
+    module-level (column-0) ``bot.universe`` import; the boundary is imported inside
+    ``init_shadow_runtime`` and only after the master flag is confirmed true. An eager top-level
+    import (which would run / couple bot.universe at process startup, flag off) fails this."""
+    tree = ast.parse((REPO / "main.py").read_text())
+    for node in tree.body:  # module-level statements only
+        if isinstance(node, ast.Import):
+            assert not any(a.name.startswith("bot.universe") for a in node.names), \
+                "main.py must not import bot.universe at module level (lazy-only)"
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith("bot.universe"), \
+                "main.py must not import bot.universe at module level (lazy-only)"
+
+
+def test_new_flag_registered_default_false():
+    assert "enable_dynamic_universe_shadow" in KNOWN_FLAGS
+    assert SAFE_DEFAULTS["enable_dynamic_universe_shadow"] is False
+    assert FeatureFlags({}).get("enable_dynamic_universe_shadow") is False
+
+
+def test_preexisting_flag_resolution_unchanged():
+    # With an empty config, every pre-existing flag resolves to its documented default.
+    flags = FeatureFlags({})
+    for name, expected in PREEXISTING_DEFAULTS.items():
+        assert flags.get(name) is expected
+    # Enabling the new flag does not perturb any pre-existing flag.
+    flags2 = FeatureFlags({"enable_dynamic_universe_shadow": True,
+                           "enable_classifier_shadow": True})
+    for name, expected in PREEXISTING_DEFAULTS.items():
+        assert flags2.get(name) is expected
+
+
+def test_new_flag_has_no_dependency():
+    # It must not be wired into the regime dependency graph.
+    assert "enable_dynamic_universe_shadow" not in DEPENDENCIES
+    for parents in DEPENDENCIES.values():
+        assert "enable_dynamic_universe_shadow" not in parents
+
+
+def test_universe_package_imports_no_broker():
+    forbidden = ("bot.brokers", "ib_insync", "trading_ig", "bot.connection")
+    offenders = []
+    for p in (REPO / "bot" / "universe").glob("*.py"):
+        text = p.read_text()
+        for f in forbidden:
+            if f in text:
+                offenders.append(f"{p.name}:{f}")
+    assert offenders == [], f"universe package references broker modules: {offenders}"
+
+
+def test_flag_off_makes_zero_provider_calls_and_zero_db_writes(tmp_path):
+    # Flag off ⇒ the evaluator is a pure no-op: the bars provider AND the position provider
+    # are never called, and not a single universe.db row is written (R1 isolation).
+    import sqlite3
+
+    from bot.universe.evaluator import ShadowEvaluator
+    from bot.universe.registry import Registry
+    from bot.universe.seed import canonical_id, seed_registry
+    from tests.universe._fixtures import (
+        OFF, SpyProvider, StubPositionProvider, inst, make_bars, write_configs,
+    )
+
+    p1, p2 = write_configs(tmp_path, [inst("AAPL")], [])
+    db = str(tmp_path / "universe.db")
+    seed_registry(db, p1, p2)
+    cid = canonical_id("AAPL", "USD", "NASDAQ")
+    bars = SpyProvider({cid: {"bars": make_bars(), "corp_action_status": "ok"}})
+    pos = StubPositionProvider({cid: None})
+    ev = ShadowEvaluator(Registry(db), bars, OFF, equity=100_000, position_provider=pos)
+
+    con = sqlite3.connect(db)
+    before = (con.execute("SELECT COUNT(*) FROM universe_state").fetchone()[0],
+              con.execute("SELECT COUNT(*) FROM universe_state_history").fetchone()[0])
+    con.close()
+
+    assert ev.maybe_run("2026-06-10") == {"ran": False, "reason": "flag_off", "evaluated": 0}
+    assert bars.calls == [] and pos.calls == []          # neither seam consulted
+
+    con = sqlite3.connect(db)
+    after = (con.execute("SELECT COUNT(*) FROM universe_state").fetchone()[0],
+             con.execute("SELECT COUNT(*) FROM universe_state_history").fetchone()[0])
+    con.close()
+    assert after == before                                # zero DB writes
+
+
+def test_universe_package_does_not_rewrite_live_config():
+    # The universe package never WRITES instruments.json / instruments_ig.json (seed reads
+    # them read-only). Assert no open(..., 'w')/write_text/json.dump targets those configs.
+    import re
+    offenders = []
+    for p in (REPO / "bot" / "universe").glob("*.py"):
+        text = p.read_text()
+        for m in re.finditer(r"(open\([^\n]*['\"][wa]['\"]|write_text|json\.dump)", text):
+            window = text[max(0, m.start() - 120):m.end() + 120]
+            if "instruments.json" in window or "instruments_ig.json" in window:
+                offenders.append(f"{p.name}:{m.group(0)}")
+    assert offenders == [], f"universe package rewrites live config: {offenders}"
+
+
+def test_universe_db_module_only_connects_to_its_own_path():
+    # Isolation proof: the universe store opens ONLY the db_path it is handed — there
+    # is no hard-coded live-DB filename in any executable connect() call. (Safety
+    # docstrings mention positions.db/regime.db/backtest.db to say it never touches
+    # them, so a crude substring scan would false-positive; assert the real invariant:
+    # the sole sqlite connector is db.connect(db_path).)
+    import ast
+
+    db_src = (REPO / "bot" / "universe" / "db.py").read_text()
+    tree = ast.parse(db_src)
+    connect_string_args = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "connect"):
+            for a in node.args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                    connect_string_args.append(a.value)
+    # connect() is only ever called with the variable db_path, never a literal DB file.
+    assert connect_string_args == [], \
+        f"db.connect called with a hard-coded path literal: {connect_string_args}"
